@@ -1,0 +1,10 @@
+---
+system: AlgoForge
+wave: 05
+word_count: 250
+status: ready
+---
+
+<!-- prompt:start -->
+Build AlgoForge Wave Five: Normal Analysis for one signed truth Run. Implement three authoritative surfaces named Verdict, Regimes, and Risk and Monte Carlo. The Verdict surface keeps the first failing gate above the fold, shows the frozen hypothesis and hash, separates observed metrics from deterministic interpretations, exposes trial counts behind adjusted statistics, and opens every headline into a calculation trace. The Regimes surface attributes realised equity and trades across four documented states, displays transition counts and probabilities, warns when states are sparse, and never imputes missing evidence silently. The Risk surface implements deterministic fixed-seed trade-order permutation, stationary-block bootstrap, equity paths, cross-sectional day selection, terminal distributions, drawdown, losing streak, recovery time, historical VaR, parametric VaR, CVaR, and tail diagnostics. Suppress unstable extreme-value estimates when exceedance samples are inadequate. Return median, P5, P95, and confidence intervals where applicable. Preserve IS, OOS, holdout, and forward labels everywhere; sweep-tier output cannot become a headline. Add API resources designed for ECharts canvas rendering with ARIA descriptions and compact payloads. Build golden fixtures for profitable, noisy, autocorrelated, fat-tailed, sparse-regime, and malformed inputs. Tests must prove deterministic seeds, interval ordering, trace availability, warnings, and separation from agent narrative. Performance benchmarks should cover at least one thousand paths without blocking API health. Document all simplified formulas and calibration limitations. End with a committed, test-backed analysis package whose outputs are honest research diagnostics, not predictions or investment advice. Maintain deterministic seeds, immutable evidence, explicit confidence labels, scoped permissions, reversible changes, actionable errors, stable schemas, cross-platform paths, bounded resource use,
+<!-- prompt:end -->

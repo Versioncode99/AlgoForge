@@ -1,0 +1,10 @@
+---
+system: AlgoForge
+wave: 02
+word_count: 250
+status: ready
+---
+
+<!-- prompt:start -->
+Build AlgoForge Wave Two: contracts, immutable persistence, and one application core shared by API, future CLI, scheduler, and MCP. Implement typed identifiers, canonical JSON hashing, command envelopes, frozen preregistrations, immutable Runs, artifact manifests, source references, trial records, Verdict references, decision records, previous-hash links, and calculation traces. Use Pydantic versioned schemas and repository protocols so SQLite can serve the local vertical slice while Postgres remains a replaceable production adapter. Enforce chronology: preregistration freezes before any Run is created; missing registration yields REJECTED_NO_PREREG; finalised content cannot be edited; idempotency keys return existing artifacts. Expose resource-oriented FastAPI version-one endpoints for health, overview, runs, verdicts, traces, rules, agents, and evolution. Return consistent data or error envelopes, semantic status codes, pagination metadata, and OpenAPI descriptions. Keep stack traces and filesystem paths out of responses. Build lifespan initialization and TestClient coverage from current FastAPI documentation. Add a capability endpoint proving live orders, account signup, payment, KYC, and production credentials are absent. Tests must detect tampering, hash instability, invalid chronology, duplicate effects, malformed identifiers, non-finite numbers, and incompatible schema versions. Add an import contract keeping the judge independent from agents, frontend, model clients, and prop optimisation. Seed one deterministic demonstration workspace, study, session, preregistration, and truth Run without claiming market validity. Commit only after type checks, unit tests, API tests, and a clean secret scan pass. Maintain deterministic seeds, immutable evidence, explicit confidence labels, scoped permissions, reversible changes, actionable errors, stable schemas, cross-platform paths, bounded resource use, clear ownership, accessible controls, concise documentation, and fail-closed defaults. Record
+<!-- prompt:end -->

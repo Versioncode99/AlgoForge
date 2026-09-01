@@ -1,0 +1,10 @@
+---
+system: AlgoForge
+wave: 07
+word_count: 250
+status: ready
+---
+
+<!-- prompt:start -->
+Build AlgoForge Wave Seven: bounded research agents, approvals, and tamper-evident memory. Implement Director, Hypothesis Analyst, Bull, Bear, Mechanism Critic, Risk Reviewer, Data Engineer, Post-Mortem Analyst, and Skill Smith as role contracts rather than unrestricted autonomous processes. Every role receives the same frozen evidence pack, explicit token and time budgets, allowed tools, forbidden resources, and termination rules. Outputs contain structured claims, artifact citations, uncertainty, dissent, and a receipt. No role may see burn-once holdouts, alter preregistration after freezing, waive a gate, choose live sizing, approve itself, deploy code, or place orders. Add provider-neutral model adapters with a deterministic local stub so the program runs without paid credentials. Partition memory into authoritative facts, failure constraints, tested skills, and non-authoritative narratives. Chain DecisionRecords with previous hashes and publish reproducible daily roots. Outcome-weighted retrieval may improve hypothesis formation but cannot enter deterministic judge inputs. Add an Operator Inbox, runtime event log, approval proposal, guardian lease generation, retry backoff, and idempotent connector journal. Expose agent activity, budgets, claims, dissent, memory hits, approvals, and constraints through read-mostly API projections. Tests must prove narrative changes do not change a Verdict, contradictory evidence produces visible dissent, expired leases are fenced and recovered, repeated journal replay produces one effect, and permission escapes fail. Seed a transparent sample debate about the demo strategy without claiming insight. Commit after deterministic tests, authority-boundary checks, and secret-access tests pass. Maintain deterministic seeds, immutable evidence, explicit confidence labels, scoped permissions, reversible changes, actionable errors, stable schemas, cross-platform paths, bounded resource use, clear ownership, accessible
+<!-- prompt:end -->

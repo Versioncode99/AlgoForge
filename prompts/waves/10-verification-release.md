@@ -1,0 +1,10 @@
+---
+system: AlgoForge
+wave: 10
+word_count: 250
+status: ready
+---
+
+<!-- prompt:start -->
+Build AlgoForge Wave Ten: integration, evidence, local packaging, GitHub publication, and vault close-out. Run the golden journey from a frozen sample hypothesis through validated fixture data, truth Run, deterministic Verdict, Normal Analysis, versioned Challenge and Funded simulations, bounded agent review, memory receipt, seeded incident, failed candidate, canary rollback, and restored last-known-good release. Verify that every identifier and artifact hash agrees across application core, API, and frontend. Run Python formatting, lint, type checks, unit, property, contract, integration, import-boundary, secret, and security tests. Run TypeScript lint, type checks, Vitest, production build, Playwright journeys, keyboard checks, accessibility scans, responsive screenshots, click-path audit, and browser console/network review. Measure local performance and report limitations honestly; do not claim multi-day resilience from a short test. Generate OpenAPI, SBOM, third-party notices, source-reuse ledger, capability manifest, screenshots, test summaries, launch runbook, incident rollback receipt, and known-gaps report. Provide one PowerShell command that installs dependencies, seeds sample artifacts, starts API and web, and opens the interface. Keep credentials optional and external. Create or update a private GitHub repository, push every wave commit, and confirm the remote SHA without exposing tokens. Update the Keslec-Trading canonical build report, project note, STATUS, Keyword Index, and session log with confidence tags. Clearly separate BUILT, VERIFIED, SAMPLE, UNCALIBRATED, and BLOCKED items. Final acceptance forbids live order capability, fabricated official-rule freshness, hidden test failures, uncommitted changes, broken controls, console errors, or unverifiable headline numbers. Maintain deterministic seeds, immutable evidence, explicit confidence labels, scoped permissions, reversible changes, actionable errors, stable schemas, cross-platform paths, bounded resource use,
+<!-- prompt:end -->

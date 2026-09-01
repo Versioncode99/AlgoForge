@@ -1,0 +1,12 @@
+[
+  {"repository":"https://github.com/TraderAlice/OpenAlice","commit":"3af7b0b3df46b829c40e6fab6698044dc60e07c7","licence":"AGPL-3.0","lane":"FORK","decision":"isolated internal runtime patterns only"},
+  {"repository":"https://github.com/TraderAlice/Auto-Quant-V2","commit":"52d63148d826e6c35d48c3167d95a4cc7a4eb6c4","licence":null,"lane":"CLEAN_ROOM","decision":"behaviour contracts only; no source copy"},
+  {"repository":"https://github.com/laplace0x/awesome-agent-trading","commit":"74515e448eb4c5b0cd87df462be467f7cc5301ea","licence":"MIT","lane":"DEPENDENCY","decision":"discovery seeds only"},
+  {"repository":"https://github.com/TraderAlice/OpenBB-Alice","commit":"87da05428d829483625eff0cb269780f43a6e9c9","licence":"AGPL-3.0","lane":"FORK","decision":"optional isolated data-provider service"},
+  {"repository":"https://github.com/pandejesal/WSB-Alpha-System","commit":"e4491d3b42ea0ba2c213c6e4875ccdaa97afb6a2","licence":null,"lane":"REJECT","decision":"negative fixtures and clean-room behaviours only"},
+  {"repository":"https://github.com/wangzhe3224/awesome-systematic-trading","commit":"424df5f4acc98dcc3880107188d20f5fa4897653","licence":"MIT","lane":"DEPENDENCY","decision":"discovery seeds only"},
+  {"repository":"https://github.com/All-Hands-AI/OpenHands","commit":"1a34e0222ee9e3c1f8c13fc16d28e69361a022ff","licence":"MIT","lane":"BENCHMARK","decision":"candidate agent-runtime and lease patterns"},
+  {"repository":"https://github.com/Aider-AI/aider","commit":"5dc9490bb35f9729ef2c95d00a19ccd30c26339c","licence":"Apache-2.0","lane":"BENCHMARK","decision":"optional bounded patch worker"},
+  {"repository":"https://github.com/microsoft/RD-Agent","commit":"2c878f9d2453dced35061165786d1f31bbff0ab6","licence":"MIT","lane":"BENCHMARK","decision":"research-loop concepts behind AlgoForge gates"},
+  {"repository":"https://github.com/algorithmicsuperintelligence/openevolve","commit":"411fb59c886c18704caaffb611e17cf9e7d824d2","licence":"Apache-2.0","lane":"BENCHMARK","decision":"optional population-evolution worker"}
+]

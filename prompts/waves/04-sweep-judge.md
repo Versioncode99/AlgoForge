@@ -1,0 +1,10 @@
+---
+system: AlgoForge
+wave: 04
+word_count: 250
+status: ready
+---
+
+<!-- prompt:start -->
+Build AlgoForge Wave Four: an owned sweep engine, deterministic truth fixture, and the judge that vetoes every strategy. Implement StrategySpec, parameter domains, cost models, windows, trades, orders, equity points, trial accounting, and an ArraySweepEngine using transparent NumPy operations. Every evaluated combination increments the lineage trial ledger, including failed and abandoned trials. Sweep results are exploratory and cannot promote anything. Implement a replaceable truth-engine protocol and a deterministic local fixture engine; keep Nautilus, LEAN, hftbacktest, nt_engine, and NinjaTrader Analyzer as separately gated candidates or oracles. Build gate results for data integrity, preregistration, implementation tests, OOS performance, multiple-testing pressure, robustness, engine consistency, risk, mechanism alignment, and prop suitability. Emit PASS, FAIL, or INCONCLUSIVE plus dimension scores, a letter-grade projection, findings, limitations, and calculation traces. The grade never overrides gate status. Include realistic costs, drawdown, profit factor, Sharpe, deflated-score approximation, bootstrap significance, and regime splits while labelling simplified vertical-slice mathematics. Injected lookahead, pure noise, missing costs, non-finite metrics, trial inflation, spent holdout reuse, and engine disagreement must fail closed. The judge package must not import agents, model SDKs, web code, MCP, or prop optimisation. Identical signed inputs must produce identical outputs and hashes. Create a visible demonstration verdict from sample data with SAMPLE DATA and UNCALIBRATED labels. Commit only after unit, property, import-boundary, tamper, and API projection tests pass. Maintain deterministic seeds, immutable evidence, explicit confidence labels, scoped permissions, reversible changes, actionable errors, stable schemas, cross-platform paths, bounded resource use, clear ownership, accessible controls, concise documentation, and fail-closed defaults. Record every assumption, command,
+<!-- prompt:end -->

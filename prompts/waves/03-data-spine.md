@@ -1,0 +1,10 @@
+---
+system: AlgoForge
+wave: 03
+word_count: 250
+status: ready
+---
+
+<!-- prompt:start -->
+Build AlgoForge Wave Three: the deterministic, point-in-time data spine. Define ProviderDescriptor, CapabilitySet, FrozenQuery, RawBatch, CanonicalBatch, Bar, SessionCalendar, DataManifest, QualityFinding, and ProviderReceipt. Every record must distinguish event time, knowledge time, ingestion time, timezone, symbol mapping, contract, bar type, price adjustment, and source revision. Implement one local fixture provider for reproducible development plus disabled interfaces for Databento CME futures, FRED macro series, and public or testnet crypto feeds. A truth-source outage must fail closed; sample, stale, broader, or synthetic data may never silently satisfy a requested authoritative source. Validate monotonic timestamps, duplicate keys, OHLC invariants, finite values, volume semantics, gaps, session boundaries, rollover, and revision lineage. Store accepted batches by content hash and preserve rejected receipts. Add bounded preview and artifact-location operations suitable for a future MCP server; bulk data stays in local files or the data API, never model tool payloads. Include deterministic MNQ and BTC fixture bars clearly marked SAMPLE DATA. Write property and contract tests for timezone conversion, missing bars, duplicated rows, malformed prices, stale knowledge timestamps, provider mismatch, and byte-identical re-ingestion. Add a NinjaTrader parity fixture contract without inventing platform results; the real Strategy Analyzer remains an external verification gate. Document credential variables without values and never read the vault secrets file. Expose data health through the API and block downstream runs whenever gate G0 fails. Finish with provenance evidence, passing tests, and an isolated Git commit. Maintain deterministic seeds, immutable evidence, explicit confidence labels, scoped permissions, reversible changes, actionable errors, stable schemas, cross-platform paths, bounded resource use,
+<!-- prompt:end -->

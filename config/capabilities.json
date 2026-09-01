@@ -1,0 +1,20 @@
+{
+  "schema_version": "1",
+  "environment": "private-local-research",
+  "paper_only": true,
+  "capabilities": {
+    "market_data_read": "adapter-gated",
+    "local_simulation": true,
+    "strategy_research": true,
+    "prop_rule_simulation": true,
+    "repository_research": "read-only-intake",
+    "patch_proposal": "sandbox-only",
+    "release_activation": "recovery-supervisor-only",
+    "live_order": false,
+    "broker_account_creation": false,
+    "prop_account_signup": false,
+    "payment": false,
+    "kyc": false,
+    "production_broker_credentials": false
+  }
+}

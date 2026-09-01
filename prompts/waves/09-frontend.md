@@ -1,0 +1,10 @@
+---
+system: AlgoForge
+wave: 09
+word_count: 250
+status: ready
+---
+
+<!-- prompt:start -->
+Build AlgoForge Wave Nine: the desktop-first operator interface connected to the real local API. Reading this as a professional quant research cockpit for one operator, with severe information hierarchy, restrained motion, dense evidence, and no generic admin-template styling. Implement a near-black instrument panel with neutral surfaces, tabular numeric typography, one amber action accent, and semantic green, red, warning, and information colours that are never the only signal. Create Overview, Run Verdict, Regimes, Risk and Monte Carlo, Prop Challenge, Prop Funded, Prop Compare, Rules, Agents, Memory, and Evolution routes. Use React nineteen, strict TypeScript, Vite, TanStack Query, composable components, and ECharts canvas charts with ARIA enabled. The signature interaction is an evidence rail: selecting any metric, gate, boundary event, or release gate opens its formula, inputs, hashes, source tier, limitations, and timestamp within two clicks. Implement loading, empty, stale, locked, partial, rejected, tampered, disconnected, and populated states before polish. Keep the failing gate visible without scrolling. Synchronise tabs and selected simulation day in the URL. Respect reduced motion, keyboard navigation, focus restoration, landmarks, accessible names, and colour contrast. Add responsive layouts for 375, 768, and 1440 pixel widths without horizontal page overflow. Component tests cover state transitions and chart fallbacks. Avoid decorative gradients, glassmorphism, excessive rounding, emoji icons, fake live indicators, or persuasive performance copy. Finish with generated types, clean builds, screenshots, interaction tests, and a focused commit. Maintain deterministic seeds, immutable evidence, explicit confidence labels, scoped permissions, reversible changes, actionable errors, stable schemas, cross-platform paths, bounded resource use, clear ownership,
+<!-- prompt:end -->

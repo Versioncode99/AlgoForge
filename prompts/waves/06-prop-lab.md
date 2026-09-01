@@ -1,0 +1,10 @@
+---
+system: AlgoForge
+wave: 06
+word_count: 250
+status: ready
+---
+
+<!-- prompt:start -->
+Build AlgoForge Wave Six: the versioned Prop Lab with independent Challenge and Funded simulations. Start from separate Topstep-style and Lucid-style fifty-thousand-dollar rule contracts; never collapse them into one generic preset. The demonstration defaults use fifty thousand starting balance, three thousand target, and two thousand maximum-loss allowance because that is the requested common shape, but mark every fixture UNVERIFIED until refreshed against current official source snapshots. Model effective dates, source URLs, source hashes, review expiry, timezone, phase, event precedence, daily stops, trailing or end-of-day floors, consistency, minimum days, timeout, scaling, payout eligibility, payout deductions, resets, and account death. Expired or incomplete contracts remain readable but locked. Accept only signed truth OOS or forward Runs; reject sweep, IS, tampered, or insufficient-intraday inputs. Implement deterministic block-resampled equity paths, challenge pass, fail, timeout, days-to-outcome, boundary events, failure reasons, Wilson intervals, funded survival, payout cycles, expected payout, and post-payout balance. Prop optimisation must never mutate strategy parameters, Verdicts, holdouts, or promotion state. Write hand-worked equality-boundary tests for intraday breach, end-of-day trail updates, consistency target extension, soft daily pause, payout deduction, reset, and replay idempotency. Expose Rules, Challenge, Funded, and Compare API resources with calculation traces. Label every simulation as research, not a forecast. Finish with fixed-seed evidence, locked-rule demonstrations, passing state-machine tests, and a dedicated commit. Maintain deterministic seeds, immutable evidence, explicit confidence labels, scoped permissions, reversible changes, actionable errors, stable schemas, cross-platform paths, bounded resource use, clear ownership, accessible controls, concise documentation, and fail-closed defaults. Record every assumption, command, dependency, source, hash, limitation, test
+<!-- prompt:end -->
