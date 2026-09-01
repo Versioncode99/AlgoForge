@@ -1,0 +1,5 @@
+[
+  {"symbol":"MNQ-SAMPLE","event_time":"2026-01-02T14:30:00Z","knowledge_time":"2026-01-02T14:30:01Z","ingestion_time":"2026-01-02T14:30:02Z","open":20000.0,"high":20008.0,"low":19996.0,"close":20005.0,"volume":1200.0,"bar_type":"TIME","source":"local-fixture"},
+  {"symbol":"MNQ-SAMPLE","event_time":"2026-01-02T14:31:00Z","knowledge_time":"2026-01-02T14:31:01Z","ingestion_time":"2026-01-02T14:31:02Z","open":20005.0,"high":20014.0,"low":20001.0,"close":20011.0,"volume":1320.0,"bar_type":"TIME","source":"local-fixture"},
+  {"symbol":"MNQ-SAMPLE","event_time":"2026-01-02T14:32:00Z","knowledge_time":"2026-01-02T14:32:01Z","ingestion_time":"2026-01-02T14:32:02Z","open":20011.0,"high":20015.0,"low":20002.0,"close":20004.0,"volume":1410.0,"bar_type":"TIME","source":"local-fixture"}
+]

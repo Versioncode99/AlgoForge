@@ -5,9 +5,9 @@ __pycache__/
 .mypy_cache/
 *.py[cod]
 *.db
-data/
-runs/
-artifacts/
+/data/
+/runs/
+/artifacts/
 node_modules/
 dist/
 playwright-report/
