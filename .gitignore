@@ -8,6 +8,11 @@ __pycache__/
 /data/
 /runs/
 /artifacts/
+# Strategy folders are generated working state: the engine writes dozens per
+# session from the templates in packages/forge/strategy/templates.py, which are
+# what is actually version-controlled. Keeping every autonomous variant would
+# bury the repo within a day. They live on disk and are visible in the app.
+/strategies/*/
 node_modules/
 dist/
 playwright-report/

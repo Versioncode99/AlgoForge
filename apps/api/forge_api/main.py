@@ -18,7 +18,10 @@ from forge.forgekeeper import ForgeKeeper, classify_candidate
 from forge.judge import Judge, JudgeInput, Verdict
 from forge.ledger import LedgerDatabase
 from forge.prop import PropRuleSet, PropSimulation, load_rules, simulate_prop_paths
+from forge.strategy import StrategyLibrary
 
+from forge_api.activity import ActivityLog, BacktestStore
+from forge_api.control import build_control_router
 from forge_api.strategies import build_router
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -78,7 +81,15 @@ def create_app(database_path: Path | None = None) -> FastAPI:
 
     @app.get("/api/v1/health", response_model=ApiEnvelope[dict[str, object]])
     def health() -> ApiEnvelope[dict[str, object]]:
-        return ApiEnvelope(data={"status": "ok", "paper_only": True, "data_gate": "SAMPLE"})
+        engine = getattr(app.state, "engine", None)
+        return ApiEnvelope(
+            data={
+                "status": "ok",
+                "paper_only": True,
+                "data_gate": "REAL",
+                "engine_running": bool(engine and engine.state.running),
+            }
+        )
 
     @app.get("/api/v1/capabilities", response_model=ApiEnvelope[dict[str, object]])
     def capabilities() -> ApiEnvelope[dict[str, object]]:
@@ -191,7 +202,14 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             meta={"research_intake_only": True, "human_activation_required": True},
         )
 
-    app.include_router(build_router(ROOT))
+    library = StrategyLibrary(ROOT / "strategies")
+    store = BacktestStore(ROOT / "data" / "backtests")
+    log = ActivityLog(ROOT / "data" / "runtime" / "activity.ndjson")
+    control_router, engine, market = build_control_router(ROOT, library, store, log)
+
+    app.state.engine = engine
+    app.include_router(build_router(ROOT, library, store, log, market))
+    app.include_router(control_router)
 
     return app
 

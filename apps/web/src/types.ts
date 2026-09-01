@@ -84,3 +84,24 @@ export type Summary = {
   strategy_count: number; backtest_count: number; template_count: number
   families: string[]; strategies_path: string; data_gate: string
 }
+
+/* ── Engine, datasets, prop ─────────────────────────────────────────────── */
+export type EngineStatus = {
+  running: boolean; started_at: string | null; cycles: number
+  created: number; backtested: number; judged: number
+  passed: number; rejected: number; skipped_by_memory: number; compute_saved: number
+  last_error: string | null; current_stage: string
+  config: { dataset: string; cycle_seconds: number; max_strategies: number; max_bars: number }
+}
+export type DatasetInfo = {
+  key: string; label: string; symbol: string; interval: string; provider: string
+  authority: string; is_real: boolean; cost_note: string; loaded: boolean; bar_count: number
+}
+export type PropResult = {
+  simulation_id: string; strategy_id: string; rule: Rule
+  path_count: number; pass_count: number; fail_count: number; timeout_count: number
+  pass_rate: number; interval_low: number; interval_high: number; mean_payout: number
+  equity_paths: number[][]; trading_days: number; daily_pnl: number[]
+  avg_days_to_pass: number | null; avg_days_to_fail: number | null
+  failure_reasons: Record<string, number>; terminal_balances: number[]; median_terminal: number
+}

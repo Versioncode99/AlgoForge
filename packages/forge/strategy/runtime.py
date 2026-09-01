@@ -44,8 +44,13 @@ class Window:
         end: int,
     ) -> None:
         stop = end + 1
+        # numpy slices are views, so these are O(1) and still cannot address the
+        # future. The timestamp sequence is deliberately NOT sliced: a Python list
+        # slice copies, which turned the loop into O(n^2) on real data. `now` reads
+        # a single element at `index` instead, so nothing beyond it is ever exposed.
         self._o, self._h, self._l = o[:stop], h[:stop], l[:stop]
-        self._c, self._v, self._t = c[:stop], v[:stop], t[:stop]
+        self._c, self._v = c[:stop], v[:stop]
+        self._t = t
         self.index = end
 
     @property

@@ -26,10 +26,23 @@ const summary = {
   families: ['breakout'], strategies_path: 'F:/AlgoForge/strategies', data_gate: 'SYNTHETIC',
 }
 const activity = [{ ts: '2026-09-01T20:11:04+00:00', stage: 'BACKTEST', level: 'pass', message: 'finished — 63 trades', ref: null }]
+const engine = {
+  running: false, started_at: null, cycles: 0, created: 0, backtested: 0, judged: 0,
+  passed: 0, rejected: 0, skipped_by_memory: 0, compute_saved: 0,
+  last_error: null, current_stage: 'idle',
+  config: { dataset: 'mnq_1m_3mo', cycle_seconds: 6, max_strategies: 60, max_bars: 30000 },
+}
+const datasetList = [
+  { key: 'mnq_1m_3mo', label: 'MNQ · 1m · 3 months', symbol: 'MNQ', interval: '1m',
+    provider: 'databento', authority: 'TRUTH', is_real: true, cost_note: '~$0.33',
+    loaded: true, bar_count: 90029 },
+]
 
 globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
   const url = String(input)
-  const data = url.endsWith('/health') ? { status: 'ok' }
+  const data = url.endsWith('/health') ? { status: 'ok', data_gate: 'REAL', engine_running: false }
+    : url.endsWith('/engine') ? engine
+    : url.endsWith('/datasets') ? datasetList
     : url.endsWith('/summary') ? summary
     : url.includes('/activity') ? activity
     : url.endsWith('/strategies') ? []
@@ -50,24 +63,32 @@ const renderApp = () => {
   render(<QueryClientProvider client={client}><App /></QueryClientProvider>)
 }
 
-test('shows the auditable verdict and the synthetic-data truth label', async () => {
+test('overview is the engine control centre and carries the paper-only label', async () => {
   renderApp()
-  expect(await screen.findByText(/a verdict you can audit/i)).toBeInTheDocument()
-  expect(screen.getByText(/synthetic data · uncalibrated/i)).toBeInTheDocument()
+  expect(await screen.findByText(/autonomous engine/i)).toBeInTheDocument()
+  expect(await screen.findByRole('button', { name: /start engine/i })).toBeInTheDocument()
+  expect(screen.getByText(/paper only · uncalibrated/i)).toBeInTheDocument()
 })
 
 test('navigates to the agent boundary', async () => {
   renderApp()
-  await screen.findByText(/a verdict you can audit/i)
+  await screen.findByText(/autonomous engine/i)
   fireEvent.click(screen.getByRole('button', { name: 'Agents' }))
-  expect(screen.getByText(/agents explain; the judge decides/i)).toBeInTheDocument()
+  expect(await screen.findByText(/agents explain; the judge decides/i)).toBeInTheDocument()
 })
 
 test('exposes the strategy library as a first-class section', async () => {
   renderApp()
-  await screen.findByText(/a verdict you can audit/i)
+  await screen.findByText(/autonomous engine/i)
   fireEvent.click(screen.getByRole('button', { name: 'Strategies' }))
   expect(await screen.findByText(/the code this system runs/i)).toBeInTheDocument()
+})
+
+test('prop firm lets you pick a strategy rather than scoring a fixture', async () => {
+  renderApp()
+  await screen.findByText(/autonomous engine/i)
+  fireEvent.click(screen.getByRole('button', { name: 'Prop Firm' }))
+  expect(await screen.findByText(/would this strategy have passed/i)).toBeInTheDocument()
 })
 
 test('orchestrator log renders real recorded events', async () => {

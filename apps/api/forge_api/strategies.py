@@ -18,6 +18,7 @@ from forge.strategy import (
 from pydantic import BaseModel, Field
 
 from forge_api.activity import ActivityLog, BacktestStore, Level
+from forge_api.market import MarketService
 
 
 class CreateStrategyRequest(BaseModel):
@@ -33,24 +34,34 @@ class UpdateSourceRequest(BaseModel):
 
 class BacktestRequest(BaseModel):
     parameters: dict[str, float] | None = None
-    bar_count: int = Field(default=4000, ge=400, le=40_000)
+    dataset: str = "mnq_1m_3mo"
+    bar_count: int = Field(default=30_000, ge=400, le=200_000)
     seed: int = 20260901
 
 
 class SweepRequest(BaseModel):
     parameter: str
-    bar_count: int = Field(default=4000, ge=400, le=40_000)
+    dataset: str = "mnq_1m_3mo"
+    bar_count: int = Field(default=12_000, ge=400, le=60_000)
     seed: int = 20260901
 
 
-def build_router(root: Path) -> APIRouter:
+def build_router(
+    root: Path,
+    library: StrategyLibrary,
+    store: BacktestStore,
+    log: ActivityLog,
+    market: MarketService,
+) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["strategies"])
-    library = StrategyLibrary(root / "strategies")
-    store = BacktestStore(root / "data" / "backtests")
-    log = ActivityLog(root / "data" / "runtime" / "activity.ndjson")
 
-    def _bars(count: int, seed: int) -> list[Bar]:
-        return generate_bars(count=count, seed=seed)
+    def _bars(request: BacktestRequest) -> tuple[list[Bar], bool, str]:
+        """Resolve a request to bars. Real datasets fail closed rather than
+        silently falling back to synthetic data."""
+        if request.dataset == "synthetic":
+            return generate_bars(count=request.bar_count, seed=request.seed), False, "generator"
+        bars, dataset = market.load(request.dataset, limit=request.bar_count)
+        return bars, dataset.is_real, dataset.provider
 
     # ── templates ────────────────────────────────────────────────────────────
     @router.get("/templates", response_model=ApiEnvelope[list[dict[str, Any]]])
@@ -178,17 +189,26 @@ def build_router(root: Path) -> APIRouter:
             log.record("GUARD", f"blocked {strategy_id}: {exc}", "fail", strategy_id)
             raise HTTPException(422, {"code": "guard_violation", "detail": str(exc)}) from exc
 
+        try:
+            bars, is_real, provider = _bars(body)
+        except Exception as exc:
+            log.record("DATA", f"{body.dataset} unavailable: {exc}", "fail")
+            raise HTTPException(422, {"code": "data_unavailable", "detail": str(exc)}) from exc
+
         log.record(
-            "BACKTEST", f"{strategy_id} started on {body.bar_count} bars", "info", strategy_id
+            "BACKTEST",
+            f"{strategy_id} started on {len(bars):,} {body.dataset} bars ({provider})",
+            "info",
+            strategy_id,
         )
         try:
             result = run_backtest(
                 module,
                 spec,
-                _bars(body.bar_count, body.seed),
+                bars,
                 parameters=body.parameters,
                 code_hash=library.code_hash(strategy_id),
-                labels=("SYNTHETIC_DATA", "UNCALIBRATED"),
+                labels=("REAL_DATA",) if is_real else ("SYNTHETIC_DATA", "UNCALIBRATED"),
             )
         except ValueError as exc:
             log.record("BACKTEST", f"{strategy_id} failed: {exc}", "fail", strategy_id)
@@ -208,7 +228,12 @@ def build_router(root: Path) -> APIRouter:
             )
         return ApiEnvelope(
             data=result.model_dump(mode="json"),
-            meta={"synthetic": True, "trade_count": len(result.trades)},
+            meta={
+                "dataset": body.dataset,
+                "provider": provider,
+                "is_real": is_real,
+                "trade_count": len(result.trades),
+            },
         )
 
     @router.post("/strategies/{strategy_id}/sweep", response_model=ApiEnvelope[dict[str, Any]])
@@ -226,7 +251,7 @@ def build_router(root: Path) -> APIRouter:
         if target is None:
             raise HTTPException(404, {"code": "parameter_not_found", "parameter": body.parameter})
 
-        bars = _bars(body.bar_count, body.seed)
+        bars, _, _ = _bars(body)  # type: ignore[arg-type]
         points: list[dict[str, Any]] = []
         value = float(target.low)
         while value <= float(target.high) + 1e-9:
@@ -281,10 +306,10 @@ def build_router(root: Path) -> APIRouter:
         verdict = Judge().evaluate(
             JudgeInput(
                 run_id=latest["backtest_id"],
-                tier="SWEEP_SYNTHETIC",
+                tier="TRUTH_OOS" if "REAL_DATA" in latest.get("labels", []) else "SWEEP_SYNTHETIC",
                 pnl=pnl,
                 trial_count=trials,
-                data_gate_passed=False,  # synthetic data can never pass the real G0
+                data_gate_passed="REAL_DATA" in latest.get("labels", []),
                 preregistered=True,
                 implementation_tests_passed=True,
                 lookahead_detected=not latest["lookahead_clean"],
@@ -302,8 +327,8 @@ def build_router(root: Path) -> APIRouter:
             data=verdict.model_dump(mode="json"),
             meta={
                 "trial_count": trials,
-                "data_gate": "SYNTHETIC",
-                "note": "G0 fails by construction on synthetic data. Wire Databento to lift it.",
+                "data_gate": "REAL" if "REAL_DATA" in latest.get("labels", []) else "SYNTHETIC",
+                "note": "G0 passes only on real provider data.",
             },
         )
 
@@ -333,7 +358,7 @@ def build_router(root: Path) -> APIRouter:
                 "template_count": len(TEMPLATES),
                 "families": sorted({s.family for s in specs}),
                 "strategies_path": str(library.root),
-                "data_gate": "SYNTHETIC",
+                "data_gate": "REAL",
             }
         )
 

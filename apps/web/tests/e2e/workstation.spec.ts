@@ -5,11 +5,11 @@ const TABS = ['Strategies', 'Verdict', 'Regimes', 'Risk & Monte Carlo', 'Prop Fi
 test('every section is reachable and the truth label persists', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
-  await expect(page.getByText(/SYNTHETIC DATA · UNCALIBRATED/)).toBeVisible()
+  await expect(page.getByText(/PAPER ONLY · UNCALIBRATED/)).toBeVisible()
   for (const tab of TABS) {
     await page.getByRole('button', { name: tab, exact: true }).click()
     await expect(page.getByRole('heading', { name: tab, exact: true })).toBeVisible()
-    await expect(page.getByText(/SYNTHETIC DATA · UNCALIBRATED/)).toBeVisible()
+    await expect(page.getByText(/PAPER ONLY · UNCALIBRATED/)).toBeVisible()
   }
   await page.getByRole('button', { name: 'Evolution', exact: true }).click()
   await expect(page.getByText('Automatic live changes: NEVER')).toBeVisible()
@@ -41,20 +41,30 @@ test('a backtest runs real strategy code and produces real trades', async ({ pag
   await expect(page.getByText('DECISION BAR ALWAYS PRECEDES FILL BAR')).toBeVisible()
 })
 
-test('prop rule selection updates the simulation heading', async ({ page }) => {
+test('prop firm is driven by a chosen strategy, not a fixture', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Prop Firm', exact: true }).click()
-  const selector = page.getByLabel('Rule fixture')
-  await expect(selector).toBeVisible()
-  expect(await selector.locator('option').count()).toBeGreaterThanOrEqual(4)
-  await selector.selectOption({ index: 2 })
-  await expect(page.getByText(/Challenge equity paths · 300 simulations/)).toBeVisible()
+  await expect(page.getByText(/Would this strategy have passed/)).toBeVisible()
+  await expect(page.getByLabel('Strategy')).toBeVisible()
+  const rules = page.getByLabel('Rule fixture')
+  await expect(rules).toBeVisible()
+  expect(await rules.locator('option').count()).toBeGreaterThanOrEqual(4)
+})
+
+test('overview exposes autonomous engine control', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('.engine-state')).toContainText('AUTONOMOUS ENGINE')
+  await expect(page.getByRole('button', { name: /Start engine/ })).toBeVisible()
+  const dataset = page.getByLabel('Dataset')
+  await expect(dataset).toBeVisible()
+  // Real provider datasets must be offered, not just the synthetic fallback.
+  await expect(dataset.locator('option')).toContainText([/databento/])
 })
 
 test('capture desktop evidence', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop-chromium', 'desktop evidence only')
   await page.goto('/')
-  await expect(page.getByText(/a verdict you can audit/i)).toBeVisible()
+  await expect(page.locator('.engine-state')).toContainText('AUTONOMOUS ENGINE')
   await page.screenshot({ path: '../../artifacts/qa/overview-desktop.png', fullPage: true })
   await page.getByRole('button', { name: 'Strategies', exact: true }).click()
   await expect(page.getByLabel('Strategy source code')).toBeVisible()

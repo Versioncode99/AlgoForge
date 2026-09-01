@@ -9,9 +9,11 @@ import { EquityChart, RegimeChart } from './charts'
 import { Wordmark } from './components/Logo'
 import { money, num, pct } from './lib'
 import type {
-  ActivityEvent, Analysis, Debate, Evolution, PropSimulation, Rule, Run,
+  ActivityEvent, Analysis, Debate, Evolution, Rule, Run,
   StrategyListItem, Summary,
 } from './types'
+import { EnginePanel } from './views/Engine'
+import { PropFirmView } from './views/PropFirm'
 import { StrategiesView } from './views/Strategies'
 
 const tabs = [
@@ -36,7 +38,7 @@ export function App() {
 
   const health = useQuery({
     queryKey: ['health'], refetchInterval: 15_000,
-    queryFn: () => getJson<{ status: string }>('/health'),
+    queryFn: () => getJson<{ status: string; data_gate: string; engine_running: boolean }>('/health'),
   })
   const summary = useQuery({ queryKey: ['summary'], queryFn: () => getJson<Summary>('/summary') })
   const strategies = useQuery({ queryKey: ['strategies'], queryFn: () => getJson<StrategyListItem[]>('/strategies') })
@@ -52,12 +54,6 @@ export function App() {
     queryFn: () => getJson<Analysis>(`/analysis/${runId}`),
   })
   const rules = useQuery({ queryKey: ['rules'], queryFn: () => getJson<Rule[]>('/prop/rules') })
-  const [ruleId, setRuleId] = useState('')
-  useEffect(() => { if (!ruleId && rules.data?.length) setRuleId(rules.data[0].rule_id) }, [rules.data, ruleId])
-  const prop = useQuery({
-    queryKey: ['prop', runId, ruleId], enabled: !!runId && !!ruleId,
-    queryFn: () => getJson<PropSimulation>(`/prop/simulations/${runId}?rule_id=${ruleId}`),
-  })
   const agents = useQuery({
     queryKey: ['agents', runId], enabled: !!runId,
     queryFn: () => getJson<Debate>(`/agents/${runId}`),
@@ -108,7 +104,12 @@ export function App() {
             <div className="rail-row"><span>Backtest artifacts</span><b>{summary.data?.backtest_count ?? 0}</b></div>
             <div className="rail-row"><span>Ledger runs</span><b>{runs.data?.length ?? 0}</b></div>
             <div className="rail-row"><span>Prop rule sets</span><b>{rules.data?.length ?? 0}</b></div>
-            <div className="rail-row"><span>Data gate</span><b className="bad">{summary.data?.data_gate ?? '—'}</b></div>
+            <div className="rail-row">
+              <span>Data gate</span>
+              <b className={health.data?.data_gate === 'REAL' ? 'good' : 'bad'}>
+                {health.data?.data_gate ?? '—'}
+              </b>
+            </div>
           </div>
           <div className="rail-group">
             <div className="rail-head"><span>Families</span></div>
@@ -129,34 +130,41 @@ export function App() {
         <main className="main">
           <div className="view-head">
             <div>
-              <p className="eyebrow">{tab === 'Strategies' ? 'BUILD · RUN · JUDGE' : 'MNQ.SYNTH · 1M BARS'}</p>
+              <p className="eyebrow">
+                {tab === 'Strategies' ? 'BUILD · RUN · JUDGE' : tab === 'Overview' ? 'AUTONOMOUS ENGINE' : 'MNQ · 1M BARS'}
+              </p>
               <h1>{tab}</h1>
             </div>
             <div className="chips">
               <span className="chip is-locked"><LockKeyhole /> PAPER ONLY</span>
-              <span className="chip">ENGINE 0.2</span>
+              <span className={health.data?.data_gate === 'REAL' ? 'chip is-good' : 'chip'}>
+                DATA {health.data?.data_gate ?? '—'}
+              </span>
             </div>
           </div>
 
           <div className="notice">
             <TriangleAlert />
             <span>
-              SYNTHETIC DATA · UNCALIBRATED — bars come from a seeded generator with no edge
-              deliberately embedded. Wire Databento before trusting any number here.
+              PAPER ONLY · UNCALIBRATED — backtests run on real provider data, but fills are
+              modelled. Calibrate against NinjaTrader before trusting any number here.
             </span>
           </div>
 
           {!online && <div className="state error">API unavailable. Start the AlgoForge API on port 8765.</div>}
 
+          {online && tab === 'Overview' && <EnginePanel />}
           {online && tab === 'Strategies' && <StrategiesView />}
-          {online && tab !== 'Strategies' && analysis.data && (
+          {online && tab === 'Prop Firm' && <PropFirmView />}
+          {online && tab !== 'Strategies' && tab !== 'Prop Firm' && analysis.data && (
             <Workspace
-              tab={tab} analysis={analysis.data} prop={prop.data} rules={rules.data ?? []}
-              ruleId={ruleId} setRuleId={setRuleId} agents={agents.data} evolution={evolution.data}
-              strategies={strategies.data ?? []}
+              tab={tab} analysis={analysis.data} agents={agents.data}
+              evolution={evolution.data} strategies={strategies.data ?? []}
             />
           )}
-          {online && tab !== 'Strategies' && !analysis.data && <div className="state">Loading ledger…</div>}
+          {online && tab !== 'Strategies' && tab !== 'Prop Firm' && !analysis.data && (
+            <div className="state">Loading ledger…</div>
+          )}
         </main>
       </div>
 
@@ -195,13 +203,11 @@ function OrchestratorLog({ events }: { events: ActivityEvent[] }) {
   )
 }
 
-function Workspace({ tab, analysis, prop, rules, ruleId, setRuleId, agents, evolution, strategies }: {
-  tab: Tab; analysis: Analysis; prop?: PropSimulation; rules: Rule[]
-  ruleId: string; setRuleId: (id: string) => void
+function Workspace({ tab, analysis, agents, evolution, strategies }: {
+  tab: Tab; analysis: Analysis
   agents?: Debate; evolution?: Evolution; strategies: StrategyListItem[]
 }) {
   const v = analysis.verdict
-  if (tab === 'Prop Firm') return <PropView prop={prop} rules={rules} ruleId={ruleId} setRuleId={setRuleId} />
   if (tab === 'Agents') return <AgentView agents={agents} />
   if (tab === 'Evolution') return <EvolutionView evolution={evolution} />
 
@@ -308,47 +314,6 @@ function Workspace({ tab, analysis, prop, rules, ruleId, setRuleId, agents, evol
           </div>
         </div>
       </div>
-    </section>
-  )
-}
-
-function PropView({ prop, rules, ruleId, setRuleId }: {
-  prop?: PropSimulation; rules: Rule[]; ruleId: string; setRuleId: (id: string) => void
-}) {
-  return (
-    <section>
-      <SectionTitle kicker="RULE-EXACT ACCOUNT SIMULATION" title="Challenge and funded paths stay separate" />
-      <label className="field" style={{ marginBottom: 12 }}>
-        Rule fixture
-        <select value={ruleId} onChange={(e) => setRuleId(e.target.value)}>
-          {rules.map((r) => <option key={r.rule_id} value={r.rule_id}>{r.display_name}</option>)}
-        </select>
-      </label>
-      {prop && (
-        <>
-          <div className="split">
-            <div className="donut-wrap">
-              <div className="donut" style={{ '--pass-deg': `${prop.pass_rate * 360}deg` } as React.CSSProperties}>
-                <div><strong>{pct(prop.pass_rate)}</strong><span>pass / survive</span></div>
-              </div>
-            </div>
-            <Metrics bare items={[
-              ['Start', money(prop.rule.starting_balance)],
-              ['Target', money(prop.rule.profit_target)],
-              ['Max loss', money(prop.rule.maximum_loss)],
-              ['95% interval', `${pct(prop.interval_low)}–${pct(prop.interval_high)}`],
-            ]} />
-          </div>
-          <div className="panel" style={{ marginTop: 12 }}>
-            <header><h2>Challenge equity paths · {prop.path_count} simulations</h2></header>
-            <div className="panel-body"><EquityChart paths={prop.equity_paths} /></div>
-          </div>
-          <p className="warning">
-            UNVERIFIED RULE FIXTURE — locked for research override only; verify the provider's
-            current official rulebook before relying on this number.
-          </p>
-        </>
-      )}
     </section>
   )
 }

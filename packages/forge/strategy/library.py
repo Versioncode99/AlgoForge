@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import gc
+import importlib
 import importlib.util
 import json
 import re
+import shutil
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
@@ -136,9 +140,23 @@ class StrategyLibrary:
         folder = self.dir_for(strategy_id)
         if not folder.exists():
             raise KeyError(strategy_id)
-        for child in folder.iterdir():
-            child.unlink()
-        folder.rmdir()
+        # Drop the imported module first. On Windows the loader keeps a handle on
+        # strategy.py, and unlinking it while imported raises "Access is denied".
+        self.unload_module(strategy_id)
+        # rmtree, not unlink: the loader leaves a __pycache__ directory behind.
+        for attempt in range(4):
+            try:
+                shutil.rmtree(folder)
+                return
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                gc.collect()
+                time.sleep(0.1)
+
+    def unload_module(self, strategy_id: str) -> None:
+        sys.modules.pop(f"algoforge_strategy_{strategy_id}", None)
+        importlib.invalidate_caches()
 
     # ── load ─────────────────────────────────────────────────────────────────
     def load_module(self, strategy_id: str) -> ModuleType:

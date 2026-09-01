@@ -5,6 +5,7 @@ description = "Private, paper-only quantitative research and prop simulation wor
 readme = "README.md"
 requires-python = ">=3.13,<3.15"
 dependencies = [
+  "databento>=0.85.0",
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
   "numpy>=2.2,<3",
@@ -17,6 +18,7 @@ dependencies = [
 [dependency-groups]
 dev = [
   "mypy>=1.17,<2",
+  "pandas-stubs>=3.0.5.260730",
   "pytest>=8.4,<9",
   "pytest-cov>=6.2,<7",
   "ruff>=0.12,<1",

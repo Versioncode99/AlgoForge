@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 from fastapi.testclient import TestClient
 from forge_api.main import create_app
@@ -12,7 +14,9 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(main, "ROOT", tmp_path)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "rules").mkdir(parents=True, exist_ok=True)
+    import shutil
+
+    shutil.copytree(pathlib.Path("rules"), tmp_path / "rules", dirs_exist_ok=True)
     with TestClient(create_app(database_path=tmp_path / "test.db")) as client:
         yield client
 
@@ -40,7 +44,10 @@ def test_create_then_read_returns_executable_source(client):
 
 def test_backtest_produces_real_trades_with_clean_decision_indices(client):
     strategy_id = _create(client)
-    response = client.post(f"/api/v1/strategies/{strategy_id}/backtest", json={"bar_count": 1500})
+    response = client.post(
+        f"/api/v1/strategies/{strategy_id}/backtest",
+        json={"dataset": "synthetic", "bar_count": 1500},
+    )
     assert response.status_code == 200, response.text
     data = response.json()["data"]
     assert data["lookahead_clean"] is True
@@ -51,7 +58,7 @@ def test_backtest_produces_real_trades_with_clean_decision_indices(client):
 
 def test_backtest_is_reproducible(client):
     strategy_id = _create(client)
-    payload = {"bar_count": 1200, "seed": 7}
+    payload = {"dataset": "synthetic", "bar_count": 1200, "seed": 7}
     first = client.post(f"/api/v1/strategies/{strategy_id}/backtest", json=payload).json()["data"]
     second = client.post(f"/api/v1/strategies/{strategy_id}/backtest", json=payload).json()["data"]
     assert first["backtest_id"] == second["backtest_id"]
@@ -65,9 +72,12 @@ def test_judge_requires_a_backtest_first(client):
     assert response.json()["detail"]["code"] == "no_backtest"
 
 
-def test_judge_scores_the_real_backtest_and_fails_g0_on_synthetic_data(client):
+def test_judge_scores_the_backtest_and_fails_g0_on_synthetic_data(client):
     strategy_id = _create(client)
-    client.post(f"/api/v1/strategies/{strategy_id}/backtest", json={"bar_count": 1500})
+    client.post(
+        f"/api/v1/strategies/{strategy_id}/backtest",
+        json={"dataset": "synthetic", "bar_count": 1500},
+    )
     body = client.post(f"/api/v1/strategies/{strategy_id}/judge").json()
     gates = {g["gate"]: g["status"] for g in body["data"]["gates"]}
     assert gates["G0"] == "FAIL", "synthetic data must never clear the data gate"
@@ -94,7 +104,7 @@ def test_sweep_counts_every_trial_and_refuses_to_promote(client):
     strategy_id = _create(client)
     body = client.post(
         f"/api/v1/strategies/{strategy_id}/sweep",
-        json={"parameter": "lookback", "bar_count": 800},
+        json={"parameter": "lookback", "dataset": "synthetic", "bar_count": 800},
     ).json()
     assert body["meta"]["promotable"] is False
     assert body["meta"]["trials_counted"] == len(body["data"]["points"])
@@ -102,7 +112,10 @@ def test_sweep_counts_every_trial_and_refuses_to_promote(client):
 
 def test_activity_records_what_actually_happened(client):
     strategy_id = _create(client)
-    client.post(f"/api/v1/strategies/{strategy_id}/backtest", json={"bar_count": 800})
+    client.post(
+        f"/api/v1/strategies/{strategy_id}/backtest",
+        json={"dataset": "synthetic", "bar_count": 800},
+    )
     events = client.get("/api/v1/activity").json()["data"]
     stages = {event["stage"] for event in events}
     assert {"STRATEGY", "BACKTEST"} <= stages
@@ -112,3 +125,39 @@ def test_delete_removes_the_strategy(client):
     strategy_id = _create(client)
     assert client.delete(f"/api/v1/strategies/{strategy_id}").status_code == 200
     assert client.get(f"/api/v1/strategies/{strategy_id}").status_code == 404
+
+
+def test_datasets_expose_real_providers(client):
+    rows = client.get("/api/v1/datasets").json()["data"]
+    by_key = {row["key"]: row for row in rows}
+    assert by_key["synthetic"]["is_real"] is False
+    assert by_key["mnq_1m_3mo"]["is_real"] is True
+    assert by_key["mnq_1m_3mo"]["provider"] == "databento"
+    assert by_key["btc_5m_6mo"]["cost_note"] == "free"
+
+
+def test_engine_starts_and_stops(client):
+    status = client.post(
+        "/api/v1/engine/start",
+        json={"dataset": "synthetic", "cycle_seconds": 1.0, "max_strategies": 3, "max_bars": 2000},
+    ).json()["data"]
+    assert status["running"] is True
+    stopped = client.post("/api/v1/engine/stop").json()["data"]
+    assert stopped["running"] is False
+
+
+def test_engine_rejects_an_unknown_dataset(client):
+    response = client.post("/api/v1/engine/start", json={"dataset": "not_a_dataset"})
+    assert response.status_code == 404
+
+
+def test_prop_requires_a_backtest_and_enough_days(client):
+    strategy_id = _create(client)
+    rules = client.get("/api/v1/prop/rules").json()["data"]
+    if not rules:
+        return
+    response = client.post(
+        f"/api/v1/strategies/{strategy_id}/prop", json={"rule_id": rules[0]["rule_id"]}
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "no_backtest"
