@@ -1,0 +1,21 @@
+rule_id: lucid-50k-funded-sample-v1
+display_name: Lucid 50K Funded (research fixture)
+provider: Lucid Trading
+phase: FUNDED
+starting_balance: 50000
+profit_target: 0
+maximum_loss: 2000
+daily_loss_limit: 1000
+trail_mode: INTRADAY
+floor_cap: 50000
+minimum_days: 5
+consistency_percent: null
+timeout_days: 120
+payout_threshold: 3000
+payout_amount: 1500
+verified: false
+source_url: https://lucidtrading.com/
+source_hash: unverified-sample
+effective_from: 2026-09-01
+review_expires_at: 2026-09-02
+timezone: America/New_York

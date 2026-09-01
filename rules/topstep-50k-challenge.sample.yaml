@@ -1,0 +1,19 @@
+rule_id: topstep-50k-challenge-sample-v1
+display_name: Topstep 50K Challenge (research fixture)
+provider: Topstep
+phase: CHALLENGE
+starting_balance: 50000
+profit_target: 3000
+maximum_loss: 2000
+daily_loss_limit: null
+trail_mode: EOD
+floor_cap: 50000
+minimum_days: 2
+consistency_percent: 50
+timeout_days: 60
+verified: false
+source_url: https://www.topstep.com/
+source_hash: unverified-sample
+effective_from: 2026-09-01
+review_expires_at: 2026-09-02
+timezone: America/Chicago

@@ -1,0 +1,21 @@
+rule_id: topstep-50k-funded-sample-v1
+display_name: Topstep 50K Funded (research fixture)
+provider: Topstep
+phase: FUNDED
+starting_balance: 50000
+profit_target: 0
+maximum_loss: 2000
+daily_loss_limit: null
+trail_mode: EOD
+floor_cap: 50000
+minimum_days: 5
+consistency_percent: 40
+timeout_days: 120
+payout_threshold: 3000
+payout_amount: 1500
+verified: false
+source_url: https://www.topstep.com/
+source_hash: unverified-sample
+effective_from: 2026-09-01
+review_expires_at: 2026-09-02
+timezone: America/Chicago

@@ -23,6 +23,12 @@ def test_health_capabilities_and_seeded_run(tmp_path) -> None:
         analysis = client.get(f"/api/v1/analysis/{run_id}").json()["data"]
         assert analysis["risk"]["path_count"] == 240
         assert len(analysis["regimes"]) == 4
+        rules = client.get("/api/v1/prop/rules").json()
+        assert rules["meta"]["runnable"] == 0
+        rule_id = rules["data"][0]["rule_id"]
+        prop = client.get(f"/api/v1/prop/simulations/{run_id}", params={"rule_id": rule_id}).json()
+        assert prop["meta"]["rule_locked"] is True
+        assert "UNVERIFIED_RULES" in prop["data"]["labels"]
 
 
 def test_missing_run_returns_semantic_404(tmp_path) -> None:

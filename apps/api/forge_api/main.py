@@ -15,6 +15,7 @@ from forge.contracts.hashing import content_hash
 from forge.contracts.models import ApiEnvelope, Preregistration, RunRecord
 from forge.judge import Judge, JudgeInput, Verdict
 from forge.ledger import LedgerDatabase
+from forge.prop import PropRuleSet, PropSimulation, load_rules, simulate_prop_paths
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -126,6 +127,26 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             )
         )
         return ApiEnvelope(data=build_normal_analysis(item.run_id, judged, demo_pnl))
+
+    @app.get("/api/v1/prop/rules", response_model=ApiEnvelope[list[PropRuleSet]])
+    def prop_rules() -> ApiEnvelope[list[PropRuleSet]]:
+        items = load_rules(ROOT / "rules")
+        return ApiEnvelope(data=items, meta={"total": len(items), "runnable": 0})
+
+    @app.get("/api/v1/prop/simulations/{run_id}", response_model=ApiEnvelope[PropSimulation])
+    def prop_simulation(run_id: str, rule_id: str) -> ApiEnvelope[PropSimulation]:
+        run = app.state.ledger.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail={"code": "run_not_found"})
+        if run.tier not in {"TRUTH_OOS", "FORWARD"}:
+            raise HTTPException(status_code=422, detail={"code": "truth_or_forward_required"})
+        rules = {rule.rule_id: rule for rule in load_rules(ROOT / "rules")}
+        rule = rules.get(rule_id)
+        if rule is None:
+            raise HTTPException(status_code=404, detail={"code": "rule_not_found"})
+        demo_pnl = (450.0, -250.0, 600.0, -100.0, 300.0, -175.0)
+        result = simulate_prop_paths(run.run_id, rule, demo_pnl, paths=300, allow_unverified=True)
+        return ApiEnvelope(data=result, meta={"rule_locked": True, "research_override": True})
 
     return app
 
