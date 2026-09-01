@@ -5,13 +5,10 @@
   "engines": {
     "node": ">=22 <26"
   },
-  "workspaces": [
-    "apps/web"
-  ],
   "scripts": {
-    "dev:web": "npm --workspace apps/web run dev",
-    "build:web": "npm --workspace apps/web run build",
-    "test:web": "npm --workspace apps/web run test",
-    "test:e2e": "npm --workspace apps/web run test:e2e"
+    "dev:web": "npm --prefix apps/web run dev",
+    "build:web": "npm --prefix apps/web run build",
+    "test:web": "npm --prefix apps/web run test",
+    "test:e2e": "npm --prefix apps/web run test:e2e"
   }
 }
