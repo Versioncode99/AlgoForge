@@ -109,9 +109,7 @@ class LedgerDatabase:
         self.connection.commit()
 
     def verify_decision_chain(self) -> bool:
-        rows = self.connection.execute(
-            "SELECT payload FROM decisions ORDER BY sequence"
-        ).fetchall()
+        rows = self.connection.execute("SELECT payload FROM decisions ORDER BY sequence").fetchall()
         previous: str | None = None
         for row in rows:
             decision = DecisionRecord.model_validate(json.loads(row["payload"]))

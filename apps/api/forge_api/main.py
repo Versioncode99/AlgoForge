@@ -10,6 +10,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from forge.agents import DebateReport, build_demo_debate
 from forge.analytics import NormalAnalysis, build_normal_analysis
 from forge.contracts.hashing import content_hash
 from forge.contracts.models import ApiEnvelope, Preregistration, RunRecord
@@ -147,6 +148,27 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         demo_pnl = (450.0, -250.0, 600.0, -100.0, 300.0, -175.0)
         result = simulate_prop_paths(run.run_id, rule, demo_pnl, paths=300, allow_unverified=True)
         return ApiEnvelope(data=result, meta={"rule_locked": True, "research_override": True})
+
+    @app.get("/api/v1/agents/{run_id}", response_model=ApiEnvelope[DebateReport])
+    def agents(run_id: str) -> ApiEnvelope[DebateReport]:
+        item = app.state.ledger.get_run(run_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail={"code": "run_not_found"})
+        judged = Judge().evaluate(
+            JudgeInput(
+                run_id=item.run_id,
+                tier=item.tier,
+                pnl=(80, -25, 95, -30, 70, -20, 110, -35, 60, 45, -15, 85) * 3,
+                trial_count=4,
+                data_gate_passed=True,
+                preregistered=True,
+                implementation_tests_passed=True,
+            )
+        )
+        return ApiEnvelope(
+            data=build_demo_debate(item.run_id, judged.verdict_id),
+            meta={"narrative_can_change_verdict": False},
+        )
 
     return app
 

@@ -29,6 +29,9 @@ def test_health_capabilities_and_seeded_run(tmp_path) -> None:
         prop = client.get(f"/api/v1/prop/simulations/{run_id}", params={"rule_id": rule_id}).json()
         assert prop["meta"]["rule_locked"] is True
         assert "UNVERIFIED_RULES" in prop["data"]["labels"]
+        agents = client.get(f"/api/v1/agents/{run_id}").json()
+        assert agents["data"]["dissent_present"] is True
+        assert agents["meta"]["narrative_can_change_verdict"] is False
 
 
 def test_missing_run_returns_semantic_404(tmp_path) -> None:
