@@ -93,6 +93,7 @@ class Judge:
         )
         metrics: dict[str, float | int] = {
             "net_pnl": round(float(pnl.sum()), 2),
+            "win_rate": round(float(np.mean(pnl > 0)), 6),
             "sharpe": round(sharpe, 4),
             "adjusted_sharpe": round(adjusted, 4),
             "profit_factor": round(factor, 4),
@@ -157,6 +158,7 @@ class Judge:
     def _formula(metric: str) -> str:
         formulas = {
             "net_pnl": "sum(net trade pnl)",
+            "win_rate": "count(positive trade pnl) / count(trade pnl)",
             "sharpe": "mean(pnl) / sample_std(pnl) * sqrt(trades)",
             "adjusted_sharpe": "sharpe - 0.35 * sqrt(log(max(trials, 1)))",
             "profit_factor": "gross gains / absolute gross losses",
