@@ -8,7 +8,6 @@ from forge.data.models import Bar, DataManifest
 from forge.data.providers import LOCAL_FIXTURE
 from forge.data.validation import validate_bars
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 

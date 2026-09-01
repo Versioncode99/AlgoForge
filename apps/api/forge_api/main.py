@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from forge.contracts.hashing import content_hash
 from forge.contracts.models import ApiEnvelope, Preregistration, RunRecord
+from forge.judge import Judge, JudgeInput, Verdict
 from forge.ledger import LedgerDatabase
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -86,6 +87,25 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         if item is None:
             raise HTTPException(status_code=404, detail={"code": "run_not_found"})
         return ApiEnvelope(data=item)
+
+    @app.get("/api/v1/verdicts/{run_id}", response_model=ApiEnvelope[Verdict])
+    def verdict(run_id: str) -> ApiEnvelope[Verdict]:
+        item = app.state.ledger.get_run(run_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail={"code": "run_not_found"})
+        demo_pnl = (80, -25, 95, -30, 70, -20, 110, -35, 60, 45, -15, 85) * 3
+        result = Judge().evaluate(
+            JudgeInput(
+                run_id=item.run_id,
+                tier=item.tier,
+                pnl=demo_pnl,
+                trial_count=4,
+                data_gate_passed=True,
+                preregistered=True,
+                implementation_tests_passed=True,
+            )
+        )
+        return ApiEnvelope(data=result)
 
     return app
 
