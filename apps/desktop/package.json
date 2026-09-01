@@ -1,0 +1,11 @@
+{
+  "name": "@algoforge/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AlgoForge desktop shell",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --publish never"
+  }
+}

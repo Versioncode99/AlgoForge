@@ -1,30 +1,52 @@
 [CmdletBinding()]
-param([switch]$NoBrowser)
+param(
+    [switch]$Web,        # open in the browser instead of the desktop app
+    [switch]$NoBrowser   # start services only, open nothing
+)
 
 $ErrorActionPreference = 'Stop'
 $ForgeRoot = Split-Path -Parent $PSScriptRoot
 $Python = Join-Path $ForgeRoot '.venv\Scripts\python.exe'
+$Electron = Join-Path $ForgeRoot 'apps\desktop\node_modules\.bin\electron.cmd'
+$WebDist = Join-Path $ForgeRoot 'apps\web\dist\index.html'
 $Runtime = Join-Path $ForgeRoot 'data\runtime'
 $LogRoot = Join-Path $Runtime 'logs'
-$WebUrl = 'http://127.0.0.1:5173'
-$ApiHealthUrl = 'http://127.0.0.1:8765/api/v1/health'
-
-try {
-    $ApiHealth = Invoke-RestMethod -Uri $ApiHealthUrl -TimeoutSec 2
-    $WebHealth = Invoke-WebRequest -Uri $WebUrl -UseBasicParsing -TimeoutSec 2
-    if ($ApiHealth.data.status -eq 'ok' -and $WebHealth.StatusCode -eq 200) {
-        Write-Host 'AlgoForge is already running.'
-        if (-not $NoBrowser) { Start-Process $WebUrl }
-        return
-    }
-} catch {
-    # A failed health probe is expected when the local services are stopped.
-}
+$ApiUrl = 'http://127.0.0.1:8765'
+$ApiHealthUrl = "$ApiUrl/api/v1/health"
 
 if (-not (Test-Path -LiteralPath $Python)) {
     throw 'Python environment missing. Run: uv sync --all-groups'
 }
 New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
+
+function Test-Api {
+    try { return (Invoke-RestMethod -Uri $ApiHealthUrl -TimeoutSec 2).data.status -eq 'ok' }
+    catch { return $false }
+}
+
+# ── Desktop app: it owns the API itself, so just launch it. ──────────────────
+if (-not $Web) {
+    if ((Test-Path -LiteralPath $Electron) -and (Test-Path -LiteralPath $WebDist)) {
+        if (Get-Process electron -ErrorAction SilentlyContinue |
+            Where-Object { $_.MainWindowTitle -eq 'AlgoForge' }) {
+            Write-Host 'AlgoForge is already open.'
+            return
+        }
+        Start-Process -FilePath $Electron -ArgumentList '.' `
+            -WorkingDirectory (Join-Path $ForgeRoot 'apps\desktop') -WindowStyle Hidden
+        Write-Host 'AlgoForge starting.'
+        return
+    }
+    Write-Warning 'Desktop shell not built. Falling back to the browser.'
+    Write-Warning 'To build it: npm --prefix apps/desktop install; npm run build:web'
+}
+
+# ── Browser fallback: API plus the Vite dev server. ──────────────────────────
+if (Test-Api) {
+    Write-Host 'AlgoForge is already running.'
+    if (-not $NoBrowser) { Start-Process "$ApiUrl/" }
+    return
+}
 
 $Api = Start-Process -FilePath $Python -ArgumentList @(
     '-m', 'uvicorn', 'forge_api.main:app', '--app-dir', (Join-Path $ForgeRoot 'apps\api'),
@@ -33,35 +55,22 @@ $Api = Start-Process -FilePath $Python -ArgumentList @(
   -RedirectStandardOutput (Join-Path $LogRoot 'api.out.log') `
   -RedirectStandardError (Join-Path $LogRoot 'api.err.log')
 
-$Web = Start-Process -FilePath 'npm.cmd' -ArgumentList @(
-    '--prefix', (Join-Path $ForgeRoot 'apps\web'), 'run', 'dev', '--', '--host', '127.0.0.1'
-) -WorkingDirectory $ForgeRoot -WindowStyle Hidden -PassThru `
-  -RedirectStandardOutput (Join-Path $LogRoot 'web.out.log') `
-  -RedirectStandardError (Join-Path $LogRoot 'web.err.log')
-
-@{ api_pid = $Api.Id; web_pid = $Web.Id; started_at = (Get-Date).ToUniversalTime().ToString('o') } |
+@{ api_pid = $Api.Id; started_at = (Get-Date).ToUniversalTime().ToString('o') } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Runtime 'processes.json') -Encoding utf8
 
-Write-Host "AlgoForge API PID $($Api.Id) and web PID $($Web.Id) started."
+Write-Host "AlgoForge API PID $($Api.Id) started."
 
-# Vite needs a few seconds on a cold start. Opening the browser immediately lands
-# the user on a connection-refused page, so wait for the port to answer first.
+# The API serves the built interface, so wait for it before opening anything.
 $Deadline = (Get-Date).AddSeconds(60)
 $Ready = $false
 while ((Get-Date) -lt $Deadline) {
-    try {
-        if ((Invoke-WebRequest -Uri $WebUrl -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200) {
-            $Ready = $true
-            break
-        }
-    } catch {
-        Start-Sleep -Milliseconds 500
-    }
+    if (Test-Api) { $Ready = $true; break }
+    Start-Sleep -Milliseconds 500
 }
 
 if ($Ready) {
-    Write-Host "Ready. Open $WebUrl - bundled market data is synthetic and uncalibrated."
-    if (-not $NoBrowser) { Start-Process $WebUrl }
+    Write-Host "Ready. Open $ApiUrl - paper only; fills are modelled, not calibrated."
+    if (-not $NoBrowser) { Start-Process "$ApiUrl/" }
 } else {
-    Write-Warning "AlgoForge did not answer on $WebUrl within 60s. Check $LogRoot."
+    Write-Warning "AlgoForge did not answer within 60s. Check $LogRoot."
 }

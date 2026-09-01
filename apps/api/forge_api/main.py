@@ -10,6 +10,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from forge.agents import DebateReport, build_demo_debate
 from forge.analytics import NormalAnalysis, build_normal_analysis
 from forge.contracts.hashing import content_hash
@@ -210,6 +211,13 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     app.state.engine = engine
     app.include_router(build_router(ROOT, library, store, log, market))
     app.include_router(control_router)
+
+    # Serve the built interface from the API itself. The desktop shell then loads
+    # a same-origin page, so there is no CORS surface and no separate web server
+    # to keep alive. Mounted last so it never shadows an API route.
+    web_dist = ROOT / "apps" / "web" / "dist"
+    if (web_dist / "index.html").exists():
+        app.mount("/", StaticFiles(directory=web_dist, html=True), name="ui")
 
     return app
 
