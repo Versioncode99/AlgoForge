@@ -32,6 +32,9 @@ def test_health_capabilities_and_seeded_run(tmp_path) -> None:
         agents = client.get(f"/api/v1/agents/{run_id}").json()
         assert agents["data"]["dissent_present"] is True
         assert agents["meta"]["narrative_can_change_verdict"] is False
+        evolution = client.get("/api/v1/evolution/overview").json()
+        assert evolution["data"]["automatic_live_changes"] is False
+        assert evolution["data"]["candidate"]["lane"] == "CLEAN_ROOM"
 
 
 def test_missing_run_returns_semantic_404(tmp_path) -> None:

@@ -14,6 +14,7 @@ from forge.agents import DebateReport, build_demo_debate
 from forge.analytics import NormalAnalysis, build_normal_analysis
 from forge.contracts.hashing import content_hash
 from forge.contracts.models import ApiEnvelope, Preregistration, RunRecord
+from forge.forgekeeper import ForgeKeeper, classify_candidate
 from forge.judge import Judge, JudgeInput, Verdict
 from forge.ledger import LedgerDatabase
 from forge.prop import PropRuleSet, PropSimulation, load_rules, simulate_prop_paths
@@ -168,6 +169,21 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         return ApiEnvelope(
             data=build_demo_debate(item.run_id, judged.verdict_id),
             meta={"narrative_can_change_verdict": False},
+        )
+
+    @app.get("/api/v1/evolution/overview", response_model=ApiEnvelope[dict[str, object]])
+    def evolution_overview() -> ApiEnvelope[dict[str, object]]:
+        keeper = ForgeKeeper(ROOT / "data" / "forgekeeper")
+        candidate = classify_candidate(
+            "graficogit/mnq-1450-strategy",
+            "DISCOVERED_UNVERIFIED",
+            None,
+            "https://github.com/graficogit/mnq-1450-strategy",
+            ("MNQ research reference",),
+        )
+        return ApiEnvelope(
+            data={**keeper.overview(), "candidate": candidate.model_dump()},
+            meta={"research_intake_only": True, "human_activation_required": True},
         )
 
     return app
