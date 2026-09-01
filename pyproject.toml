@@ -41,6 +41,8 @@ addopts = "-q --strict-markers"
 [tool.ruff]
 target-version = "py313"
 line-length = 100
+# Generated + user-edited strategy artifacts are not project source.
+exclude = ["strategies"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

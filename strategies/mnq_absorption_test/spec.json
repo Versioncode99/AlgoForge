@@ -1,0 +1,44 @@
+{
+  "strategy_id": "mnq_absorption_test",
+  "name": "MNQ Absorption Test",
+  "lineage": "mnq_absorption_test",
+  "family": "mean_reversion",
+  "market": "futures",
+  "symbol": "MNQ.SYNTH",
+  "bar_spec": "1m",
+  "template": "mean_reversion_band",
+  "hypothesis": "After price closes more than k ATRs below its own moving average, the displacement is disproportionately the result of impatient selling into a thin book, and price should revert toward the average as liquidity replenishes over the following bars.",
+  "falsifiable_prediction": "Reversion must be measurably stronger in the low-volatility half of the sample than in the high-volatility half, because absorption is easier in a calm book. Equal or inverted behaviour disproves the mechanism.",
+  "parameters": [
+    {
+      "name": "sma_period",
+      "default": 30,
+      "low": 10,
+      "high": 120,
+      "step": 10,
+      "description": "Moving average period."
+    },
+    {
+      "name": "entry_atr",
+      "default": 1.5,
+      "low": 0.5,
+      "high": 4.0,
+      "step": 0.25,
+      "description": "Entry displacement in ATR(14) multiples."
+    },
+    {
+      "name": "max_bars",
+      "default": 25,
+      "low": 5,
+      "high": 90,
+      "step": 5,
+      "description": "Hard time stop, in bars."
+    }
+  ],
+  "warmup_bars": 140,
+  "commission_per_side": 0.62,
+  "slippage_ticks": 1.0,
+  "tick_value": 0.5,
+  "created_at": "2026-09-01T19:23:38.499518Z",
+  "created_by": "operator"
+}

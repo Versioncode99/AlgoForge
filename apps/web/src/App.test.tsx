@@ -1,25 +1,76 @@
 import '@testing-library/jest-dom/vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
-import { expect, test, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, expect, test, vi } from 'vitest'
 import { App } from './App'
 
-vi.mock('echarts-for-react', () => ({default: () => <div data-testid="chart" />}))
-const run = {run_id:'run_1',tier:'TRUTH_OOS',labels:['SAMPLE_DATA'],created_at:'2026-09-01'}
-const verdict = {verdict_id:'v1',decision:'PASS',grade:'B',dimensions:{edge:60,robustness:70,risk:80,sample:20},metrics:{net_pnl:500,win_rate:.55,profit_factor:1.4,max_drawdown:200},gates:[{gate:'G0',name:'Data',status:'PASS',finding:'Passed'}],labels:[]}
-const analysis = {verdict,regimes:[{name:'TREND',trade_count:9,net_pnl:100,confidence:'LOW'}],risk:{equity_paths:[[1,2]],median_path:[1],p05_path:[0],p95_path:[2],path_count:240,terminal_median:500,loss_probability:.1,var_95:200,cvar_95:300,warnings:[]}}
+vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="chart" /> }))
+
+const run = { run_id: 'run_1', tier: 'TRUTH_OOS', labels: ['SAMPLE_DATA'], created_at: '2026-09-01' }
+const verdict = {
+  verdict_id: 'v1', decision: 'PASS', grade: 'B',
+  dimensions: { edge: 60, robustness: 70, risk: 80, sample: 20 },
+  metrics: { net_pnl: 500, win_rate: 0.55, profit_factor: 1.4, max_drawdown: 200 },
+  gates: [{ gate: 'G0', name: 'Data', status: 'PASS', finding: 'Passed' }], labels: [],
+}
+const analysis = {
+  verdict,
+  regimes: [{ name: 'TREND', trade_count: 9, net_pnl: 100, confidence: 'LOW' }],
+  risk: {
+    equity_paths: [[1, 2]], median_path: [1], p05_path: [0], p95_path: [2], path_count: 240,
+    terminal_median: 500, loss_probability: 0.1, var_95: 200, cvar_95: 300, warnings: [],
+  },
+}
+const summary = {
+  strategy_count: 2, backtest_count: 3, template_count: 3,
+  families: ['breakout'], strategies_path: 'F:/AlgoForge/strategies', data_gate: 'SYNTHETIC',
+}
+const activity = [{ ts: '2026-09-01T20:11:04+00:00', stage: 'BACKTEST', level: 'pass', message: 'finished — 63 trades', ref: null }]
 
 globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
   const url = String(input)
-  const data = url.endsWith('/runs') ? [run] : url.includes('/analysis/') ? analysis : url.endsWith('/prop/rules') ? [] : url.includes('/agents/') ? {claims:[],roles:[],dissent_present:true,numeric_verdict_locked:true} : {automatic_live_changes:false,paper_only:true,release_count:0,candidate:{repository:'owner/repo',lane:'CLEAN_ROOM',proposed_features:[]}}
-  return {ok:true,json:async()=>({data})} as Response
+  const data = url.endsWith('/health') ? { status: 'ok' }
+    : url.endsWith('/summary') ? summary
+    : url.includes('/activity') ? activity
+    : url.endsWith('/strategies') ? []
+    : url.endsWith('/templates') ? []
+    : url.endsWith('/runs') ? [run]
+    : url.includes('/analysis/') ? analysis
+    : url.endsWith('/prop/rules') ? []
+    : url.includes('/agents/') ? { claims: [], roles: [], dissent_present: true, numeric_verdict_locked: true }
+    : { automatic_live_changes: false, paper_only: true, release_count: 0, candidate: { repository: 'owner/repo', lane: 'CLEAN_ROOM', proposed_features: [] } }
+  return { ok: true, text: async () => JSON.stringify({ data }) } as unknown as Response
 })
 
-test('renders evidence warning and navigates to agent boundary', async () => {
-  const client = new QueryClient({defaultOptions:{queries:{retry:false}}})
+// vitest runs without globals, so RTL's automatic cleanup never registers itself.
+afterEach(cleanup)
+
+const renderApp = () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={client}><App /></QueryClientProvider>)
-  expect(await screen.findByText(/research verdict you can audit/i)).toBeInTheDocument()
-  expect(screen.getByText(/sample data · uncalibrated/i)).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button',{name:'Agents'}))
-  expect(screen.getByText(/Agents explain; the judge decides/i)).toBeInTheDocument()
+}
+
+test('shows the auditable verdict and the synthetic-data truth label', async () => {
+  renderApp()
+  expect(await screen.findByText(/a verdict you can audit/i)).toBeInTheDocument()
+  expect(screen.getByText(/synthetic data · uncalibrated/i)).toBeInTheDocument()
+})
+
+test('navigates to the agent boundary', async () => {
+  renderApp()
+  await screen.findByText(/a verdict you can audit/i)
+  fireEvent.click(screen.getByRole('button', { name: 'Agents' }))
+  expect(screen.getByText(/agents explain; the judge decides/i)).toBeInTheDocument()
+})
+
+test('exposes the strategy library as a first-class section', async () => {
+  renderApp()
+  await screen.findByText(/a verdict you can audit/i)
+  fireEvent.click(screen.getByRole('button', { name: 'Strategies' }))
+  expect(await screen.findByText(/the code this system runs/i)).toBeInTheDocument()
+})
+
+test('orchestrator log renders real recorded events', async () => {
+  renderApp()
+  expect(await screen.findByText(/finished — 63 trades/)).toBeInTheDocument()
 })

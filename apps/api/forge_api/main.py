@@ -19,6 +19,8 @@ from forge.judge import Judge, JudgeInput, Verdict
 from forge.ledger import LedgerDatabase
 from forge.prop import PropRuleSet, PropSimulation, load_rules, simulate_prop_paths
 
+from forge_api.strategies import build_router
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -60,14 +62,17 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     app = FastAPI(
         title="AlgoForge API",
         version="0.1.0",
-        description="Private paper-only research API. Bundled output is sample and uncalibrated.",
+        description=(
+            "Private paper-only API. Strategies are real code on disk under strategies/; "
+            "backtests execute that code. No live trading path exists."
+        ),
         lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
         allow_credentials=False,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["*"],
     )
 
@@ -185,6 +190,8 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             data={**keeper.overview(), "candidate": candidate.model_dump()},
             meta={"research_intake_only": True, "human_activation_required": True},
         )
+
+    app.include_router(build_router(ROOT))
 
     return app
 

@@ -1,0 +1,69 @@
+/* AlgoForge design tokens.
+   Structure follows vault doc 08-Frontend-Architecture; the plasma-green primary
+   is the product's existing brand and is retained. One accent is reserved for
+   "a human must act", per the one-earned-accent rule. */
+:root {
+  /* Surfaces. Never pure black — it crushes chart antialiasing. */
+  --bg-0: #0a0b0d;
+  --bg-1: #0e1013;
+  --bg-2: #131619;
+  --bg-3: #191d21;
+  --bg-raised: #1d2228;
+
+  --line: #21262c;
+  --line-strong: #303740;
+  --line-glow: #2c3a35;
+
+  /* Text */
+  --fg-0: #e6eaee;
+  --fg-1: #949da6;
+  --fg-2: #616a73;
+  --fg-3: #444c54;
+
+  /* Brand + semantic */
+  --brand: #3ddc97;
+  --brand-dim: #1f6a4c;
+  --brand-wash: rgba(61, 220, 151, 0.08);
+
+  --pass: #3ddc97;
+  --fail: #f2615c;
+  --warn: #e0a942;
+  --info: #58a6ff;
+  --neutral: #6e7681;
+
+  /* The single accent — reserved for "needs your attention now" */
+  --accent: #ff7b39;
+  --accent-wash: rgba(255, 123, 57, 0.1);
+
+  /* Categorical series, checked for deuteranopia separation */
+  --s1: #58a6ff; --s2: #bc8cff; --s3: #39c5cf; --s4: #ffa657;
+  --s5: #7ee787; --s6: #f778ba; --s7: #a5a5a5; --s8: #e3b341;
+
+  /* Type */
+  --font-ui: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+
+  --fs-nano: 9px;
+  --fs-micro: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 19px;
+  --fs-2xl: 26px;
+  --fs-hero: 46px;
+
+  /* Spacing — everything is a multiple of 4 */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+
+  --r-sm: 3px;
+  --r: 5px;
+  --r-lg: 8px;
+
+  --rail-w: 232px;
+  --topbar-h: 52px;
+  --logbar-h: 132px;
+
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}

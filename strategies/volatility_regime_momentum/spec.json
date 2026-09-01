@@ -1,0 +1,52 @@
+{
+  "strategy_id": "volatility_regime_momentum",
+  "name": "Volatility Regime Momentum",
+  "lineage": "volatility_regime_momentum",
+  "family": "volatility",
+  "market": "futures",
+  "symbol": "MNQ.SYNTH",
+  "bar_spec": "1m",
+  "template": "volatility_regime",
+  "hypothesis": "Trend continuation is conditional on the volatility regime: in calm regimes order flow is more persistent, so a simple moving-average cross should carry information, while in turbulent regimes the same signal is dominated by noise and should be suppressed.",
+  "falsifiable_prediction": "The calm-regime subset must outperform the turbulent-regime subset by a clear margin. If the edge is equal or stronger in turbulence, the regime-conditioning premise is false.",
+  "parameters": [
+    {
+      "name": "fast",
+      "default": 10,
+      "low": 3,
+      "high": 40,
+      "step": 1,
+      "description": "Fast moving average."
+    },
+    {
+      "name": "slow",
+      "default": 40,
+      "low": 20,
+      "high": 150,
+      "step": 10,
+      "description": "Slow moving average."
+    },
+    {
+      "name": "vol_lookback",
+      "default": 60,
+      "low": 20,
+      "high": 200,
+      "step": 20,
+      "description": "Bars used to measure the volatility regime."
+    },
+    {
+      "name": "vol_percentile",
+      "default": 0.6,
+      "low": 0.2,
+      "high": 0.95,
+      "step": 0.05,
+      "description": "Trade only when realised vol is below this quantile."
+    }
+  ],
+  "warmup_bars": 220,
+  "commission_per_side": 0.62,
+  "slippage_ticks": 1.0,
+  "tick_value": 0.5,
+  "created_at": "2026-09-01T19:20:59.015256Z",
+  "created_by": "operator"
+}

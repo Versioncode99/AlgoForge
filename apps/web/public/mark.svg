@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="AlgoForge">
+  <defs>
+    <linearGradient id="afSteel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8b959d"/>
+      <stop offset="1" stop-color="#4d555c"/>
+    </linearGradient>
+    <filter id="afGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="1.6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- the gate funnel: many candidates in, one survivor out -->
+  <rect x="4"    y="4.4"  width="24" height="3.2" rx="1.6" fill="url(#afSteel)" opacity=".95"/>
+  <rect x="6.5"  y="10.8" width="19" height="3.2" rx="1.6" fill="url(#afSteel)" opacity=".72"/>
+  <rect x="9"    y="17.2" width="14" height="3.2" rx="1.6" fill="url(#afSteel)" opacity=".5"/>
+  <rect x="11.5" y="23.6" width="9"  height="3.2" rx="1.6" fill="#3ddc97" filter="url(#afGlow)"/>
+</svg>
