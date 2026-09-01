@@ -6,6 +6,20 @@ $ForgeRoot = Split-Path -Parent $PSScriptRoot
 $Python = Join-Path $ForgeRoot '.venv\Scripts\python.exe'
 $Runtime = Join-Path $ForgeRoot 'data\runtime'
 $LogRoot = Join-Path $Runtime 'logs'
+$WebUrl = 'http://127.0.0.1:5173'
+$ApiHealthUrl = 'http://127.0.0.1:8765/api/v1/health'
+
+try {
+    $ApiHealth = Invoke-RestMethod -Uri $ApiHealthUrl -TimeoutSec 2
+    $WebHealth = Invoke-WebRequest -Uri $WebUrl -UseBasicParsing -TimeoutSec 2
+    if ($ApiHealth.data.status -eq 'ok' -and $WebHealth.StatusCode -eq 200) {
+        Write-Host 'AlgoForge is already running.'
+        if (-not $NoBrowser) { Start-Process $WebUrl }
+        return
+    }
+} catch {
+    # A failed health probe is expected when the local services are stopped.
+}
 
 if (-not (Test-Path -LiteralPath $Python)) {
     throw 'Python environment missing. Run: uv sync --all-groups'
@@ -29,5 +43,5 @@ $Web = Start-Process -FilePath 'npm.cmd' -ArgumentList @(
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Runtime 'processes.json') -Encoding utf8
 
 Write-Host "AlgoForge API PID $($Api.Id) and web PID $($Web.Id) started."
-Write-Host 'Open http://127.0.0.1:5173 - all bundled output is sample and uncalibrated.'
-if (-not $NoBrowser) { Start-Process 'http://127.0.0.1:5173' }
+Write-Host "Open $WebUrl - all bundled output is sample and uncalibrated."
+if (-not $NoBrowser) { Start-Process $WebUrl }
