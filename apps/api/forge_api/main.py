@@ -10,6 +10,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from forge.analytics import NormalAnalysis, build_normal_analysis
 from forge.contracts.hashing import content_hash
 from forge.contracts.models import ApiEnvelope, Preregistration, RunRecord
 from forge.judge import Judge, JudgeInput, Verdict
@@ -106,6 +107,25 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             )
         )
         return ApiEnvelope(data=result)
+
+    @app.get("/api/v1/analysis/{run_id}", response_model=ApiEnvelope[NormalAnalysis])
+    def analysis(run_id: str) -> ApiEnvelope[NormalAnalysis]:
+        item = app.state.ledger.get_run(run_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail={"code": "run_not_found"})
+        demo_pnl = (80, -25, 95, -30, 70, -20, 110, -35, 60, 45, -15, 85) * 3
+        judged = Judge().evaluate(
+            JudgeInput(
+                run_id=item.run_id,
+                tier=item.tier,
+                pnl=demo_pnl,
+                trial_count=4,
+                data_gate_passed=True,
+                preregistered=True,
+                implementation_tests_passed=True,
+            )
+        )
+        return ApiEnvelope(data=build_normal_analysis(item.run_id, judged, demo_pnl))
 
     return app
 

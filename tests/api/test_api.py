@@ -20,6 +20,9 @@ def test_health_capabilities_and_seeded_run(tmp_path) -> None:
         verdict = client.get(f"/api/v1/verdicts/{run_id}").json()["data"]
         assert verdict["decision"] == "PASS"
         assert len(verdict["traces"]) == len(verdict["metrics"])
+        analysis = client.get(f"/api/v1/analysis/{run_id}").json()["data"]
+        assert analysis["risk"]["path_count"] == 240
+        assert len(analysis["regimes"]) == 4
 
 
 def test_missing_run_returns_semantic_404(tmp_path) -> None:
