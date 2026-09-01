@@ -43,5 +43,25 @@ $Web = Start-Process -FilePath 'npm.cmd' -ArgumentList @(
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Runtime 'processes.json') -Encoding utf8
 
 Write-Host "AlgoForge API PID $($Api.Id) and web PID $($Web.Id) started."
-Write-Host "Open $WebUrl - all bundled output is sample and uncalibrated."
-if (-not $NoBrowser) { Start-Process $WebUrl }
+
+# Vite needs a few seconds on a cold start. Opening the browser immediately lands
+# the user on a connection-refused page, so wait for the port to answer first.
+$Deadline = (Get-Date).AddSeconds(60)
+$Ready = $false
+while ((Get-Date) -lt $Deadline) {
+    try {
+        if ((Invoke-WebRequest -Uri $WebUrl -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200) {
+            $Ready = $true
+            break
+        }
+    } catch {
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+if ($Ready) {
+    Write-Host "Ready. Open $WebUrl - bundled market data is synthetic and uncalibrated."
+    if (-not $NoBrowser) { Start-Process $WebUrl }
+} else {
+    Write-Warning "AlgoForge did not answer on $WebUrl within 60s. Check $LogRoot."
+}
