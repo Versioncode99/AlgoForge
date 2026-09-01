@@ -129,6 +129,62 @@ def replay_path(rule: PropRuleSet, daily_pnl: np.ndarray) -> tuple[PathOutcome, 
     ), tuple(equity)
 
 
+# A prop evaluation runs for weeks. Estimating it from fewer days than this is
+# resampling a handful of numbers into a shape they cannot support.
+MIN_TRADING_DAYS = 30
+
+# Daily P&L is streaky: losing days cluster, and clusters are what breach a
+# trailing drawdown. Independent day-by-day resampling erases that clustering and
+# systematically understates the chance of ruin.
+DEFAULT_BLOCK_DAYS = 5
+
+
+def _block_bootstrap(
+    pnl: np.ndarray, length: int, rng: np.random.Generator, block: int = DEFAULT_BLOCK_DAYS
+) -> np.ndarray:
+    """Stationary block bootstrap: draw contiguous runs, so streaks survive."""
+    if pnl.size <= 1:
+        return np.repeat(pnl, length)[:length]
+    block = max(1, min(block, pnl.size))
+    out = np.empty(length, dtype=float)
+    filled = 0
+    while filled < length:
+        start = int(rng.integers(0, pnl.size))
+        take = min(block, length - filled)
+        # Wrap around the sample so every day can begin a block.
+        idx = (np.arange(start, start + take)) % pnl.size
+        out[filled : filled + take] = pnl[idx]
+        filled += take
+    return out
+
+
+def _sample_aware_interval(
+    pnl: np.ndarray,
+    rule: PropRuleSet,
+    paths: int,
+    seed: int,
+    replicates: int = 40,
+) -> tuple[float, float]:
+    """Confidence interval that widens when few trading days were observed.
+
+    Outer loop resamples the observed days themselves; inner loop simulates
+    accounts from that resampled history. The spread across outer replicates is
+    the uncertainty that comes from having seen a short track record, which a
+    path-count interval cannot express.
+    """
+    rng = np.random.default_rng(seed + 977)
+    inner = max(20, paths // replicates)
+    rates: list[float] = []
+    for _ in range(replicates):
+        days = _block_bootstrap(pnl, pnl.size, rng)
+        wins = 0
+        for _ in range(inner):
+            outcome, _ = replay_path(rule, _block_bootstrap(days, rule.timeout_days, rng))
+            wins += outcome.outcome in {"PASS", "SURVIVED"}
+        rates.append(wins / inner)
+    return float(np.percentile(rates, 2.5)), float(np.percentile(rates, 97.5))
+
+
 def _wilson(successes: int, total: int, z: float = 1.959963984540054) -> tuple[float, float]:
     probability = successes / total
     denominator = 1 + z * z / total
@@ -155,18 +211,27 @@ def simulate_prop_paths(
     if paths < 20:
         raise ValueError("at least 20 paths required")
     pnl = np.asarray(pnl_values, dtype=float)
+    if pnl.size < MIN_TRADING_DAYS:
+        raise ValueError(
+            f"INSUFFICIENT_DAYS: {pnl.size} trading days observed, {MIN_TRADING_DAYS} required. "
+            "Resampling a long evaluation from a handful of days measures the sample, "
+            "not the strategy."
+        )
     rng = np.random.default_rng(seed)
     outcomes: list[PathOutcome] = []
     equities: list[tuple[float, ...]] = []
     for _ in range(paths):
-        sample = rng.choice(pnl, size=rule.timeout_days, replace=True)
+        sample = _block_bootstrap(pnl, rule.timeout_days, rng)
         outcome, equity = replay_path(rule, sample)
         outcomes.append(outcome)
         equities.append(equity)
     passes = sum(item.outcome in {"PASS", "SURVIVED"} for item in outcomes)
     failures = sum(item.outcome == "FAIL" for item in outcomes)
     timeouts = sum(item.outcome == "TIMEOUT" for item in outcomes)
-    low, high = _wilson(passes, paths)
+    # The interval must reflect how few days were observed, not just how many
+    # paths were drawn. A Wilson interval over paths alone reports near-certainty
+    # from a five-day sample, which is exactly the false confidence to avoid.
+    low, high = _sample_aware_interval(pnl, rule, paths, seed)
     payload = {"run": run_id, "rule": rule.rule_id, "seed": seed, "paths": paths}
     return PropSimulation(
         simulation_id=stable_id("prop", payload),

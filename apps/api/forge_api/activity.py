@@ -67,6 +67,7 @@ class BacktestStore:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
+        self._meta: dict[str, tuple[str, str]] = {}
 
     def save(self, result: Any) -> None:  # BacktestResult; Any avoids a circular import
         path = self.root / f"{result.backtest_id}.json"
@@ -81,20 +82,42 @@ class BacktestStore:
         payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         return payload
 
-    def for_strategy(self, strategy_id: str) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
+    # Artifacts are immutable, so a filename -> (strategy, finished_at) index only
+    # ever grows. Without it, listing N strategies re-parsed every artifact N
+    # times, which turned the strategy list into an O(n^2) file read.
+    def _index(self) -> dict[str, list[tuple[str, str]]]:
+        index: dict[str, list[tuple[str, str]]] = {}
         for path in self.root.glob("*.json"):
+            cached = self._meta.get(path.name)
+            if cached is None:
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                cached = (str(payload.get("strategy_id", "")), str(payload.get("finished_at", "")))
+                self._meta[path.name] = cached
+            index.setdefault(cached[0], []).append((path.name, cached[1]))
+        return index
+
+    def for_strategy(self, strategy_id: str) -> list[dict[str, Any]]:
+        entries = sorted(self._index().get(strategy_id, []), key=lambda e: e[1], reverse=True)
+        items: list[dict[str, Any]] = []
+        for name, _ in entries:
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
+                items.append(json.loads((self.root / name).read_text(encoding="utf-8")))
             except Exception:
                 continue
-            if payload.get("strategy_id") == strategy_id:
-                items.append(payload)
-        return sorted(items, key=lambda p: p.get("finished_at", ""), reverse=True)
+        return items
+
+    def summary_for(self, strategy_id: str) -> tuple[int, dict[str, Any] | None]:
+        """Count plus the newest artifact, without parsing the rest."""
+        entries = sorted(self._index().get(strategy_id, []), key=lambda e: e[1], reverse=True)
+        if not entries:
+            return 0, None
+        return len(entries), self.load(Path(entries[0][0]).stem)
 
     def latest(self, strategy_id: str) -> dict[str, Any] | None:
-        items = self.for_strategy(strategy_id)
-        return items[0] if items else None
+        return self.summary_for(strategy_id)[1]
 
     def count(self) -> int:
         return sum(1 for _ in self.root.glob("*.json"))

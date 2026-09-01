@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -163,7 +164,9 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         rule = rules.get(rule_id)
         if rule is None:
             raise HTTPException(status_code=404, detail={"code": "rule_not_found"})
-        demo_pnl = (450.0, -250.0, 600.0, -100.0, 300.0, -175.0)
+        # A prop evaluation cannot be estimated from a handful of days, so the
+        # fixture carries a realistic-length daily series.
+        demo_pnl = tuple(float(v) for v in np.random.default_rng(20260901).normal(35.0, 320.0, 90))
         result = simulate_prop_paths(run.run_id, rule, demo_pnl, paths=300, allow_unverified=True)
         return ApiEnvelope(data=result, meta={"rule_locked": True, "research_override": True})
 

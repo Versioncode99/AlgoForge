@@ -161,3 +161,69 @@ def test_prop_requires_a_backtest_and_enough_days(client):
     )
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "no_backtest"
+
+
+def test_settings_never_return_secret_values(client):
+    data = client.get("/api/v1/settings").json()["data"]
+    blob = str(data)
+    for credential in data["credentials"]:
+        assert set(credential) >= {"key", "label", "present", "hint"}
+        # Presence and length only — never any part of the value itself.
+        assert credential["hint"] in {"not set"} or credential["hint"].startswith("set ")
+    assert "sk-" not in blob and "db-" not in blob
+
+
+def test_settings_routing_can_be_changed_per_role(client):
+    updated = client.patch(
+        "/api/v1/settings", json={"routing": {"chat": "claude-haiku-4-5-20251001"}}
+    ).json()["data"]
+    assert updated["ai"]["routing"]["chat"] == "claude-haiku-4-5-20251001"
+    assert updated["ai"]["routing"]["hypothesis"] == "claude-opus-5", "other roles untouched"
+
+
+def test_settings_reject_unknown_model_and_role(client):
+    assert client.patch("/api/v1/settings", json={"routing": {"chat": "gpt-9"}}).status_code == 422
+    assert (
+        client.patch("/api/v1/settings", json={"routing": {"nope": "claude-opus-5"}}).status_code
+        == 422
+    )
+
+
+def test_assistant_answers_from_the_ledger_without_a_key(client):
+    body = client.post("/api/v1/ask", json={"question": "how many strategies are there?"}).json()
+    assert body["data"]["model"] == "local-ledger"
+    assert body["data"]["grounded"] is True
+    assert "strategies" in body["data"]["answer"].lower()
+
+
+def test_prop_refuses_a_track_record_that_is_too_short(client):
+    """The 5-day, 99.5%-pass case must be impossible through the API too."""
+    strategy_id = _create(client)
+    client.post(
+        f"/api/v1/strategies/{strategy_id}/backtest",
+        json={"dataset": "synthetic", "bar_count": 3000},
+    )
+    rules = client.get("/api/v1/prop/rules").json()["data"]
+    response = client.post(
+        f"/api/v1/strategies/{strategy_id}/prop", json={"rule_id": rules[0]["rule_id"]}
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "insufficient_days"
+    assert detail["days_required"] >= 30
+
+
+def test_strategy_listing_does_not_rescan_every_artifact(client):
+    """Listing N strategies must not re-parse every backtest N times."""
+    for _ in range(4):
+        strategy_id = _create(client)
+        client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest",
+            json={"dataset": "synthetic", "bar_count": 900},
+        )
+    import time
+
+    start = time.time()
+    rows = client.get("/api/v1/strategies").json()["data"]
+    assert len(rows) == 4
+    assert time.time() - start < 5.0

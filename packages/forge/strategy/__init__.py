@@ -4,6 +4,10 @@ from forge.strategy.models import BacktestResult, ParameterSpec, StrategySpec, T
 from forge.strategy.runtime import LookaheadError, Position, Window, run_backtest
 from forge.strategy.synthetic import generate_bars
 from forge.strategy.templates import TEMPLATES, Template
+from forge.strategy.templates_quant import QUANT_TEMPLATES
+
+# Session-aware families are registered into the same dict every consumer holds.
+TEMPLATES.update(QUANT_TEMPLATES)
 
 __all__ = [
     "TEMPLATES",

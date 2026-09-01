@@ -105,3 +105,22 @@ export type PropResult = {
   avg_days_to_pass: number | null; avg_days_to_fail: number | null
   failure_reasons: Record<string, number>; terminal_balances: number[]; median_terminal: number
 }
+
+/* ── Settings & assistant ───────────────────────────────────────────────── */
+export type ModelInfo = { id: string; label: string; tier: string; note: string }
+export type RoleInfo = { key: string; label: string; detail: string }
+export type CredentialInfo = { key: string; label: string; detail: string; present: boolean; hint: string }
+export type BudgetSettings = {
+  daily_usd_hard: number; daily_usd_soft: number
+  monthly_usd_hard: number; per_session_usd: number; halt_on_breach: boolean
+}
+export type SettingsPayload = {
+  ai: { enabled: boolean; routing: Record<string, string>; budget: BudgetSettings }
+  default_dataset: string; engine_cycle_seconds: number
+  engine_max_strategies: number; databento_max_cost_usd: number
+  models: ModelInfo[]; roles: RoleInfo[]; credentials: CredentialInfo[]
+}
+export type AskResult = {
+  answer: string; model: string; grounded: boolean; note?: string
+  input_tokens?: number; output_tokens?: number
+}

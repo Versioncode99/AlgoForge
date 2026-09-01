@@ -77,6 +77,79 @@ class Window:
     def now(self) -> datetime:
         return self._t[self.index]
 
+    # ── session awareness ────────────────────────────────────────────────────
+    # Real intraday strategies are anchored to the session, not to bar counts:
+    # an opening range, a killzone, a VWAP that resets at the open.
+
+    @property
+    def minute_of_day(self) -> int:
+        """Minutes since midnight UTC for the current bar."""
+        stamp = self._t[self.index]
+        return stamp.hour * 60 + stamp.minute
+
+    def in_window(self, start_min: int, end_min: int) -> bool:
+        """True inside a session window, handling windows that wrap midnight."""
+        now = self.minute_of_day
+        if start_min <= end_min:
+            return start_min <= now < end_min
+        return now >= start_min or now < end_min
+
+    def session_start_index(self) -> int:
+        """Index of the first bar of the current calendar day in this window."""
+        today = self._t[self.index].date()
+        i = self.index
+        while i > 0 and self._t[i - 1].date() == today:
+            i -= 1
+        return i
+
+    def bars_since_session_open(self) -> int:
+        return self.index - self.session_start_index()
+
+    def session_vwap(self) -> tuple[float, float]:
+        """Session-anchored VWAP and its volume-weighted standard deviation.
+
+        Mirrors the running cumulative form used in NinjaTrader: typical price
+        weighted by volume, reset at the session open.
+        """
+        start = self.session_start_index()
+        high, low, close = self._h[start:], self._l[start:], self._c[start:]
+        volume = self._v[start:]
+        total = float(volume.sum())
+        if total <= 0 or close.size == 0:
+            return float("nan"), float("nan")
+        typical = (high + low + close) / 3.0
+        vwap = float((volume * typical).sum() / total)
+        variance = max(0.0, float((volume * typical * typical).sum() / total) - vwap * vwap)
+        return vwap, float(np.sqrt(variance))
+
+    def session_range(self, first_n_bars: int) -> tuple[float, float]:
+        """High and low of the first N bars of the session — the opening range."""
+        start = self.session_start_index()
+        stop = min(start + first_n_bars, self.index + 1)
+        if stop <= start:
+            return float("nan"), float("nan")
+        return float(self._h[start:stop].max()), float(self._l[start:stop].min())
+
+    def adx(self, n: int = 14) -> float:
+        """Wilder's ADX. Low values mean range, high values mean trend."""
+        if self._c.size < 2 * n + 2:
+            return float("nan")
+        high, low, close = self._h[-(2 * n + 2) :], self._l[-(2 * n + 2) :], self._c[-(2 * n + 2) :]
+        up, down = high[1:] - high[:-1], low[:-1] - low[1:]
+        plus = np.where((up > down) & (up > 0), up, 0.0)
+        minus = np.where((down > up) & (down > 0), down, 0.0)
+        tr = np.maximum(
+            high[1:] - low[1:],
+            np.maximum(np.abs(high[1:] - close[:-1]), np.abs(low[1:] - close[:-1])),
+        )
+        atr = tr.mean()
+        if atr <= 0:
+            return float("nan")
+        di_plus = 100.0 * plus.mean() / atr
+        di_minus = 100.0 * minus.mean() / atr
+        total = di_plus + di_minus
+        return float(100.0 * abs(di_plus - di_minus) / total) if total > 0 else float("nan")
+
     def sma(self, n: int) -> float:
         return float(self._c[-n:].mean()) if self._c.size >= n else float("nan")
 

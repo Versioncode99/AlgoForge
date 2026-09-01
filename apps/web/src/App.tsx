@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity, Bot, ChartNoAxesCombined, GitBranch, Layers, LockKeyhole, ScrollText,
-  ShieldCheck, SlidersHorizontal, TriangleAlert,
+  MessageSquare, ShieldCheck, SlidersHorizontal, TriangleAlert,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getJson } from './api'
@@ -14,13 +14,17 @@ import type {
 } from './types'
 import { EnginePanel } from './views/Engine'
 import { PropFirmView } from './views/PropFirm'
+import { ConsoleView, SettingsView } from './views/Settings'
 import { StrategiesView } from './views/Strategies'
 
 const tabs = [
   'Overview', 'Strategies', 'Verdict', 'Regimes', 'Risk & Monte Carlo',
-  'Prop Firm', 'Agents', 'Evolution',
+  'Prop Firm', 'Agents', 'Evolution', 'Console', 'Settings',
 ] as const
 type Tab = (typeof tabs)[number]
+
+// Tabs that render their own view instead of the shared ledger workspace.
+const STANDALONE = new Set<Tab>(['Overview', 'Strategies', 'Prop Firm', 'Console', 'Settings'])
 
 const ICONS: Record<Tab, typeof Activity> = {
   Overview: ChartNoAxesCombined,
@@ -31,6 +35,8 @@ const ICONS: Record<Tab, typeof Activity> = {
   'Prop Firm': ShieldCheck,
   Agents: Bot,
   Evolution: GitBranch,
+  Console: MessageSquare,
+  Settings: SlidersHorizontal,
 }
 
 export function App() {
@@ -156,13 +162,15 @@ export function App() {
           {online && tab === 'Overview' && <EnginePanel />}
           {online && tab === 'Strategies' && <StrategiesView />}
           {online && tab === 'Prop Firm' && <PropFirmView />}
-          {online && tab !== 'Strategies' && tab !== 'Prop Firm' && analysis.data && (
+          {online && tab === 'Console' && <ConsoleView />}
+          {online && tab === 'Settings' && <SettingsView />}
+          {online && !STANDALONE.has(tab) && analysis.data && (
             <Workspace
               tab={tab} analysis={analysis.data} agents={agents.data}
               evolution={evolution.data} strategies={strategies.data ?? []}
             />
           )}
-          {online && tab !== 'Strategies' && tab !== 'Prop Firm' && !analysis.data && (
+          {online && !STANDALONE.has(tab) && !analysis.data && (
             <div className="state">Loading ledger…</div>
           )}
         </main>

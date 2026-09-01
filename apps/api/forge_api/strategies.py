@@ -86,11 +86,11 @@ def build_router(
     def list_strategies() -> ApiEnvelope[list[dict[str, Any]]]:
         data: list[dict[str, Any]] = []
         for spec in library.list_specs():
-            latest = store.latest(spec.strategy_id)
+            backtest_count, latest = store.summary_for(spec.strategy_id)
             data.append(
                 {
                     **spec.model_dump(mode="json"),
-                    "backtest_count": len(store.for_strategy(spec.strategy_id)),
+                    "backtest_count": backtest_count,
                     "latest": None
                     if latest is None
                     else {
