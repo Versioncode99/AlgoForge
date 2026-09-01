@@ -1,0 +1,1 @@
+"""FastAPI projection for AlgoForge."""
