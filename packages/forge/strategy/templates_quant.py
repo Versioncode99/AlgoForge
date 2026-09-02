@@ -287,6 +287,190 @@ def exit_signal(w, p, pos):
 )
 
 
+VOLATILITY_COMPRESSION_BREAK = Template(
+    key="volatility_compression_break",
+    name="Volatility Compression Break",
+    family="volatility",
+    hypothesis=(
+        "When short-horizon realised volatility contracts far below its own baseline, resting "
+        "liquidity accumulates close to price. A range break after that compression should carry "
+        "more information than an ordinary breakout because the market is transitioning from a "
+        "low-information state into active price discovery."
+    ),
+    falsifiable_prediction=(
+        "Breakouts preceded by genuine short-versus-long volatility compression must outperform "
+        "otherwise identical breaks from normal volatility. If the uncompressed control is equal "
+        "or better, the state-transition mechanism is rejected."
+    ),
+    parameters=(
+        ParameterSpec(name="short_vol", default=12, low=6, high=30, step=3),
+        ParameterSpec(name="long_vol", default=90, low=40, high=240, step=10),
+        ParameterSpec(name="compression", default=0.55, low=0.25, high=0.9, step=0.05),
+        ParameterSpec(name="breakout", default=20, low=8, high=80, step=4),
+        ParameterSpec(name="max_bars", default=30, low=8, high=120, step=4),
+        ParameterSpec(name="stop_atr", default=1.8, low=0.75, high=4.0, step=0.25),
+    ),
+    warmup_bars=280,
+    source='''"""Volatility Compression Break.
+
+Requires a measurable contraction in realised volatility before a prior-range
+break. The compression is the claim; the breakout is only the entry vehicle.
+"""
+
+import numpy as np
+
+
+def _compressed(w, p):
+    short = int(p["short_vol"])
+    long = int(p["long_vol"])
+    if short >= long or w.closes.size < long + 2:
+        return False
+    returns = np.diff(np.log(w.closes[-long - 1:]))
+    baseline = float(np.std(returns, ddof=1))
+    recent = float(np.std(returns[-short:], ddof=1))
+    return baseline > 0 and recent <= float(p["compression"]) * baseline
+
+
+def entry_signal(w, p):
+    lookback = int(p["breakout"])
+    if not _compressed(w, p) or w.highs.size < lookback + 1:
+        return None
+    if w.closes[-1] > float(np.max(w.highs[-lookback - 1:-1])):
+        return 1
+    return None
+
+
+def exit_signal(w, p, pos):
+    if w.index - pos.entry_index >= int(p["max_bars"]):
+        return "max_bars"
+    atr = w.atr(14)
+    if atr == atr and w.lows[-1] <= pos.entry_price - float(p["stop_atr"]) * atr:
+        return "stop"
+    return None
+''',
+)
+
+
+VOLUME_SURGE_CONTINUATION = Template(
+    key="volume_surge_continuation",
+    name="Volume Surge Continuation",
+    family="momentum",
+    hypothesis=(
+        "A wide directional close accompanied by statistically unusual volume represents "
+        "aggressive participation rather than a thin-book price jump. When the higher-horizon "
+        "trend agrees, some inventory should remain to execute and continuation should persist."
+    ),
+    falsifiable_prediction=(
+        "Signals above the preregistered volume z-score must outperform direction-matched bars "
+        "with ordinary volume. If volume does not separate the samples, participation is not the "
+        "mechanism and the family is retired."
+    ),
+    parameters=(
+        ParameterSpec(name="volume_lookback", default=60, low=20, high=240, step=10),
+        ParameterSpec(name="volume_z", default=2.0, low=1.0, high=4.0, step=0.25),
+        ParameterSpec(name="trend_period", default=80, low=20, high=240, step=10),
+        ParameterSpec(name="body_atr", default=0.8, low=0.25, high=2.5, step=0.25),
+        ParameterSpec(name="max_bars", default=20, low=4, high=80, step=4),
+    ),
+    warmup_bars=280,
+    source='''"""Volume Surge Continuation."""
+
+import numpy as np
+
+
+def entry_signal(w, p):
+    n = int(p["volume_lookback"])
+    if w.volumes.size < n + 1:
+        return None
+    history = w.volumes[-n - 1:-1]
+    std = float(np.std(history, ddof=1))
+    if std <= 0:
+        return None
+    zscore = (float(w.volumes[-1]) - float(np.mean(history))) / std
+    atr = w.atr(14)
+    trend = w.sma(int(p["trend_period"]))
+    body = w.closes[-1] - w.opens[-1]
+    if (
+        zscore >= float(p["volume_z"])
+        and atr == atr
+        and body >= float(p["body_atr"]) * atr
+        and trend == trend
+        and w.closes[-1] > trend
+    ):
+        return 1
+    return None
+
+
+def exit_signal(w, p, pos):
+    if w.index - pos.entry_index >= int(p["max_bars"]):
+        return "max_bars"
+    if w.closes[-1] < w.sma(int(p["trend_period"])):
+        return "signal"
+    return None
+''',
+)
+
+
+TREND_PULLBACK_RESUME = Template(
+    key="trend_pullback_resume",
+    name="Trend Pullback Resume",
+    family="momentum",
+    hypothesis=(
+        "In an established multi-horizon uptrend, a shallow retracement into the fast mean can "
+        "clear weak late buyers without changing the slower directional state. A close back above "
+        "the fast mean should mark renewed participation with less adverse excursion than chasing."
+    ),
+    falsifiable_prediction=(
+        "Pullback-and-reclaim entries must outperform trend-aligned entries taken without a "
+        "pullback. If the reclaim condition adds no improvement in drawdown-adjusted expectancy, "
+        "the inventory-reset explanation is false."
+    ),
+    parameters=(
+        ParameterSpec(name="fast", default=24, low=8, high=60, step=4),
+        ParameterSpec(name="slow", default=100, low=50, high=240, step=10),
+        ParameterSpec(name="touch_atr", default=0.35, low=0.1, high=1.5, step=0.1),
+        ParameterSpec(name="stop_atr", default=1.5, low=0.5, high=4.0, step=0.25),
+        ParameterSpec(name="max_bars", default=45, low=10, high=160, step=5),
+    ),
+    warmup_bars=280,
+    source='''"""Trend Pullback Resume."""
+
+
+def entry_signal(w, p):
+    fast_n, slow_n = int(p["fast"]), int(p["slow"])
+    if fast_n >= slow_n:
+        return None
+    fast, slow, atr = w.sma(fast_n), w.sma(slow_n), w.atr(14)
+    if fast != fast or slow != slow or atr != atr:
+        return None
+    touched = w.lows[-1] <= fast + float(p["touch_atr"]) * atr
+    reclaimed = w.closes[-1] > fast and w.closes[-1] > w.opens[-1]
+    if fast > slow and touched and reclaimed:
+        return 1
+    return None
+
+
+def exit_signal(w, p, pos):
+    if w.index - pos.entry_index >= int(p["max_bars"]):
+        return "max_bars"
+    atr = w.atr(14)
+    if atr == atr and w.lows[-1] <= pos.entry_price - float(p["stop_atr"]) * atr:
+        return "stop"
+    if w.sma(int(p["fast"])) < w.sma(int(p["slow"])):
+        return "signal"
+    return None
+''',
+)
+
+
 QUANT_TEMPLATES: dict[str, Template] = {
-    t.key: t for t in (VWAP_SIGMA_REVERSION, OPENING_RANGE_BREAK, LIQUIDITY_SWEEP_RECLAIM)
+    t.key: t
+    for t in (
+        VWAP_SIGMA_REVERSION,
+        OPENING_RANGE_BREAK,
+        LIQUIDITY_SWEEP_RECLAIM,
+        VOLATILITY_COMPRESSION_BREAK,
+        VOLUME_SURGE_CONTINUATION,
+        TREND_PULLBACK_RESUME,
+    )
 }

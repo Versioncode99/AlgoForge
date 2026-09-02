@@ -28,6 +28,7 @@ from typing import Any
 
 from forge.data.models import Bar
 from forge.judge import Judge, JudgeInput
+from forge.research import ResearchLedger, ResearchPartitions, chronological_split
 from forge.strategy import TEMPLATES, StrategyLibrary, run_backtest
 
 from forge_api.activity import ActivityLog, BacktestStore
@@ -52,7 +53,11 @@ class EngineState:
     backtested: int = 0
     judged: int = 0
     passed: int = 0
+    validation_passed: int = 0
+    holdout_passed: int = 0
     rejected: int = 0
+    lineages_retired: int = 0
+    engine_errors: int = 0
     skipped_by_memory: int = 0
     last_error: str | None = None
     current_stage: str = "idle"
@@ -67,7 +72,11 @@ class EngineState:
             "backtested": self.backtested,
             "judged": self.judged,
             "passed": self.passed,
+            "validation_passed": self.validation_passed,
+            "holdout_passed": self.holdout_passed,
             "rejected": self.rejected,
+            "lineages_retired": self.lineages_retired,
+            "engine_errors": self.engine_errors,
             "skipped_by_memory": self.skipped_by_memory,
             "compute_saved": self.skipped_by_memory,
             "last_error": self.last_error,
@@ -89,12 +98,14 @@ class AutonomousEngine:
         log: ActivityLog,
         market: MarketService,
         root: Path,
+        research_ledger: ResearchLedger,
     ) -> None:
         self.library = library
         self.store = store
         self.log = log
         self.market = market
         self.root = root
+        self.research_ledger = research_ledger
         self.state = EngineState()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -102,6 +113,7 @@ class AutonomousEngine:
         # Failure constraints: (template, rounded parameter signature) -> reason.
         self._constraints: dict[tuple[str, str], str] = {}
         self._lineage_failures: dict[str, int] = {}
+        self._retired_lineages: set[str] = set()
 
     # ── control ──────────────────────────────────────────────────────────────
     def start(self, config: EngineConfig | None = None) -> dict[str, Any]:
@@ -155,6 +167,7 @@ class AutonomousEngine:
                 self._cycle(rng, bars, dataset.is_real)
             except Exception as exc:  # a bad cycle must not kill the engine
                 self.state.last_error = str(exc)
+                self.state.engine_errors += 1
                 self.log.record("ENGINE", f"cycle error: {exc}", "fail")
             self.state.cycles += 1
 
@@ -195,6 +208,9 @@ class AutonomousEngine:
             return
         if self._lineage_failures.get(template_key, 0) >= 12:
             self.state.skipped_by_memory += 1
+            if template_key not in self._retired_lineages:
+                self._retired_lineages.add(template_key)
+                self.state.lineages_retired += 1
             self.log.record("MEMORY", f"lineage {template_key} retired after 12 failures", "warn")
             return
 
@@ -206,14 +222,46 @@ class AutonomousEngine:
         self.state.current_stage = "backtesting"
         module = self.library.load_module(spec.strategy_id)
         started = time.time()
-        result = run_backtest(
-            module,
-            spec,
-            bars,
-            parameters=params,
-            code_hash=self.library.code_hash(spec.strategy_id),
-            labels=("REAL_DATA",) if real_data else ("SYNTHETIC_DATA",),
-        )
+        partitions: ResearchPartitions | None = None
+        if real_data:
+            partitions = chronological_split(bars, warmup_bars=spec.warmup_bars)
+            development = run_backtest(
+                module,
+                spec,
+                partitions.development,
+                parameters=params,
+                code_hash=self.library.code_hash(spec.strategy_id),
+                labels=("REAL_DATA", "DEVELOPMENT_IN_SAMPLE", "UNCALIBRATED"),
+                evidence_tier="DEVELOPMENT_IN_SAMPLE",
+                dataset_key=self.state.config.dataset,
+                partition_name="DEVELOPMENT",
+                split_receipt=partitions.receipt,
+            )
+            self.store.save(development)
+            result = run_backtest(
+                module,
+                spec,
+                partitions.validation,
+                parameters=params,
+                code_hash=self.library.code_hash(spec.strategy_id),
+                labels=("REAL_DATA", "VALIDATION_OOS", "UNCALIBRATED"),
+                evidence_tier="VALIDATION_OOS",
+                dataset_key=self.state.config.dataset,
+                partition_name="VALIDATION",
+                split_receipt=partitions.receipt,
+            )
+            self.state.backtested += 1
+        else:
+            result = run_backtest(
+                module,
+                spec,
+                bars,
+                parameters=params,
+                code_hash=self.library.code_hash(spec.strategy_id),
+                labels=("SYNTHETIC_DATA", "NON_PROMOTABLE"),
+                evidence_tier="SYNTHETIC",
+                dataset_key=self.state.config.dataset,
+            )
         self.store.save(result)
         self.state.backtested += 1
         self.log.record(
@@ -247,6 +295,55 @@ class AutonomousEngine:
         )
         self.state.judged += 1
         failed = [g for g in verdict.gates if g.status != "PASS"]
+
+        if verdict.decision == "PASS" and partitions is not None:
+            self.state.validation_passed += 1
+            try:
+                self.research_ledger.consume(spec.lineage, partitions.receipt.split_id)
+            except ValueError:
+                reason = "holdout already consumed for lineage"
+                self.state.rejected += 1
+                self._remember(key, template_key, reason)
+                self.log.record("HOLDOUT", f"{spec.strategy_id} -> {reason}", "fail")
+                return
+            holdout = run_backtest(
+                module,
+                spec,
+                partitions.holdout,
+                parameters=params,
+                code_hash=self.library.code_hash(spec.strategy_id),
+                labels=("REAL_DATA", "HOLDOUT", "BURN_ONCE", "UNCALIBRATED"),
+                evidence_tier="HOLDOUT",
+                dataset_key=self.state.config.dataset,
+                partition_name="HOLDOUT",
+                split_receipt=partitions.receipt,
+            )
+            self.store.save(holdout)
+            self.state.backtested += 1
+            self.research_ledger.attach_result(spec.lineage, holdout.backtest_id)
+            holdout_pnl = tuple(trade.net_pnl for trade in holdout.trades)
+            if not holdout_pnl:
+                reason = "burn-once holdout produced no trades"
+                self.state.rejected += 1
+                self._remember(key, template_key, reason)
+                self.log.record("HOLDOUT", f"{spec.strategy_id} -> {reason}", "fail")
+                return
+            verdict = Judge().evaluate(
+                JudgeInput(
+                    run_id=holdout.backtest_id,
+                    tier="HOLDOUT",
+                    pnl=holdout_pnl,
+                    trial_count=max(1, self.state.backtested),
+                    data_gate_passed=True,
+                    preregistered=True,
+                    implementation_tests_passed=True,
+                    lookahead_detected=not holdout.lookahead_clean,
+                )
+            )
+            self.state.judged += 1
+            failed = [gate for gate in verdict.gates if gate.status != "PASS"]
+            if verdict.decision == "PASS":
+                self.state.holdout_passed += 1
 
         if verdict.decision == "PASS":
             self.state.passed += 1

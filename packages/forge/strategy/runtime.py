@@ -9,6 +9,7 @@ import numpy as np
 
 from forge.contracts.hashing import content_hash, stable_id
 from forge.data.models import Bar
+from forge.research.models import EvidenceTier, ResearchSplitReceipt
 from forge.strategy.models import BacktestResult, ParamValue, StrategySpec, Trade
 
 
@@ -185,6 +186,10 @@ def run_backtest(
     parameters: dict[str, ParamValue] | None = None,
     code_hash: str = "",
     labels: tuple[str, ...] = (),
+    evidence_tier: EvidenceTier = "LEGACY_IN_SAMPLE",
+    dataset_key: str | None = None,
+    partition_name: str | None = None,
+    split_receipt: ResearchSplitReceipt | None = None,
 ) -> BacktestResult:
     """Execute a strategy over bars with a structural no-lookahead guarantee.
 
@@ -280,6 +285,10 @@ def run_backtest(
         max_drawdown=round(drawdown, 4),
         lookahead_clean=clean,
         labels=labels,
+        evidence_tier=evidence_tier,
+        dataset_key=dataset_key,
+        partition_name=partition_name,  # type: ignore[arg-type]
+        split_receipt=split_receipt,
         started_at=started,
         finished_at=finished,
     )

@@ -33,10 +33,20 @@ class ActivityLog:
         self._load()
 
     def _load(self) -> None:
+        """Restore recent history, tolerating a damaged log.
+
+        A truncated write or a stray byte must never stop the application from
+        starting: the log is a convenience, not a source of truth. Decoding
+        errors are replaced rather than raised, and unparseable lines skipped.
+        """
         if not self.path.exists():
             return
         keep = self._buffer.maxlen or 0
-        for line in self.path.read_text(encoding="utf-8").splitlines()[-keep:]:
+        try:
+            text = self.path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        for line in text.splitlines()[-keep:]:
             try:
                 self._buffer.append(ActivityEvent.model_validate_json(line))
             except Exception:

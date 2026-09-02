@@ -163,28 +163,31 @@ def test_prop_requires_a_backtest_and_enough_days(client):
     assert response.json()["detail"]["code"] == "no_backtest"
 
 
-def test_settings_never_return_secret_values(client):
+def test_settings_never_return_secret_values(client, monkeypatch):
+    secret = "sk-private-unit-secret"
+    monkeypatch.setenv("OMNIROUTE_API_KEY", secret)
     data = client.get("/api/v1/settings").json()["data"]
     blob = str(data)
     for credential in data["credentials"]:
         assert set(credential) >= {"key", "label", "present", "hint"}
         # Presence and length only — never any part of the value itself.
-        assert credential["hint"] in {"not set"} or credential["hint"].startswith("set ")
-    assert "sk-" not in blob and "db-" not in blob
+        assert credential["hint"] in {"not set", "configured"}
+        assert credential["source"] in {"none", "environment", "external_file"}
+    assert secret not in blob
 
 
 def test_settings_routing_can_be_changed_per_role(client):
-    updated = client.patch(
-        "/api/v1/settings", json={"routing": {"chat": "claude-haiku-4-5-20251001"}}
-    ).json()["data"]
-    assert updated["ai"]["routing"]["chat"] == "claude-haiku-4-5-20251001"
-    assert updated["ai"]["routing"]["hypothesis"] == "claude-opus-5", "other roles untouched"
+    updated = client.patch("/api/v1/settings", json={"routing": {"chat": "auto/fast"}}).json()[
+        "data"
+    ]
+    assert updated["ai"]["routing"]["chat"] == "auto/fast"
+    assert updated["ai"]["routing"]["hypothesis"] == "auto/smart", "other roles untouched"
 
 
 def test_settings_reject_unknown_model_and_role(client):
     assert client.patch("/api/v1/settings", json={"routing": {"chat": "gpt-9"}}).status_code == 422
     assert (
-        client.patch("/api/v1/settings", json={"routing": {"nope": "claude-opus-5"}}).status_code
+        client.patch("/api/v1/settings", json={"routing": {"nope": "auto/smart"}}).status_code
         == 422
     )
 

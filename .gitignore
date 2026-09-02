@@ -8,6 +8,7 @@ __pycache__/
 /data/
 /runs/
 /artifacts/
+/config/settings.json
 # Strategy folders are generated working state: the engine writes dozens per
 # session from the templates in packages/forge/strategy/templates.py, which are
 # what is actually version-controlled. Keeping every autonomous variant would

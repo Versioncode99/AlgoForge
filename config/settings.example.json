@@ -1,0 +1,14 @@
+{
+  "ai": {
+    "enabled": false,
+    "provider": "omniroute",
+    "routing": {
+      "hypothesis": "auto/smart",
+      "strategy_code": "auto/coding",
+      "post_mortem": "auto/smart",
+      "risk": "auto/smart",
+      "chat": "auto",
+      "bulk": "auto/cheap"
+    }
+  }
+}

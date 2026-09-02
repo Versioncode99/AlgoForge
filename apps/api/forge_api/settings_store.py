@@ -13,39 +13,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-# Cheap-to-expensive. The router lets each role sit wherever the operator wants.
-KNOWN_MODELS: list[dict[str, Any]] = [
-    {
-        "id": "claude-opus-5",
-        "label": "Claude Opus 5",
-        "tier": "frontier",
-        "note": "Hardest reasoning. Use for hypothesis and post-mortem only.",
-    },
-    {
-        "id": "claude-sonnet-5",
-        "label": "Claude Sonnet 5",
-        "tier": "balanced",
-        "note": "Good default for code generation and routine analysis.",
-    },
-    {
-        "id": "claude-haiku-4-5-20251001",
-        "label": "Claude Haiku 4.5",
-        "tier": "fast",
-        "note": "Cheapest hosted option. Extraction, tagging, summarising.",
-    },
-    {
-        "id": "ollama/qwen2.5-coder:14b",
-        "label": "Qwen 2.5 Coder 14B (local)",
-        "tier": "local",
-        "note": "Runs on this machine. No API cost, no data leaves the box.",
-    },
-    {
-        "id": "none",
-        "label": "Disabled",
-        "tier": "off",
-        "note": "This role does no model work at all.",
-    },
-]
+from forge_api.model_gateway import (
+    OMNIROUTE_DEFAULT_URL,
+    resolve_omniroute_credential,
+)
+from forge_api.providers import catalog_for
+
+KNOWN_MODELS: list[dict[str, Any]] = catalog_for("auto")
+MODEL_MIGRATIONS = {
+    "claude-opus-5": "auto/smart",
+    "claude-sonnet-5": "auto",
+    "claude-haiku-4-5-20251001": "auto/fast",
+    "ollama/qwen2.5-coder:14b": "auto/offline",
+}
 
 # Each role is a distinct job with a distinct cost profile, which is the whole
 # reason routing exists: hypothesis work is rare and hard, tagging is constant
@@ -84,14 +64,16 @@ class BudgetSettings:
 @dataclass
 class AISettings:
     enabled: bool = False
+    provider: str = "auto"
+    base_url: str = OMNIROUTE_DEFAULT_URL
     routing: dict[str, str] = field(
         default_factory=lambda: {
-            "hypothesis": "claude-opus-5",
-            "strategy_code": "claude-sonnet-5",
-            "post_mortem": "claude-opus-5",
-            "risk": "claude-sonnet-5",
-            "chat": "claude-sonnet-5",
-            "bulk": "ollama/qwen2.5-coder:14b",
+            "hypothesis": "auto/smart",
+            "strategy_code": "auto/coding",
+            "post_mortem": "auto/smart",
+            "risk": "auto/smart",
+            "chat": "auto",
+            "bulk": "auto/cheap",
         }
     )
     budget: BudgetSettings = field(default_factory=BudgetSettings)
@@ -107,7 +89,7 @@ class Settings:
 
 
 CREDENTIALS = [
-    ("ANTHROPIC_API_KEY", "Anthropic", "Required before any hosted model can run."),
+    ("NVIDIA_NIM_API_KEY", "NVIDIA NIM", "Hosted model endpoint. Backup when OmniRoute is down."),
     ("DATABENTO_API_KEY", "Databento", "CME futures data. Charged per request."),
     ("FRED_API_KEY", "FRED", "Macro series. Free."),
     ("BINANCE_TESTNET_KEY", "Binance testnet", "Optional. Crypto data needs no key."),
@@ -128,9 +110,13 @@ class SettingsStore:
             return Settings()
         ai_raw = raw.get("ai", {})
         budget = BudgetSettings(**{**asdict(BudgetSettings()), **ai_raw.get("budget", {})})
+        routing = {**AISettings().routing, **ai_raw.get("routing", {})}
+        routing = {role: MODEL_MIGRATIONS.get(model, model) for role, model in routing.items()}
         ai = AISettings(
             enabled=bool(ai_raw.get("enabled", False)),
-            routing={**AISettings().routing, **ai_raw.get("routing", {})},
+            provider=str(ai_raw.get("provider", "auto")),
+            base_url=str(ai_raw.get("base_url", OMNIROUTE_DEFAULT_URL)),
+            routing=routing,
             budget=budget,
         )
         return Settings(
@@ -151,7 +137,17 @@ class SettingsStore:
         from forge.data.live import load_keys
 
         load_keys()
-        rows = []
+        omni = resolve_omniroute_credential()
+        rows = [
+            {
+                "key": "OMNIROUTE_API_KEY",
+                "label": "OmniRoute endpoint",
+                "detail": "OpenAI-compatible local model gateway.",
+                "present": omni.present,
+                "hint": "configured" if omni.present else "not set",
+                "source": omni.source,
+            }
+        ]
         for name, label, detail in CREDENTIALS:
             value = os.environ.get(name, "")
             rows.append(
@@ -160,8 +156,8 @@ class SettingsStore:
                     "label": label,
                     "detail": detail,
                     "present": bool(value),
-                    # Length only. Even a prefix is more than the UI needs.
-                    "hint": f"set · {len(value)} chars" if value else "not set",
+                    "hint": "configured" if value else "not set",
+                    "source": "environment" if value else "none",
                 }
             )
         return rows

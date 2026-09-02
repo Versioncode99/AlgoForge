@@ -1,3 +1,4 @@
+from forge.strategy.catalog import StrategyCapability, strategy_capability_catalog
 from forge.strategy.guard import GuardViolation, assert_safe, check_source
 from forge.strategy.library import StrategyLibrary, slugify
 from forge.strategy.models import BacktestResult, ParameterSpec, StrategySpec, Trade
@@ -16,6 +17,7 @@ __all__ = [
     "LookaheadError",
     "ParameterSpec",
     "Position",
+    "StrategyCapability",
     "StrategyLibrary",
     "StrategySpec",
     "Template",
@@ -26,4 +28,5 @@ __all__ = [
     "generate_bars",
     "run_backtest",
     "slugify",
+    "strategy_capability_catalog",
 ]

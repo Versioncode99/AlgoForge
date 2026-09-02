@@ -18,7 +18,8 @@ def test_health_capabilities_and_seeded_run(tmp_path) -> None:
         assert "SAMPLE_DATA" in runs["data"][0]["labels"]
         run_id = runs["data"][0]["run_id"]
         verdict = client.get(f"/api/v1/verdicts/{run_id}").json()["data"]
-        assert verdict["decision"] == "PASS"
+        assert verdict["decision"] == "FAIL"
+        assert any(gate["gate"] == "G9" and gate["status"] == "FAIL" for gate in verdict["gates"])
         assert len(verdict["traces"]) == len(verdict["metrics"])
         analysis = client.get(f"/api/v1/analysis/{run_id}").json()["data"]
         assert analysis["risk"]["path_count"] == 240
@@ -26,9 +27,12 @@ def test_health_capabilities_and_seeded_run(tmp_path) -> None:
         rules = client.get("/api/v1/prop/rules").json()
         assert rules["meta"]["runnable"] == 0
         rule_id = rules["data"][0]["rule_id"]
-        prop = client.get(f"/api/v1/prop/simulations/{run_id}", params={"rule_id": rule_id}).json()
-        assert prop["meta"]["rule_locked"] is True
-        assert "UNVERIFIED_RULES" in prop["data"]["labels"]
+        # The seeded run is SWEEP tier. A sweep is exploration, not out-of-sample
+        # evidence, so the prop simulator must refuse it outright rather than
+        # returning a pass rate that would read as a result.
+        prop = client.get(f"/api/v1/prop/simulations/{run_id}", params={"rule_id": rule_id})
+        assert prop.status_code == 422
+        assert prop.json()["detail"]["code"] == "truth_or_forward_required"
         agents = client.get(f"/api/v1/agents/{run_id}").json()
         assert agents["data"]["dissent_present"] is True
         assert agents["meta"]["narrative_can_change_verdict"] is False

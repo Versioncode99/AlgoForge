@@ -37,6 +37,17 @@ const datasetList = [
     provider: 'databento', authority: 'TRUTH', is_real: true, cost_note: '~$0.33',
     loaded: true, bar_count: 90029 },
 ]
+const research = {
+  families: [{ key: 'orb', name: 'Opening range breakout', family: 'breakout', variant_count: 0,
+    tested_count: 0, positive_share: null, median_expectancy: null, best_expectancy: null,
+    validation_oos_count: 0, holdout_count: 0, required_data: 'OHLCV_BARS' }],
+  matrix: { markets: ['MNQ.CME'], rows: [{ key: 'orb', name: 'Opening range breakout', cells: [
+    { market: 'MNQ.CME', status: 'NOT_TESTED', expectancy: null, evidence_tier: null },
+  ] }] },
+  catalog: [{ key: 'orb', name: 'Opening range breakout', family: 'breakout', status: 'RUNNABLE',
+    runnable: true, required_data: ['OHLCV_BARS'], minimum_timeframe: '1m', description: 'test',
+    missing_capability: null, template_key: 'orb' }],
+}
 
 globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
   const url = String(input)
@@ -44,6 +55,7 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     : url.endsWith('/engine') ? engine
     : url.endsWith('/datasets') ? datasetList
     : url.endsWith('/summary') ? summary
+    : url.endsWith('/research/overview') ? research
     : url.includes('/activity') ? activity
     : url.endsWith('/strategies') ? []
     : url.endsWith('/templates') ? []
@@ -67,7 +79,7 @@ test('overview is the engine control centre and carries the paper-only label', a
   renderApp()
   expect(await screen.findByText(/autonomous engine/i)).toBeInTheDocument()
   expect(await screen.findByRole('button', { name: /start engine/i })).toBeInTheDocument()
-  expect(screen.getByText(/paper only · uncalibrated/i)).toBeInTheDocument()
+  expect(screen.getByText(/paper only · real data is not oos/i)).toBeInTheDocument()
 })
 
 test('navigates to the agent boundary', async () => {
@@ -88,7 +100,16 @@ test('prop firm lets you pick a strategy rather than scoring a fixture', async (
   renderApp()
   await screen.findByText(/autonomous engine/i)
   fireEvent.click(screen.getByRole('button', { name: 'Prop Firm' }))
-  expect(await screen.findByText(/would this strategy have passed/i)).toBeInTheDocument()
+  expect(await screen.findByText(/race the target against the loss boundary/i)).toBeInTheDocument()
+})
+
+test('research lab distinguishes untested cells from zero performance', async () => {
+  renderApp()
+  await screen.findByText(/autonomous engine/i)
+  fireEvent.click(screen.getByRole('button', { name: 'Research Lab' }))
+  expect(await screen.findByText(/what has evidence/i)).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /forge matrix/i }))
+  expect(await screen.findByText('NOT TESTED')).toBeInTheDocument()
 })
 
 test('orchestrator log renders real recorded events', async () => {

@@ -91,9 +91,11 @@ export function EnginePanel() {
         <Counter label="Created" value={s?.created ?? 0} />
         <Counter label="Backtested" value={s?.backtested ?? 0} />
         <Counter label="Judged" value={s?.judged ?? 0} />
-        <Counter label="Passed" value={s?.passed ?? 0} tone={s?.passed ? 'good' : undefined} />
+        <Counter label="Validation pass" value={s?.validation_passed ?? 0} tone={s?.validation_passed ? 'good' : undefined} />
+        <Counter label="Holdout pass" value={s?.holdout_passed ?? 0} tone={s?.holdout_passed ? 'good' : undefined} />
         <Counter label="Rejected" value={s?.rejected ?? 0} tone="bad" />
-        <Counter label="Skipped by memory" value={s?.skipped_by_memory ?? 0} tone="warn" />
+        <Counter label="Retired lineages" value={s?.lineages_retired ?? 0} tone="warn" />
+        <Counter label="Engine errors" value={s?.engine_errors ?? 0} tone={s?.engine_errors ? 'bad' : undefined} />
       </div>
 
       {s?.last_error && <p className="warning bad">Last error: {s.last_error}</p>}

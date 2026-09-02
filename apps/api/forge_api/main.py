@@ -20,6 +20,7 @@ from forge.forgekeeper import ForgeKeeper, classify_candidate
 from forge.judge import Judge, JudgeInput, Verdict
 from forge.ledger import LedgerDatabase
 from forge.prop import PropRuleSet, PropSimulation, load_rules, simulate_prop_paths
+from forge.research import ResearchLedger
 from forge.strategy import StrategyLibrary
 
 from forge_api.activity import ActivityLog, BacktestStore
@@ -43,7 +44,7 @@ def seed_demo(ledger: LedgerDatabase) -> None:
     ledger.add_run(
         RunRecord.create(
             prereg,
-            "TRUTH_OOS",
+            "SWEEP",
             content_hash({"strategy": "demo_momentum", "version": 1}),
             content_hash({"fixture": "mnq_sample_v1"}),
             content_hash({"commission": 0.74, "slippage_ticks": 1}),
@@ -77,7 +78,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
 
@@ -88,7 +89,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             data={
                 "status": "ok",
                 "paper_only": True,
-                "data_gate": "REAL",
+                "data_gate": "REAL_AVAILABLE",
                 "engine_running": bool(engine and engine.state.running),
             }
         )
@@ -209,10 +210,13 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     library = StrategyLibrary(ROOT / "strategies")
     store = BacktestStore(ROOT / "data" / "backtests")
     log = ActivityLog(ROOT / "data" / "runtime" / "activity.ndjson")
-    control_router, engine, market = build_control_router(ROOT, library, store, log)
+    research_ledger = ResearchLedger(ROOT / "data" / "research.db")
+    control_router, engine, market = build_control_router(
+        ROOT, library, store, log, research_ledger
+    )
 
     app.state.engine = engine
-    app.include_router(build_router(ROOT, library, store, log, market))
+    app.include_router(build_router(ROOT, library, store, log, market, research_ledger))
     app.include_router(control_router)
 
     # Serve the built interface from the API itself. The desktop shell then loads

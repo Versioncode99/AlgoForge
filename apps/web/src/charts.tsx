@@ -140,3 +140,80 @@ export function SweepChart({
     />
   )
 }
+
+export function TargetReachChart({ points }: { points: { day: number; probability: number }[] }) {
+  return (
+    <ReactECharts
+      style={{ height: 230 }}
+      option={{
+        ...BASE,
+        grid: { left: 58, right: 18, top: 16, bottom: 34 },
+        xAxis: { type: 'category', data: points.map((p) => p.day), name: 'day', ...AXIS },
+        yAxis: {
+          type: 'value', min: 0, max: 1, ...AXIS,
+          axisLabel: { ...AXIS.axisLabel, formatter: (value: number) => `${Math.round(value * 100)}%` },
+        },
+        series: [{
+          type: 'line', data: points.map((p) => p.probability), showSymbol: false,
+          lineStyle: { width: 1.8, color: '#3ddc97' },
+          areaStyle: { color: 'rgba(61,220,151,.12)' },
+        }],
+      }}
+    />
+  )
+}
+
+export function TerminalHistogram({ bins }: { bins: { lower: number; upper: number; count: number }[] }) {
+  return (
+    <ReactECharts
+      style={{ height: 230 }}
+      option={{
+        ...BASE,
+        grid: { left: 58, right: 18, top: 16, bottom: 48 },
+        xAxis: {
+          type: 'category', data: bins.map((b) => Math.round((b.lower + b.upper) / 2)),
+          name: 'terminal P&L', nameLocation: 'middle', nameGap: 32, ...AXIS,
+        },
+        yAxis: { type: 'value', ...AXIS },
+        series: [{
+          type: 'bar', barWidth: '88%',
+          data: bins.map((b) => ({
+            value: b.count,
+            itemStyle: { color: (b.lower + b.upper) / 2 >= 0 ? '#3ddc97' : '#f2615c' },
+          })),
+        }],
+      }}
+    />
+  )
+}
+
+export function ReturnDrawdownChart({ points }: {
+  points: { terminal_pnl: number; max_drawdown: number; outcome: string }[]
+}) {
+  return (
+    <ReactECharts
+      style={{ height: 280 }}
+      option={{
+        ...BASE,
+        tooltip: {
+          ...BASE.tooltip, trigger: 'item',
+          formatter: (item: { data: [number, number, string] }) =>
+            `${item.data[2]}<br/>terminal ${item.data[0].toFixed(0)}<br/>drawdown ${item.data[1].toFixed(0)}`,
+        },
+        grid: { left: 62, right: 18, top: 18, bottom: 48 },
+        xAxis: { type: 'value', name: 'terminal P&L', nameLocation: 'middle', nameGap: 30, ...AXIS },
+        yAxis: { type: 'value', name: 'max drawdown', ...AXIS },
+        series: [{
+          type: 'scatter', symbolSize: 5,
+          data: points.slice(0, 1200).map((p) => ({
+            value: [p.terminal_pnl, p.max_drawdown, p.outcome],
+            itemStyle: {
+              color: p.outcome === 'PASS' ? '#3ddc97' : p.outcome === 'FAIL' ? '#f2615c' : '#d5a84b',
+              opacity: .55,
+            },
+          })),
+        }],
+      }}
+    />
+  )
+}

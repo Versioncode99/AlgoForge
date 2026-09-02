@@ -1,13 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bot, Check, KeyRound, Send, X } from 'lucide-react'
+import { Bot, Check, KeyRound, RefreshCw, Send, Server, X } from 'lucide-react'
 import { useState } from 'react'
 import { getJson, patchJson, postJson } from '../api'
-import type { AskResult, SettingsPayload } from '../types'
+import type { AskResult, OracleInfo, SettingsPayload } from '../types'
 
 export function SettingsView() {
   const qc = useQueryClient()
   const [error, setError] = useState<string | null>(null)
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => getJson<SettingsPayload>('/settings') })
+  const oracles = useQuery({ queryKey: ['oracles'], queryFn: () => getJson<OracleInfo[]>('/oracles') })
+  const testGateway = useMutation({
+    mutationFn: () => postJson<SettingsPayload['ai']['gateway']>('/ai/test'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+    onError: (e: Error) => setError(e.message),
+  })
 
   const patch = useMutation({
     mutationFn: (body: Record<string, unknown>) => patchJson<SettingsPayload>('/settings', body),
@@ -17,7 +23,8 @@ export function SettingsView() {
 
   const s = settings.data
   if (!s) return <div className="state">Loading settings…</div>
-  const anthropic = s.credentials.find((c) => c.key === 'ANTHROPIC_API_KEY')
+  const gateway = testGateway.data ?? s.ai.gateway
+  const nautilus = oracles.data?.[0]
 
   return (
     <section className="stack">
@@ -30,19 +37,54 @@ export function SettingsView() {
 
       <div className="panel">
         <header>
-          <h2>AI agents</h2>
-          <button
-            className={s.ai.enabled ? 'btn primary' : 'btn'}
-            onClick={() => patch.mutate({ ai_enabled: !s.ai.enabled })}
-          >
-            {s.ai.enabled ? <Check /> : <X />} {s.ai.enabled ? 'Enabled' : 'Disabled'}
-          </button>
+          <h2>AI agents · OmniRoute gateway</h2>
+          <div className="panel-actions">
+            <button className="btn" onClick={() => testGateway.mutate()} disabled={testGateway.isPending}>
+              <RefreshCw /> {testGateway.isPending ? 'Testing...' : 'Test connection'}
+            </button>
+            <button className={s.ai.enabled ? 'btn primary' : 'btn'} onClick={() => patch.mutate({ ai_enabled: !s.ai.enabled })}>
+              {s.ai.enabled ? <Check /> : <X />} {s.ai.enabled ? 'Enabled' : 'Disabled'}
+            </button>
+          </div>
         </header>
         <div className="panel-body">
-          {!anthropic?.present && (
+          <label className="gateway-url">Provider
+            <select
+              aria-label="Model provider"
+              value={s.ai.provider}
+              onChange={(e) => patch.mutate({ ai_provider: e.target.value })}
+            >
+              {s.providers.map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+          </label>
+          <p className="provider-detail">
+            {s.providers.find((p) => p.id === s.ai.provider)?.detail}
+          </p>
+
+          <div className="gateway-strip">
+            <div className={gateway.connected ? 'gateway-light is-up' : 'gateway-light'}><Server /></div>
+            <div><span>Provider</span><strong>{gateway.provider}</strong></div>
+            <div><span>Status</span><strong className={gateway.connected ? 'good' : 'warn'}>{gateway.connected ? 'CONNECTED' : 'OFFLINE · LOCAL FALLBACK'}</strong></div>
+            <div><span>Models</span><strong>{gateway.model_count}</strong></div>
+            <div><span>Latency</span><strong>{gateway.latency_ms} ms</strong></div>
+            <div><span>Credential</span><strong className={gateway.credential_present ? 'good' : 'warn'}>{gateway.credential_present ? gateway.credential_source : 'not detected'}</strong></div>
+          </div>
+          <label className="gateway-url">OpenAI-compatible base URL
+            <input defaultValue={s.ai.base_url} onBlur={(e) => { if (e.target.value !== s.ai.base_url) patch.mutate({ ai_base_url: e.target.value }) }} />
+          </label>
+          {gateway.selected && gateway.selected !== 'omniroute' && (
             <p className="warning">
-              No Anthropic key is set, so every role falls back to the local ledger. Add
-              <code> ANTHROPIC_API_KEY</code> to <code>F:\AlgoForge\.env</code> and restart.
+              OmniRoute is not listening at <code>{s.ai.base_url}</code>, so
+              <strong> {gateway.selected}</strong> is answering instead. OmniRoute is a local
+              gateway process — it has to be running on this machine before it can be used.
+            </p>
+          )}
+          {!gateway.connected && (
+            <p className="warning">
+              No provider is reachable. Agent roles stay usable through deterministic local-ledger
+              answers; no AI claim is substituted for missing evidence.
             </p>
           )}
           <table className="tbl role-table">
@@ -113,16 +155,34 @@ export function SettingsView() {
                   <tr key={c.key}>
                     <td>{c.label}</td>
                     <td className={c.present ? 'good' : 'bad'}>{c.hint}</td>
+                    <td className="muted">{c.source}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <p className="warning">
-              Keys are read from <code>.env</code> and the vault key file at startup. They are
-              never sent to the interface — only whether one is present and how long it is.
+              Secret values and paths never cross the API boundary. Only configured state and a
+              generic source class are returned to this interface.
             </p>
           </div>
         </div>
+      </div>
+
+      <div className="panel">
+        <header>
+          <h2>Execution-semantics oracle · NautilusTrader</h2>
+          <span className={`oracle-state ${nautilus?.ready ? 'good' : 'warn'}`}>{nautilus?.ready ? 'READY' : 'OPTIONAL / NOT READY'}</span>
+        </header>
+        <div className="panel-body oracle-layout">
+          <div className="oracle-summary">
+            <div><span>Installed</span><strong>{nautilus?.installed ? `yes · ${nautilus.version}` : 'no'}</strong></div>
+            <div><span>Configured data</span><strong>{nautilus?.configured_data_levels.join(', ') || 'none'}</strong></div>
+            <div><span>Role</span><strong>{nautilus?.role.replaceAll('_', ' ') ?? '--'}</strong></div>
+            <div><span>Licence</span><strong>{nautilus?.licence ?? '--'}</strong></div>
+          </div>
+          <div className="oracle-caveats"><span>Boundary conditions</span><ul>{nautilus?.limitations.map((item) => <li key={item}>{item}</li>)}</ul></div>
+        </div>
+        <p className="warning">NautilusTrader is an optional comparison oracle. Installing it does not validate fills, and it has no authority to promote a strategy.</p>
       </div>
 
       <div className="panel">

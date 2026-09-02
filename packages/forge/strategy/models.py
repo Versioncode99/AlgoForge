@@ -7,6 +7,7 @@ from pydantic import Field
 
 from forge.contracts.hashing import content_hash, stable_id
 from forge.contracts.models import FrozenModel
+from forge.research.models import EvidenceTier, ResearchSplitReceipt
 
 ParamValue = float | int
 
@@ -99,6 +100,10 @@ class BacktestResult(FrozenModel):
     max_drawdown: float
     lookahead_clean: bool
     labels: tuple[str, ...]
+    evidence_tier: EvidenceTier = "LEGACY_IN_SAMPLE"
+    dataset_key: str | None = None
+    partition_name: Literal["DEVELOPMENT", "VALIDATION", "HOLDOUT"] | None = None
+    split_receipt: ResearchSplitReceipt | None = None
     started_at: datetime
     finished_at: datetime
 

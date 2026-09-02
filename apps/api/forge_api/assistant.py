@@ -8,13 +8,13 @@ the local ledger, and says plainly that it is doing so.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
 from forge.strategy import TEMPLATES, StrategyLibrary
 
 from forge_api.activity import ActivityLog, BacktestStore
+from forge_api.providers import model_for, resolve
 from forge_api.settings_store import SettingsStore
 
 SYSTEM_PROMPT = """You are the console assistant inside AlgoForge, a local paper-only
@@ -103,28 +103,20 @@ class Assistant:
             "No model credential is configured, so I can only answer from the local ledger. "
             f"Right now: {ctx['strategy_count']} strategies, {ctx['backtest_count']} backtests, "
             f"families {', '.join(ctx['families']) or 'none yet'}. "
-            "Add an ANTHROPIC_API_KEY in Settings for open-ended questions."
+            "Enable the OmniRoute provider in Settings for open-ended questions."
         )
 
     # ── model-backed answer ──────────────────────────────────────────────────
     def ask(self, question: str) -> dict[str, Any]:
         ctx = self.context()
         current = self.settings.load()
-        model = current.ai.routing.get("chat", "claude-sonnet-5")
-        key = os.environ.get("ANTHROPIC_API_KEY", "")
+        model = current.ai.routing.get("chat", "auto")
 
-        if (
-            not current.ai.enabled
-            or not key
-            or model in {"none", ""}
-            or model.startswith("ollama/")
-        ):
+        if not current.ai.enabled or model in {"none", ""}:
             reason = (
                 "AI is switched off in Settings"
                 if not current.ai.enabled
-                else "no ANTHROPIC_API_KEY is configured"
-                if not key
-                else f"the chat role is routed to {model}, which is not wired up yet"
+                else "the chat role is disabled"
             )
             return {
                 "answer": self._local_answer(question, ctx),
@@ -133,48 +125,42 @@ class Assistant:
                 "note": f"Answered locally because {reason}.",
             }
 
-        try:
-            import anthropic  # type: ignore[import-not-found]
-        except ImportError:
+        selection = resolve(current.ai.provider, current.ai.base_url)
+        if not selection.status.get("connected"):
             return {
                 "answer": self._local_answer(question, ctx),
                 "model": "local-ledger",
+                "provider": selection.provider,
                 "grounded": True,
-                "note": "The anthropic package is not installed; answered from the local ledger.",
+                "note": (
+                    f"No model provider is reachable "
+                    f"({selection.status.get('error') or 'offline'}); "
+                    "answered from the local ledger instead."
+                ),
             }
 
         try:
-            client = anthropic.Anthropic(api_key=key)
-            message = client.messages.create(
-                model=model,
-                max_tokens=900,
+            answer: dict[str, Any] = selection.client.chat(
+                model=model_for(selection.provider, model),
                 system=SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Instance context (JSON):\n{ctx}\n\nQuestion: {question}",
-                    }
-                ],
+                prompt=f"Instance context (JSON):\n{ctx}\n\nQuestion: {question}",
             )
-            text = "".join(block.text for block in message.content if block.type == "text")
-            usage = message.usage
             self.log.record(
                 "ASSISTANT",
-                f"answered via {model} ({usage.input_tokens}in/{usage.output_tokens}out)",
+                f"answered via {selection.provider} {answer['model']} "
+                f"({answer['input_tokens']}in/{answer['output_tokens']}out)",
                 "info",
             )
-            return {
-                "answer": text,
-                "model": model,
-                "grounded": True,
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-            }
+            answer["provider"] = selection.provider
+            if selection.fell_back:
+                answer["note"] = "OmniRoute was not listening, so NVIDIA NIM answered."
+            return answer
         except Exception as exc:
-            self.log.record("ASSISTANT", f"model call failed: {exc}", "fail")
+            self.log.record("ASSISTANT", f"{selection.provider} call failed: {exc}", "fail")
             return {
                 "answer": self._local_answer(question, ctx),
                 "model": "local-ledger",
+                "provider": selection.provider,
                 "grounded": True,
-                "note": f"The model call failed ({exc}); answered from the local ledger instead.",
+                "note": (f"The {selection.provider} call failed; answered from the local ledger."),
             }

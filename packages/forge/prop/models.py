@@ -48,3 +48,42 @@ class PathOutcome(FrozenModel):
     failure_reason: str | None
     payouts: float
     events: tuple[BoundaryEvent, ...]
+
+
+class TargetReachPoint(FrozenModel):
+    day: int
+    probability: float
+
+
+class DistributionBin(FrozenModel):
+    lower: float
+    upper: float
+    count: int
+
+
+class ReturnDrawdownPoint(FrozenModel):
+    terminal_pnl: float
+    max_drawdown: float
+    outcome: Literal["PASS", "FAIL", "TIMEOUT", "SURVIVED"]
+
+
+class BoundaryRaceSummary(FrozenModel):
+    target_first_probability: float
+    loss_first_probability: float
+    timeout_probability: float
+    target_days_p10: float | None
+    target_days_median: float | None
+    target_days_p90: float | None
+    loss_days_p10: float | None
+    loss_days_median: float | None
+    loss_days_p90: float | None
+
+
+class TailRiskSummary(FrozenModel):
+    var_95: float
+    cvar_95: float
+    skewness: float
+    excess_kurtosis: float
+    terminal_p05: float
+    terminal_median: float
+    terminal_p95: float

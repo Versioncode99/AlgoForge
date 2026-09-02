@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from forge.contracts.models import ApiEnvelope
 from forge.data.models import Bar
 from forge.judge import Judge, JudgeInput
+from forge.research import (
+    ResearchLedger,
+    ResearchSplitReceipt,
+    chronological_split,
+    source_data_hash,
+)
 from forge.strategy import (
     TEMPLATES,
     GuardViolation,
@@ -14,6 +21,7 @@ from forge.strategy import (
     check_source,
     generate_bars,
     run_backtest,
+    strategy_capability_catalog,
 )
 from pydantic import BaseModel, Field
 
@@ -52,6 +60,7 @@ def build_router(
     store: BacktestStore,
     log: ActivityLog,
     market: MarketService,
+    research_ledger: ResearchLedger,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["strategies"])
 
@@ -76,6 +85,9 @@ def build_router(
                 "parameters": [p.model_dump() for p in t.parameters],
                 "warmup_bars": t.warmup_bars,
                 "line_count": len(t.source.splitlines()),
+                "data_requirement": t.data_requirement,
+                "minimum_timeframe": t.minimum_timeframe,
+                "research_status": t.research_status,
             }
             for t in TEMPLATES.values()
         ]
@@ -100,6 +112,8 @@ def build_router(
                         "win_rate": latest["win_rate"],
                         "max_drawdown": latest["max_drawdown"],
                         "finished_at": latest["finished_at"],
+                        "evidence_tier": latest.get("evidence_tier", "LEGACY_IN_SAMPLE"),
+                        "split_id": (latest.get("split_receipt") or {}).get("split_id"),
                     },
                 }
             )
@@ -147,6 +161,8 @@ def build_router(
                         "max_drawdown": b["max_drawdown"],
                         "parameters": b["parameters"],
                         "finished_at": b["finished_at"],
+                        "evidence_tier": b.get("evidence_tier", "LEGACY_IN_SAMPLE"),
+                        "split_id": (b.get("split_receipt") or {}).get("split_id"),
                     }
                     for b in store.for_strategy(strategy_id)
                 ],
@@ -201,15 +217,53 @@ def build_router(
             "info",
             strategy_id,
         )
+        split_meta: dict[str, Any] = {}
         try:
-            result = run_backtest(
-                module,
-                spec,
-                bars,
-                parameters=body.parameters,
-                code_hash=library.code_hash(strategy_id),
-                labels=("REAL_DATA",) if is_real else ("SYNTHETIC_DATA", "UNCALIBRATED"),
-            )
+            if is_real:
+                partitions = chronological_split(bars, warmup_bars=spec.warmup_bars)
+                code_hash = library.code_hash(strategy_id)
+                development = run_backtest(
+                    module,
+                    spec,
+                    partitions.development,
+                    labels=("REAL_DATA", "DEVELOPMENT_IN_SAMPLE", "UNCALIBRATED"),
+                    evidence_tier="DEVELOPMENT_IN_SAMPLE",
+                    partition_name="DEVELOPMENT",
+                    parameters=body.parameters,
+                    code_hash=code_hash,
+                    dataset_key=body.dataset,
+                    split_receipt=partitions.receipt,
+                )
+                result = run_backtest(
+                    module,
+                    spec,
+                    partitions.validation,
+                    labels=("REAL_DATA", "VALIDATION_OOS", "UNCALIBRATED"),
+                    evidence_tier="VALIDATION_OOS",
+                    partition_name="VALIDATION",
+                    parameters=body.parameters,
+                    code_hash=code_hash,
+                    dataset_key=body.dataset,
+                    split_receipt=partitions.receipt,
+                )
+                store.save(development)
+                split_meta = {
+                    "split_receipt": partitions.receipt.model_dump(mode="json"),
+                    "development_backtest_id": development.backtest_id,
+                    "validation_backtest_id": result.backtest_id,
+                    "holdout_consumed": research_ledger.get(spec.lineage) is not None,
+                }
+            else:
+                result = run_backtest(
+                    module,
+                    spec,
+                    bars,
+                    parameters=body.parameters,
+                    code_hash=library.code_hash(strategy_id),
+                    labels=("SYNTHETIC_DATA", "UNCALIBRATED"),
+                    evidence_tier="SYNTHETIC",
+                    dataset_key=body.dataset,
+                )
         except ValueError as exc:
             log.record("BACKTEST", f"{strategy_id} failed: {exc}", "fail", strategy_id)
             raise HTTPException(422, {"code": "backtest_failed", "detail": str(exc)}) from exc
@@ -233,6 +287,8 @@ def build_router(
                 "provider": provider,
                 "is_real": is_real,
                 "trade_count": len(result.trades),
+                "evidence_tier": result.evidence_tier,
+                **split_meta,
             },
         )
 
@@ -251,7 +307,12 @@ def build_router(
         if target is None:
             raise HTTPException(404, {"code": "parameter_not_found", "parameter": body.parameter})
 
-        bars, _, _ = _bars(body)  # type: ignore[arg-type]
+        bars, is_real, _ = _bars(body)  # type: ignore[arg-type]
+        split_receipt: ResearchSplitReceipt | None = None
+        if is_real:
+            partitions = chronological_split(bars, warmup_bars=spec.warmup_bars)
+            bars = partitions.development
+            split_receipt = partitions.receipt
         points: list[dict[str, Any]] = []
         value = float(target.low)
         while value <= float(target.high) + 1e-9:
@@ -261,7 +322,15 @@ def build_router(
                 bars,
                 parameters={target.name: value},
                 code_hash=library.code_hash(strategy_id),
-                labels=("SYNTHETIC_DATA", "SWEEP"),
+                labels=(
+                    ("REAL_DATA", "DEVELOPMENT_IN_SAMPLE", "SWEEP", "NON_PROMOTABLE")
+                    if is_real
+                    else ("SYNTHETIC_DATA", "SWEEP", "NON_PROMOTABLE")
+                ),
+                evidence_tier="DEVELOPMENT_IN_SAMPLE" if is_real else "SYNTHETIC",
+                dataset_key=body.dataset,
+                partition_name="DEVELOPMENT" if is_real else None,
+                split_receipt=split_receipt,
             )
             points.append(
                 {
@@ -295,24 +364,151 @@ def build_router(
     @router.post("/strategies/{strategy_id}/judge", response_model=ApiEnvelope[dict[str, Any]])
     def judge_strategy(strategy_id: str) -> ApiEnvelope[dict[str, Any]]:
         """Judge the most recent backtest of this strategy — its real trades, not a fixture."""
-        latest = store.latest(strategy_id)
-        if latest is None:
+        try:
+            spec = library.get_spec(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(404, {"code": "strategy_not_found"}) from exc
+        all_runs = store.for_strategy(strategy_id)
+        if not all_runs:
             raise HTTPException(422, {"code": "no_backtest", "detail": "run a backtest first"})
+        validation_runs = [
+            item for item in all_runs if item.get("evidence_tier") == "VALIDATION_OOS"
+        ]
+        if not validation_runs:
+            latest_any = all_runs[0]
+            if latest_any.get("evidence_tier") == "SYNTHETIC":
+                synthetic_pnl = tuple(float(t["net_pnl"]) for t in latest_any["trades"])
+                if not synthetic_pnl:
+                    raise HTTPException(
+                        422, {"code": "no_trades", "detail": "backtest produced no trades"}
+                    )
+                synthetic_verdict = Judge().evaluate(
+                    JudgeInput(
+                        run_id=latest_any["backtest_id"],
+                        tier="SWEEP_SYNTHETIC",
+                        pnl=synthetic_pnl,
+                        trial_count=max(1, len(all_runs)),
+                        data_gate_passed=False,
+                        preregistered=True,
+                        implementation_tests_passed=True,
+                        lookahead_detected=not latest_any["lookahead_clean"],
+                    )
+                )
+                return ApiEnvelope(
+                    data=synthetic_verdict.model_dump(mode="json"),
+                    meta={
+                        "evidence_tier": "SYNTHETIC",
+                        "holdout_consumed": False,
+                        "note": "Synthetic evidence is judgeable for diagnostics but cannot pass.",
+                    },
+                )
+            raise HTTPException(
+                422,
+                {
+                    "code": "validation_oos_required",
+                    "detail": "Run a real-data backtest to create a purged validation artifact.",
+                },
+            )
+        latest = validation_runs[0]
         pnl = tuple(float(t["net_pnl"]) for t in latest["trades"])
         if not pnl:
             raise HTTPException(422, {"code": "no_trades", "detail": "backtest produced no trades"})
 
-        trials = max(1, len(store.for_strategy(strategy_id)))
-        verdict = Judge().evaluate(
+        trials = max(
+            1,
+            len(
+                {
+                    tuple(sorted(item.get("parameters", {}).items()))
+                    for item in store.for_strategy(strategy_id)
+                }
+            ),
+        )
+        validation_verdict = Judge().evaluate(
             JudgeInput(
                 run_id=latest["backtest_id"],
-                tier="TRUTH_OOS" if "REAL_DATA" in latest.get("labels", []) else "SWEEP_SYNTHETIC",
+                tier="TRUTH_OOS",
                 pnl=pnl,
                 trial_count=trials,
-                data_gate_passed="REAL_DATA" in latest.get("labels", []),
+                data_gate_passed=True,
                 preregistered=True,
                 implementation_tests_passed=True,
                 lookahead_detected=not latest["lookahead_clean"],
+            )
+        )
+        failed = [g for g in validation_verdict.gates if g.status != "PASS"]
+        if validation_verdict.decision != "PASS":
+            log.record(
+                "JUDGE",
+                f"{strategy_id} validation -> {validation_verdict.decision}"
+                + (f" (first failure {failed[0].gate})" if failed else ""),
+                "fail",
+                validation_verdict.verdict_id,
+            )
+            return ApiEnvelope(
+                data=validation_verdict.model_dump(mode="json"),
+                meta={
+                    "trial_count": trials,
+                    "evidence_tier": "VALIDATION_OOS",
+                    "holdout_consumed": False,
+                    "note": "Validation failed; the burn-once holdout remains unspent.",
+                },
+            )
+
+        raw_receipt = latest.get("split_receipt")
+        dataset_key = latest.get("dataset_key")
+        if raw_receipt is None or not dataset_key:
+            raise HTTPException(422, {"code": "split_receipt_missing"})
+        receipt = ResearchSplitReceipt.model_validate(raw_receipt)
+        bars, dataset = market.load(dataset_key, limit=receipt.source_bar_count)
+        if not dataset.is_real or source_data_hash(bars) != receipt.source_data_hash:
+            raise HTTPException(409, {"code": "source_data_changed_after_validation"})
+        if latest["code_hash"] != library.code_hash(strategy_id):
+            raise HTTPException(409, {"code": "strategy_code_changed_after_validation"})
+
+        # Verify the frozen inputs before spending the lineage's only holdout.
+        # The token is consumed immediately before execution, so retries cannot
+        # turn an observed result into another tuning round.
+        try:
+            research_ledger.consume(spec.lineage, receipt.split_id)
+        except ValueError as exc:
+            previous = research_ledger.get(spec.lineage)
+            raise HTTPException(
+                409,
+                {
+                    "code": "holdout_already_consumed",
+                    "result_id": previous.result_id if previous else None,
+                },
+            ) from exc
+
+        holdout_bars = bars[receipt.holdout.start_index : receipt.holdout.end_index]
+        module = library.load_module(strategy_id)
+        holdout = run_backtest(
+            module,
+            spec,
+            holdout_bars,
+            parameters=latest["parameters"],
+            code_hash=latest["code_hash"],
+            labels=("REAL_DATA", "HOLDOUT", "BURN_ONCE", "UNCALIBRATED"),
+            evidence_tier="HOLDOUT",
+            dataset_key=dataset_key,
+            partition_name="HOLDOUT",
+            split_receipt=receipt,
+        )
+        store.save(holdout)
+        research_ledger.attach_result(spec.lineage, holdout.backtest_id)
+        holdout_pnl = tuple(float(trade.net_pnl) for trade in holdout.trades)
+        if not holdout_pnl:
+            raise HTTPException(422, {"code": "holdout_no_trades", "holdout_spent": True})
+        verdict = Judge().evaluate(
+            JudgeInput(
+                run_id=holdout.backtest_id,
+                tier="HOLDOUT",
+                pnl=holdout_pnl,
+                trial_count=trials,
+                data_gate_passed=True,
+                preregistered=True,
+                implementation_tests_passed=True,
+                lookahead_detected=not holdout.lookahead_clean,
             )
         )
         failed = [g for g in verdict.gates if g.status != "PASS"]
@@ -327,8 +523,12 @@ def build_router(
             data=verdict.model_dump(mode="json"),
             meta={
                 "trial_count": trials,
-                "data_gate": "REAL" if "REAL_DATA" in latest.get("labels", []) else "SYNTHETIC",
-                "note": "G0 passes only on real provider data.",
+                "data_gate": "REAL",
+                "evidence_tier": "HOLDOUT",
+                "holdout_consumed": True,
+                "holdout_backtest_id": holdout.backtest_id,
+                "validation_verdict_id": validation_verdict.verdict_id,
+                "note": "Validation passed and the lineage's burn-once holdout was consumed.",
             },
         )
 
@@ -360,6 +560,78 @@ def build_router(
                 "strategies_path": str(library.root),
                 "data_gate": "REAL",
             }
+        )
+
+    @router.get("/research/overview", response_model=ApiEnvelope[dict[str, Any]])
+    def research_overview() -> ApiEnvelope[dict[str, Any]]:
+        specs = library.list_specs()
+        markets = ("MNQ.CME", "MES.CME", "NQ.CME", "ES.CME", "MGC.CME", "XAUUSD", "BTCUSD")
+        families: list[dict[str, Any]] = []
+        matrix: list[dict[str, Any]] = []
+        for template in TEMPLATES.values():
+            variants = [spec for spec in specs if spec.template == template.key]
+            tested: list[tuple[Any, dict[str, Any]]] = []
+            for spec in variants:
+                latest = store.latest(spec.strategy_id)
+                if latest is not None:
+                    tested.append((spec, latest))
+            expectancies = [
+                float(item["net_pnl"]) / max(1, len(item["trades"])) for _, item in tested
+            ]
+            families.append(
+                {
+                    "key": template.key,
+                    "name": template.name,
+                    "family": template.family,
+                    "variant_count": len(variants),
+                    "tested_count": len(tested),
+                    "positive_share": round(
+                        sum(value > 0 for value in expectancies) / len(expectancies), 4
+                    )
+                    if expectancies
+                    else None,
+                    "median_expectancy": round(median(expectancies), 4) if expectancies else None,
+                    "best_expectancy": round(max(expectancies), 4) if expectancies else None,
+                    "validation_oos_count": sum(
+                        item.get("evidence_tier") == "VALIDATION_OOS" for _, item in tested
+                    ),
+                    "holdout_count": sum(
+                        item.get("evidence_tier") == "HOLDOUT" for _, item in tested
+                    ),
+                    "required_data": template.data_requirement,
+                }
+            )
+            cells = []
+            for market_name in markets:
+                candidates = [item for spec, item in tested if spec.symbol == market_name]
+                best = (
+                    max(candidates, key=lambda item: float(item["net_pnl"])) if candidates else None
+                )
+                cells.append(
+                    {
+                        "market": market_name,
+                        "status": "TESTED" if best else "NOT_TESTED",
+                        "expectancy": (
+                            round(float(best["net_pnl"]) / max(1, len(best["trades"])), 4)
+                            if best
+                            else None
+                        ),
+                        "evidence_tier": best.get("evidence_tier") if best else None,
+                    }
+                )
+            matrix.append({"key": template.key, "name": template.name, "cells": cells})
+
+        catalog = [item.model_dump(mode="json") for item in strategy_capability_catalog()]
+        return ApiEnvelope(
+            data={
+                "families": families,
+                "matrix": {"markets": list(markets), "rows": matrix},
+                "catalog": catalog,
+            },
+            meta={
+                "hft_claims_enabled": False,
+                "note": "NOT_TESTED is distinct from zero performance.",
+            },
         )
 
     return router

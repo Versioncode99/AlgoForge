@@ -6,12 +6,15 @@ from collections import defaultdict
 from datetime import date
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
 from forge.contracts.models import ApiEnvelope
 from forge.data.live import ProviderError
+from forge.oracles import nautilus_capability
 from forge.prop import load_rules, simulate_prop_paths
 from forge.prop.engine import MIN_TRADING_DAYS
+from forge.research import ResearchLedger
 from forge.strategy import StrategyLibrary
 from pydantic import BaseModel, Field
 
@@ -19,6 +22,13 @@ from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.assistant import Assistant
 from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.market import DATASETS, MarketService
+from forge_api.model_gateway import OmniRouteClient
+from forge_api.providers import (
+    PROVIDER_OMNIROUTE,
+    PROVIDERS,
+    catalog_for,
+    status_for,
+)
 from forge_api.settings_store import (
     KNOWN_MODELS,
     ROLES,
@@ -38,6 +48,8 @@ class StartEngineRequest(BaseModel):
 
 class SettingsPatch(BaseModel):
     ai_enabled: bool | None = None
+    ai_provider: str | None = None
+    ai_base_url: str | None = None
     routing: dict[str, str] | None = None
     budget: dict[str, float] | None = None
     default_dataset: str | None = None
@@ -74,10 +86,11 @@ def build_control_router(
     library: StrategyLibrary,
     store: BacktestStore,
     log: ActivityLog,
+    research_ledger: ResearchLedger,
 ) -> tuple[APIRouter, AutonomousEngine, MarketService]:
     router = APIRouter(prefix="/api/v1", tags=["control"])
     market = MarketService(root)
-    engine = AutonomousEngine(library, store, log, market, root)
+    engine = AutonomousEngine(library, store, log, market, root, research_ledger)
     settings_store = SettingsStore(root / "config" / "settings.json")
     assistant = Assistant(root, library, store, log, settings_store)
 
@@ -85,18 +98,23 @@ def build_control_router(
     @router.get("/settings", response_model=ApiEnvelope[dict[str, Any]])
     def read_settings() -> ApiEnvelope[dict[str, Any]]:
         current = settings_store.load()
+        gateway_status = status_for(current.ai.provider, current.ai.base_url)
         return ApiEnvelope(
             data={
                 "ai": {
                     "enabled": current.ai.enabled,
+                    "provider": current.ai.provider,
+                    "base_url": current.ai.base_url,
                     "routing": current.ai.routing,
                     "budget": vars(current.ai.budget),
+                    "gateway": gateway_status,
                 },
                 "default_dataset": current.default_dataset,
                 "engine_cycle_seconds": current.engine_cycle_seconds,
                 "engine_max_strategies": current.engine_max_strategies,
                 "databento_max_cost_usd": current.databento_max_cost_usd,
-                "models": KNOWN_MODELS,
+                "models": catalog_for(current.ai.provider),
+                "providers": list(PROVIDERS),
                 "roles": ROLES,
                 "credentials": SettingsStore.credential_status(),
             },
@@ -106,7 +124,27 @@ def build_control_router(
     @router.patch("/settings", response_model=ApiEnvelope[dict[str, Any]])
     def update_settings(body: SettingsPatch) -> ApiEnvelope[dict[str, Any]]:
         current = settings_store.load()
-        valid = {m["id"] for m in KNOWN_MODELS}
+        known_providers = {p["id"] for p in PROVIDERS}
+        provider = body.ai_provider or current.ai.provider
+        if provider not in known_providers:
+            raise HTTPException(
+                422, {"code": "unsupported_ai_provider", "known": sorted(known_providers)}
+            )
+
+        proposed_url = body.ai_base_url or current.ai.base_url
+        # base_url configures the OmniRoute gateway only, and that gateway is a
+        # local process — so it must stay on loopback. The hosted provider has a
+        # fixed endpoint of its own and is unaffected by this field.
+        parsed = urlparse(proposed_url)
+        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+            raise HTTPException(422, {"code": "omniroute_loopback_url_required"})
+
+        gateway = OmniRouteClient(proposed_url, timeout_seconds=1.0)
+        valid = (
+            {m["id"] for m in gateway.model_catalog()}
+            | {m["id"] for m in KNOWN_MODELS}
+            | {m["id"] for m in catalog_for(provider)}
+        )
         role_keys = {r["key"] for r in ROLES}
 
         routing = dict(current.ai.routing)
@@ -121,6 +159,8 @@ def build_control_router(
         updated = Settings(
             ai=AISettings(
                 enabled=current.ai.enabled if body.ai_enabled is None else body.ai_enabled,
+                provider=provider,
+                base_url=proposed_url,
                 routing=routing,
                 budget=budget,
             ),
@@ -132,6 +172,34 @@ def build_control_router(
         settings_store.save(updated)
         log.record("SETTINGS", "updated", "info")
         return read_settings()
+
+    @router.get("/ai/status", response_model=ApiEnvelope[dict[str, Any]])
+    def ai_status() -> ApiEnvelope[dict[str, Any]]:
+        current = settings_store.load()
+        return ApiEnvelope(data=status_for(current.ai.provider, current.ai.base_url))
+
+    @router.post("/ai/test", response_model=ApiEnvelope[dict[str, Any]])
+    def ai_test() -> ApiEnvelope[dict[str, Any]]:
+        current = settings_store.load()
+        status = status_for(current.ai.provider, current.ai.base_url)
+        name = status.get("selected") or status.get("provider") or PROVIDER_OMNIROUTE
+        log.record(
+            "AI",
+            f"{name} connection verified" if status["connected"] else f"{name} unavailable",
+            "pass" if status["connected"] else "warn",
+        )
+        return ApiEnvelope(data=status, meta={"secrets_returned": False})
+
+    @router.get("/oracles", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def oracles() -> ApiEnvelope[list[dict[str, Any]]]:
+        status = nautilus_capability(("BARS",))
+        return ApiEnvelope(
+            data=[status.model_dump(mode="json")],
+            meta={
+                "promotion_authority": False,
+                "note": "Oracle availability is not evidence of engine calibration.",
+            },
+        )
 
     # ── assistant ────────────────────────────────────────────────────────────
     @router.post("/ask", response_model=ApiEnvelope[dict[str, Any]])

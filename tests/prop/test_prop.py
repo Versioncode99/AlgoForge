@@ -49,6 +49,12 @@ def test_prop_simulation_is_deterministic_and_separate() -> None:
     assert first == second
     assert first.interval_low <= first.pass_rate <= first.interval_high
     assert "UNVERIFIED_RULES" in first.labels
+    assert first.risk_of_ruin == first.fail_count / first.path_count
+    assert first.target_reach_curve[-1].probability <= 1
+    assert sum(item.count for item in first.terminal_histogram) == first.path_count
+    assert len(first.return_drawdown_map) == first.path_count
+    assert first.tail_risk.terminal_p05 <= first.tail_risk.terminal_median
+    assert first.tail_risk.terminal_median <= first.tail_risk.terminal_p95
 
 
 def test_simulator_refuses_a_track_record_that_is_too_short():

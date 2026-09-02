@@ -19,6 +19,9 @@ class Template:
     parameters: tuple[ParameterSpec, ...]
     warmup_bars: int
     source: str
+    data_requirement: str = "BARS"
+    minimum_timeframe: str = "1m"
+    research_status: str = "RUNNABLE"
 
 
 MOMENTUM_BREAKOUT = Template(

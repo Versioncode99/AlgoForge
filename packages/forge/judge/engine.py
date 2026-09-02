@@ -73,9 +73,9 @@ class Judge:
             self._gate(
                 "G9",
                 "Evidence tier",
-                item.tier in {"TRUTH_OOS", "FORWARD"},
+                item.tier in {"TRUTH_OOS", "HOLDOUT", "FORWARD"},
                 item.tier,
-                "truth OOS or forward only",
+                "validation OOS, holdout, or forward only",
             ),
         )
         decision: Literal["PASS", "FAIL", "INCONCLUSIVE"] = (

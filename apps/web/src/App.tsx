@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity, Bot, ChartNoAxesCombined, GitBranch, Layers, LockKeyhole, ScrollText,
-  MessageSquare, ShieldCheck, SlidersHorizontal, TriangleAlert,
+  MessageSquare, Microscope, ShieldCheck, SlidersHorizontal, TriangleAlert,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getJson } from './api'
@@ -14,20 +14,22 @@ import type {
 } from './types'
 import { EnginePanel } from './views/Engine'
 import { PropFirmView } from './views/PropFirm'
+import { ResearchLabView } from './views/ResearchLab'
 import { ConsoleView, SettingsView } from './views/Settings'
 import { StrategiesView } from './views/Strategies'
 
 const tabs = [
-  'Overview', 'Strategies', 'Verdict', 'Regimes', 'Risk & Monte Carlo',
+  'Overview', 'Research Lab', 'Strategies', 'Verdict', 'Regimes', 'Risk & Monte Carlo',
   'Prop Firm', 'Agents', 'Evolution', 'Console', 'Settings',
 ] as const
 type Tab = (typeof tabs)[number]
 
 // Tabs that render their own view instead of the shared ledger workspace.
-const STANDALONE = new Set<Tab>(['Overview', 'Strategies', 'Prop Firm', 'Console', 'Settings'])
+const STANDALONE = new Set<Tab>(['Overview', 'Research Lab', 'Strategies', 'Prop Firm', 'Console', 'Settings'])
 
 const ICONS: Record<Tab, typeof Activity> = {
   Overview: ChartNoAxesCombined,
+  'Research Lab': Microscope,
   Strategies: Layers,
   Verdict: ShieldCheck,
   Regimes: SlidersHorizontal,
@@ -112,7 +114,7 @@ export function App() {
             <div className="rail-row"><span>Prop rule sets</span><b>{rules.data?.length ?? 0}</b></div>
             <div className="rail-row">
               <span>Data gate</span>
-              <b className={health.data?.data_gate === 'REAL' ? 'good' : 'bad'}>
+              <b className={health.data?.data_gate?.startsWith('REAL') ? 'good' : 'bad'}>
                 {health.data?.data_gate ?? '—'}
               </b>
             </div>
@@ -137,13 +139,13 @@ export function App() {
           <div className="view-head">
             <div>
               <p className="eyebrow">
-                {tab === 'Strategies' ? 'BUILD · RUN · JUDGE' : tab === 'Overview' ? 'AUTONOMOUS ENGINE' : 'MNQ · 1M BARS'}
+                {tab === 'Strategies' ? 'BUILD · RUN · JUDGE' : tab === 'Research Lab' ? 'EVIDENCE INVENTORY' : tab === 'Overview' ? 'AUTONOMOUS ENGINE' : 'MNQ · 1M BARS'}
               </p>
               <h1>{tab}</h1>
             </div>
             <div className="chips">
               <span className="chip is-locked"><LockKeyhole /> PAPER ONLY</span>
-              <span className={health.data?.data_gate === 'REAL' ? 'chip is-good' : 'chip'}>
+              <span className={health.data?.data_gate?.startsWith('REAL') ? 'chip is-good' : 'chip'}>
                 DATA {health.data?.data_gate ?? '—'}
               </span>
             </div>
@@ -152,14 +154,15 @@ export function App() {
           <div className="notice">
             <TriangleAlert />
             <span>
-              PAPER ONLY · UNCALIBRATED — backtests run on real provider data, but fills are
-              modelled. Calibrate against NinjaTrader before trusting any number here.
+              PAPER ONLY · REAL DATA IS NOT OOS — fills are modelled; validation is chronological,
+              holdout is burn-once, and NinjaTrader calibration is still required.
             </span>
           </div>
 
           {!online && <div className="state error">API unavailable. Start the AlgoForge API on port 8765.</div>}
 
           {online && tab === 'Overview' && <EnginePanel />}
+          {online && tab === 'Research Lab' && <ResearchLabView />}
           {online && tab === 'Strategies' && <StrategiesView />}
           {online && tab === 'Prop Firm' && <PropFirmView />}
           {online && tab === 'Console' && <ConsoleView />}
