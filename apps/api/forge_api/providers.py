@@ -6,15 +6,15 @@ Three are wired:
   routing. Preferred when it is running, because nothing leaves the machine.
 - **NVIDIA NIM** — a hosted OpenAI-compatible endpoint. Works without any local
   process, so it is the natural backup when OmniRoute is not listening.
-- **OpenCode Zen** — a hosted gateway over many families at once, including the
-  Chinese frontier models (DeepSeek, GLM, Kimi, MiniMax, Qwen). Most of its
-  catalogue is gated on account balance rather than capability.
+- **OpenCode Go** — a $10/month subscription over curated open coding models,
+  which in practice means the Chinese frontier set: DeepSeek, GLM, Kimi,
+  MiniMax, Qwen, MiMo, LongCat and Hunyuan.
 
 `auto` tries OmniRoute first and falls back to NIM. Any of the three can be
 pinned explicitly from Settings, so the choice is the operator's rather than
-implied. Zen is not in the automatic chain on purpose: with an unfunded account
-only its free tier answers, and silently routing a research role onto a
-free-tier model would be a quiet downgrade rather than a decision.
+implied. Go is not in the automatic chain on purpose: its allowance is a fixed
+monthly budget, and letting an unattended engine loop spend it without being
+asked is the kind of surprise a research tool should not produce.
 
 Credentials are resolved server-side and never returned across the API.
 """
@@ -37,15 +37,15 @@ from forge_api.nvidia_nim import (
     NvidiaNimClient,
     resolve_nvidia_credential,
 )
-from forge_api.opencode_zen import (
-    OPENCODE_ZEN_DEFAULT_URL,
-    OpenCodeZenClient,
+from forge_api.opencode import (
+    OPENCODE_GO_DEFAULT_URL,
+    OpenCodeGoClient,
     resolve_opencode_credential,
 )
 
 PROVIDER_OMNIROUTE = "omniroute"
 PROVIDER_NVIDIA = "nvidia_nim"
-PROVIDER_OPENCODE = "opencode_zen"
+PROVIDER_OPENCODE = "opencode_go"
 PROVIDER_AUTO = "auto"
 
 PROVIDERS: tuple[dict[str, str], ...] = (
@@ -66,10 +66,10 @@ PROVIDERS: tuple[dict[str, str], ...] = (
     },
     {
         "id": PROVIDER_OPENCODE,
-        "label": "OpenCode Zen (hosted)",
+        "label": "OpenCode Go (subscription)",
         "detail": (
-            "DeepSeek, GLM, Kimi, MiniMax, Qwen, Claude, Gemini and Grok behind one key. "
-            "Most models need account credit; the free tier answers without it."
+            "DeepSeek, GLM, Kimi, MiniMax, Qwen, MiMo, LongCat and Hunyuan on a flat "
+            "$10/month allowance. 28 models verified working."
         ),
     },
 )
@@ -99,7 +99,7 @@ def client_for(provider: str, base_url: str | None = None) -> Any:
     if provider == PROVIDER_NVIDIA:
         return NvidiaNimClient(NVIDIA_NIM_DEFAULT_URL)
     if provider == PROVIDER_OPENCODE:
-        return OpenCodeZenClient(OPENCODE_ZEN_DEFAULT_URL)
+        return OpenCodeGoClient(OPENCODE_GO_DEFAULT_URL)
     return OmniRouteClient(base_url or OMNIROUTE_DEFAULT_URL)
 
 
@@ -111,13 +111,13 @@ def catalog_for(provider: str) -> list[dict[str, str]]:
         # Ask the client rather than the constant: it filters out the models
         # this code path cannot drive (the /responses family and the
         # upstream-dead ones) and puts the verified ones first.
-        return OpenCodeZenClient().model_catalog()
+        return OpenCodeGoClient().model_catalog()
     if provider == PROVIDER_OMNIROUTE:
         return [dict(m) for m in OMNIROUTE_FALLBACK_MODELS]
     merged = {m["id"]: dict(m) for m in OMNIROUTE_FALLBACK_MODELS}
     for model in NVIDIA_NIM_MODELS:
         merged.setdefault(model["id"], dict(model))
-    # Zen is deliberately absent from `auto`: it is not in the fallback chain,
+    # Go is deliberately absent from `auto`: it is not in the fallback chain,
     # so offering its models here would let one be selected and then routed
     # somewhere else entirely.
     return list(merged.values())
@@ -153,8 +153,8 @@ def resolve(provider: str, base_url: str | None = None) -> Resolved:
         nim_only = NvidiaNimClient()
         return Resolved(PROVIDER_NVIDIA, nim_only, nim_only.status(), False)
     if provider == PROVIDER_OPENCODE:
-        zen_only = OpenCodeZenClient()
-        return Resolved(PROVIDER_OPENCODE, zen_only, zen_only.status(), False)
+        go_only = OpenCodeGoClient()
+        return Resolved(PROVIDER_OPENCODE, go_only, go_only.status(), False)
 
     omni = OmniRouteClient(base_url or OMNIROUTE_DEFAULT_URL)
     omni_status = omni.status()

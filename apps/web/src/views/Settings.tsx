@@ -117,9 +117,9 @@ export function SettingsView() {
           </table>
           {s.models.some((m) => m.status === 'needs_credit') && (
             <p className="warning">
-              Models marked <b>needs credit</b> are real and correctly configured, but this
+              Models marked <b>needs credit</b> are real and correctly configured, but the
               account has no balance, so they answer with a billing error rather than a
-              completion. Only the free-tier models work until it is topped up.
+              completion.
             </p>
           )}
           <p className="warning">
