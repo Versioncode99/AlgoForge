@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Literal
@@ -153,6 +154,101 @@ def replay_path(rule: PropRuleSet, daily_pnl: np.ndarray) -> tuple[PathOutcome, 
 # A prop evaluation runs for weeks. Estimating it from fewer days than this is
 # resampling a handful of numbers into a shape they cannot support.
 MIN_TRADING_DAYS = 30
+
+# Largest window a single backtest request may ask for. A suggestion beyond it
+# is not advice, it is a finding: the strategy trades too rarely to evaluate.
+MAX_BACKTEST_BARS = 500_000
+
+
+@dataclass(frozen=True)
+class DayCoverage:
+    """Whether a backtest saw enough distinct days to simulate an evaluation.
+
+    The blocker is almost never that the *strategy* is wrong — it is that the
+    backtest window was too short to contain a month of trading. A bare refusal
+    leaves the user guessing, so this carries the arithmetic that tells them
+    exactly how much more data to ask for.
+    """
+
+    trading_days: int
+    days_required: int
+    bars_used: int
+    span_days: int
+    bars_per_trading_day: float
+    suggested_bar_count: int | None
+    max_bar_count: int
+    suggestion_exceeds_limit: bool
+
+    @property
+    def sufficient(self) -> bool:
+        return self.trading_days >= self.days_required
+
+    def explain(self) -> str:
+        if self.sufficient:
+            return f"{self.trading_days} trading days observed; {self.days_required} required."
+        parts = [
+            f"Only {self.trading_days} trading day"
+            f"{'' if self.trading_days == 1 else 's'} produced trades, "
+            f"but {self.days_required} are required. Estimating a "
+            f"{self.days_required}+ day evaluation from fewer measures the sample, "
+            "not the strategy."
+        ]
+        if self.bars_used:
+            parts.append(
+                f"The backtest ran on {self.bars_used:,} bars spanning {self.span_days} "
+                f"calendar day{'' if self.span_days == 1 else 's'}."
+            )
+        if self.suggested_bar_count and not self.suggestion_exceeds_limit:
+            parts.append(
+                f"At the observed rate of {self.bars_per_trading_day:,.0f} bars per trading "
+                f"day, re-run the backtest over about {self.suggested_bar_count:,} bars."
+            )
+        elif self.suggested_bar_count:
+            parts.append(
+                f"Reaching {self.days_required} trading days would take roughly "
+                f"{self.suggested_bar_count:,} bars, beyond the {self.max_bar_count:,}-bar "
+                "limit for a single run. This strategy trades too rarely to be evaluated "
+                "against a prop account on the available window."
+            )
+        else:
+            parts.append(
+                "This strategy took trades on too few days to extrapolate a window from; "
+                "it may simply trade too rarely for a prop evaluation."
+            )
+        return " ".join(parts)
+
+
+def assess_day_coverage(
+    trading_days: int,
+    bars_used: int,
+    span_days: int,
+    required: int = MIN_TRADING_DAYS,
+    max_bar_count: int = MAX_BACKTEST_BARS,
+) -> DayCoverage:
+    """Diagnose a short backtest and size the window that would fix it.
+
+    The suggestion scales the bar count by the ratio of required to observed
+    *trading* days rather than calendar days, because a selective strategy may
+    trade on only a fraction of the sessions its window covers. Extrapolating
+    from calendar span would under-shoot exactly those strategies.
+    """
+    density = bars_used / trading_days if trading_days > 0 and bars_used > 0 else 0.0
+    suggested: int | None = None
+    if 0 < trading_days < required and density > 0:
+        # A 20% margin, because trade frequency is not perfectly uniform and a
+        # window that lands one day short wastes the whole re-run.
+        suggested = math.ceil(density * required * 1.2)
+    return DayCoverage(
+        trading_days=trading_days,
+        days_required=required,
+        bars_used=bars_used,
+        span_days=span_days,
+        bars_per_trading_day=round(density, 2),
+        suggested_bar_count=suggested,
+        max_bar_count=max_bar_count,
+        suggestion_exceeds_limit=suggested is not None and suggested > max_bar_count,
+    )
+
 
 # Daily P&L is streaky: losing days cluster, and clusters are what breach a
 # trailing drawdown. Independent day-by-day resampling erases that clustering and

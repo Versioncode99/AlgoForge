@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 from forge.contracts.models import ApiEnvelope
 from forge.data.live import ProviderError
 from forge.oracles import nautilus_capability
-from forge.prop import load_rules, simulate_prop_paths
+from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
 from forge.prop.engine import MIN_TRADING_DAYS
 from forge.research import ResearchLedger
 from forge.strategy import StrategyLibrary
@@ -79,6 +79,19 @@ def daily_pnl_from_trades(trades: list[dict[str, Any]]) -> tuple[float, ...]:
     for trade in trades:
         buckets[str(trade["exit_time"])[:10]] += float(trade["net_pnl"])
     return tuple(buckets[day] for day in sorted(buckets))
+
+
+def _calendar_span_days(trades: list[dict[str, Any]]) -> int:
+    """Calendar days between the first entry and the last exit."""
+    if not trades:
+        return 0
+    stamps = [str(trade["entry_time"])[:10] for trade in trades]
+    stamps += [str(trade["exit_time"])[:10] for trade in trades]
+    first, last = min(stamps), max(stamps)
+    try:
+        return (date.fromisoformat(last) - date.fromisoformat(first)).days + 1
+    except ValueError:
+        return 0
 
 
 def build_control_router(
@@ -276,18 +289,27 @@ def build_control_router(
             raise HTTPException(422, {"code": "no_backtest", "detail": "run a backtest first"})
 
         daily = daily_pnl_from_trades(latest["trades"])
-        if len(daily) < MIN_TRADING_DAYS:
+        coverage = assess_day_coverage(
+            trading_days=len(daily),
+            bars_used=int(latest.get("bar_count") or 0),
+            span_days=_calendar_span_days(latest["trades"]),
+        )
+        if not coverage.sufficient:
+            # The refusal stands, but it now carries the bar count that would
+            # lift it — the previous message told the user to "backtest over a
+            # longer window" without saying how much longer.
             raise HTTPException(
                 422,
                 {
                     "code": "insufficient_days",
-                    "days_observed": len(daily),
-                    "days_required": MIN_TRADING_DAYS,
-                    "detail": (
-                        f"Only {len(daily)} trading days. Estimating a "
-                        f"{MIN_TRADING_DAYS}+ day evaluation from fewer measures the sample, "
-                        "not the strategy. Backtest over a longer window."
-                    ),
+                    "days_observed": coverage.trading_days,
+                    "days_required": coverage.days_required,
+                    "bars_used": coverage.bars_used,
+                    "span_days": coverage.span_days,
+                    "bars_per_trading_day": coverage.bars_per_trading_day,
+                    "suggested_bar_count": coverage.suggested_bar_count,
+                    "dataset": latest.get("dataset_key"),
+                    "detail": coverage.explain(),
                 },
             )
 

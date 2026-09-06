@@ -19,7 +19,7 @@ def test_health_capabilities_and_seeded_run(tmp_path) -> None:
         run_id = runs["data"][0]["run_id"]
         verdict = client.get(f"/api/v1/verdicts/{run_id}").json()["data"]
         assert verdict["decision"] == "FAIL"
-        assert any(gate["gate"] == "G9" and gate["status"] == "FAIL" for gate in verdict["gates"])
+        assert any(gate["gate"] == "G10" and gate["status"] == "FAIL" for gate in verdict["gates"])
         assert len(verdict["traces"]) == len(verdict["metrics"])
         analysis = client.get(f"/api/v1/analysis/{run_id}").json()["data"]
         assert analysis["risk"]["path_count"] == 240

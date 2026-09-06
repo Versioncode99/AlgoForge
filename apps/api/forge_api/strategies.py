@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from forge.contracts.models import ApiEnvelope
 from forge.data.models import Bar
 from forge.judge import Judge, JudgeInput
+from forge.prop.engine import MAX_BACKTEST_BARS
 from forge.research import (
     ResearchLedger,
     ResearchSplitReceipt,
@@ -43,7 +44,10 @@ class UpdateSourceRequest(BaseModel):
 class BacktestRequest(BaseModel):
     parameters: dict[str, float] | None = None
     dataset: str = "mnq_1m_3mo"
-    bar_count: int = Field(default=30_000, ge=400, le=200_000)
+    # 30k one-minute bars is roughly 21 futures sessions, which can never
+    # reach the 30 distinct trading days a prop evaluation needs. The
+    # default is sized so the downstream prop gate is reachable at all.
+    bar_count: int = Field(default=60_000, ge=400, le=MAX_BACKTEST_BARS)
     seed: int = 20260901
 
 
