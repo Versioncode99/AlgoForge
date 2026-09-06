@@ -19,6 +19,7 @@ from forge_api.opencode import (
     OPENCODE_GO_MODELS,
     OPENCODE_GO_NOT_SERVED,
     OPENCODE_ZEN_DEFAULT_URL,
+    OpenCodeError,
     OpenCodeGoClient,
     resolve_opencode_credential,
     resolve_opencode_standby,
@@ -197,28 +198,32 @@ def test_a_session_id_is_stable_across_calls():
 
 def test_a_401_points_at_the_endpoint_not_just_the_key():
     transport, _ = _capture(401, {"error": {"message": "nope"}})
-    result = OpenCodeGoClient(transport=transport).chat(model="glm-5.3", system="s", prompt="p")
-    assert "UNAUTHORISED" in result["error"]
-    assert "/zen/go/v1" in result["error"]
+    with pytest.raises(OpenCodeError) as caught:
+        OpenCodeGoClient(transport=transport).chat(model="glm-5.3", system="s", prompt="p")
+    assert "UNAUTHORISED" in str(caught.value)
+    assert "/zen/go/v1" in str(caught.value)
 
 
 def test_a_429_explains_the_subscription_allowance():
     transport, _ = _capture(429, {})
-    result = OpenCodeGoClient(transport=transport).chat(model="glm-5.3", system="s", prompt="p")
-    assert "LIMIT_REACHED" in result["error"]
-    assert "Use balance" in result["error"]
+    with pytest.raises(OpenCodeError) as caught:
+        OpenCodeGoClient(transport=transport).chat(model="glm-5.3", system="s", prompt="p")
+    assert "LIMIT_REACHED" in str(caught.value)
+    assert "Use balance" in str(caught.value)
 
 
 def test_a_403_names_the_consent_requirement():
     transport, _ = _capture(403, {})
-    result = OpenCodeGoClient(transport=transport).chat(model="glm-5.3", system="s", prompt="p")
-    assert "CONSENT_REQUIRED" in result["error"]
+    with pytest.raises(OpenCodeError) as caught:
+        OpenCodeGoClient(transport=transport).chat(model="glm-5.3", system="s", prompt="p")
+    assert "CONSENT_REQUIRED" in str(caught.value)
 
 
 def test_only_auth_and_quota_failures_retry_on_the_standby(monkeypatch):
     monkeypatch.setenv("OPENCODE_API_KEY_2", "sk-standby")
     transport, seen = _capture(500, {"error": {"message": "boom"}})
-    OpenCodeGoClient(transport=transport).chat(model="glm-5.3", system="s", prompt="p")
+    with pytest.raises(OpenCodeError):
+        OpenCodeGoClient(transport=transport).chat(model="glm-5.3", system="s", prompt="p")
     assert len(seen) == 1
 
 
@@ -285,3 +290,33 @@ def _absent():
     from forge_api.model_gateway import CredentialMaterial
 
     return CredentialMaterial("", "none")
+
+
+def test_success_reports_token_usage_like_every_other_provider():
+    """The assistant reads input_tokens off the result; omitting it produced a
+    KeyError that reported itself as the provider failing."""
+    transport, _ = _capture(
+        200,
+        {
+            "model": "glm-5.3",
+            "choices": [{"message": {"content": "Tokyo"}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 3},
+        },
+    )
+    result = OpenCodeGoClient(transport=transport).chat(model="glm-5.3", system="s", prompt="p")
+    assert result["input_tokens"] == 11
+    assert result["output_tokens"] == 3
+    assert result["grounded"] is True
+    assert result["route"] == "opencode_go"
+
+
+def test_anthropic_usage_uses_the_other_spelling():
+    transport, _ = _capture(
+        200,
+        {
+            "content": [{"type": "text", "text": "Tokyo"}],
+            "usage": {"input_tokens": 7, "output_tokens": 2},
+        },
+    )
+    result = OpenCodeGoClient(transport=transport).chat(model="qwen3.8-max", system="s", prompt="p")
+    assert (result["input_tokens"], result["output_tokens"]) == (7, 2)

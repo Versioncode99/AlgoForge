@@ -67,6 +67,15 @@ _REASONING_MARKERS = (
 
 Shape = Literal["chat", "messages", "responses"]
 
+
+class OpenCodeError(RuntimeError):
+    """A refusal from the gateway, carrying the status that caused it."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 # Probed against the Go endpoint on 2026-09-06. Latency is a single cold
 # measurement, useful for ranking rather than as a promise.
 #
@@ -502,12 +511,18 @@ class OpenCodeGoClient:
                 )
                 last = response
                 if response.status_code == 200:
+                    payload = response.json()
+                    used_in, used_out = self._usage(shape, payload)
                     return {
-                        "model": model,
-                        "answer": self._clean(self._extract(shape, response.json())),
+                        "model": payload.get("model", model),
+                        "answer": self._clean(self._extract(shape, payload)),
                         "error": None,
                         "status_code": 200,
                         "shape": shape,
+                        "grounded": True,
+                        "route": "opencode_go",
+                        "input_tokens": used_in,
+                        "output_tokens": used_out,
                         "used_standby_key": index > 0,
                     }
                 # Only a rejected credential or an exhausted quota could be
@@ -515,13 +530,11 @@ class OpenCodeGoClient:
                 if response.status_code not in {401, 429}:
                     break
 
-        return {
-            "model": model,
-            "answer": "",
-            "error": self._describe(last),
-            "status_code": None if last is None else last.status_code,
-            "shape": shape,
-        }
+        # Raise rather than return a partial dict. Callers share one contract
+        # with the other providers and read `input_tokens` off the result; a
+        # dict without it produced a `KeyError: 'input_tokens'` that reported
+        # itself as the provider failing, hiding the real cause completely.
+        raise OpenCodeError(self._describe(last), None if last is None else last.status_code)
 
     def _request(
         self, shape: Shape, model: str, system: str, prompt: str, max_tokens: int
@@ -577,6 +590,27 @@ class OpenCodeGoClient:
             return "".join(parts) or str(payload.get("output_text", ""))
         except (KeyError, IndexError, TypeError, AttributeError):
             return ""
+
+    @staticmethod
+    def _usage(shape: Shape, payload: Any) -> tuple[int, int]:
+        """Token counts, under whichever names this route uses.
+
+        OpenAI-shaped bodies say prompt/completion; Anthropic-shaped ones say
+        input/output. Reporting zero would silently under-count the budget, so
+        both spellings are read.
+        """
+        usage = payload.get("usage") or {}
+        if not isinstance(usage, dict):
+            return 0, 0
+        if shape == "chat":
+            return (
+                int(usage.get("prompt_tokens", 0) or 0),
+                int(usage.get("completion_tokens", 0) or 0),
+            )
+        return (
+            int(usage.get("input_tokens", 0) or 0),
+            int(usage.get("output_tokens", 0) or 0),
+        )
 
     @staticmethod
     def _describe(response: httpx.Response | None) -> str:
