@@ -40,7 +40,10 @@
   --s5: #7ee787; --s6: #f778ba; --s7: #a5a5a5; --s8: #e3b341;
 
   /* Type */
-  --font-ui: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Plex Sans and Plex Mono are one superfamily, so the pairing is structural
+     rather than a mood choice. Manrope was replaced: it is one of the faces
+     every generated interface reaches for. */
+  --font-ui: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
 
   --fs-nano: 9px;
@@ -66,4 +69,26 @@
   --logbar-h: 132px;
 
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* Out-quint for things arriving, a softer curve for things resizing. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  --t-fast: 110ms;
+  --t: 190ms;
+  --t-slow: 340ms;
+
+  /* Verdict states. INCONCLUSIVE must never read as FAIL: the judge's whole
+     design rests on "not measured" being different from "measured and failed",
+     and painting both red made the gate ladder unreadable. */
+  --verdict-pass: #3ddc97;
+  --verdict-fail: #f2615c;
+  --verdict-unknown: #e0a942;
+  --verdict-pass-wash: rgba(61, 220, 151, 0.09);
+  --verdict-fail-wash: rgba(242, 97, 92, 0.09);
+  --verdict-unknown-wash: rgba(224, 169, 66, 0.1);
+
+  /* Evidence tier is ranked, so it is a colour before it is a word. */
+  --tier-holdout: #bc8cff;
+  --tier-oos: #3ddc97;
+  --tier-insample: #58a6ff;
+  --tier-synthetic: #6e7681;
 }

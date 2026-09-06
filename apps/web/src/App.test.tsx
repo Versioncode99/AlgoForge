@@ -6,21 +6,6 @@ import { App } from './App'
 
 vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="chart" /> }))
 
-const run = { run_id: 'run_1', tier: 'TRUTH_OOS', labels: ['SAMPLE_DATA'], created_at: '2026-09-01' }
-const verdict = {
-  verdict_id: 'v1', decision: 'PASS', grade: 'B',
-  dimensions: { edge: 60, robustness: 70, risk: 80, sample: 20 },
-  metrics: { net_pnl: 500, win_rate: 0.55, profit_factor: 1.4, max_drawdown: 200 },
-  gates: [{ gate: 'G0', name: 'Data', status: 'PASS', finding: 'Passed' }], labels: [],
-}
-const analysis = {
-  verdict,
-  regimes: [{ name: 'TREND', trade_count: 9, net_pnl: 100, confidence: 'LOW' }],
-  risk: {
-    equity_paths: [[1, 2]], median_path: [1], p05_path: [0], p95_path: [2], path_count: 240,
-    terminal_median: 500, loss_probability: 0.1, var_95: 200, cvar_95: 300, warnings: [],
-  },
-}
 const summary = {
   strategy_count: 2, backtest_count: 3, template_count: 3,
   families: ['breakout'], strategies_path: 'F:/AlgoForge/strategies', data_gate: 'SYNTHETIC',
@@ -30,12 +15,20 @@ const engine = {
   running: false, started_at: null, cycles: 0, created: 0, backtested: 0, judged: 0,
   passed: 0, rejected: 0, skipped_by_memory: 0, compute_saved: 0,
   last_error: null, current_stage: 'idle',
-  config: { dataset: 'mnq_1m_3mo', cycle_seconds: 6, max_strategies: 60, max_bars: 30000 },
+  config: { dataset: 'nq_1m_16y', cycle_seconds: 6, max_strategies: 60, max_bars: 30000 },
 }
 const datasetList = [
-  { key: 'mnq_1m_3mo', label: 'MNQ · 1m · 3 months', symbol: 'MNQ', interval: '1m',
-    provider: 'databento', authority: 'TRUTH', is_real: true, cost_note: '~$0.33',
-    loaded: true, bar_count: 90029 },
+  {
+    key: 'nq_1m_16y', label: 'NQ · 1m · 16 years', symbol: 'NQ', interval: '1m',
+    provider: 'databento-batch', authority: 'TRUTH', is_real: true, is_imported: true,
+    available: true, cost_note: 'imported', loaded: true, bar_count: 4824845,
+    span_years: 16.17, bars_per_year: 298444,
+    ranges: [
+      { years: 1, label: '1 year', bars: 298444, available: true },
+      { years: 3, label: '3 years', bars: 895332, available: true },
+      { years: 16, label: 'Max', bars: 4775104, available: true },
+    ],
+  },
 ]
 const research = {
   families: [{ key: 'orb', name: 'Opening range breakout', family: 'breakout', variant_count: 0,
@@ -59,15 +52,11 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     : url.includes('/activity') ? activity
     : url.endsWith('/strategies') ? []
     : url.endsWith('/templates') ? []
-    : url.endsWith('/runs') ? [run]
-    : url.includes('/analysis/') ? analysis
     : url.endsWith('/prop/rules') ? []
-    : url.includes('/agents/') ? { claims: [], roles: [], dissent_present: true, numeric_verdict_locked: true }
-    : { automatic_live_changes: false, paper_only: true, release_count: 0, candidate: { repository: 'owner/repo', lane: 'CLEAN_ROOM', proposed_features: [] } }
+    : {}
   return { ok: true, text: async () => JSON.stringify({ data }) } as unknown as Response
 })
 
-// vitest runs without globals, so RTL's automatic cleanup never registers itself.
 afterEach(cleanup)
 
 const renderApp = () => {
@@ -79,28 +68,43 @@ test('overview is the engine control centre and carries the paper-only label', a
   renderApp()
   expect(await screen.findByText(/autonomous engine/i)).toBeInTheDocument()
   expect(await screen.findByRole('button', { name: /start engine/i })).toBeInTheDocument()
-  expect(screen.getByText(/paper only · real data is not oos/i)).toBeInTheDocument()
+  expect(screen.getByText(/paper only · fills are modelled/i)).toBeInTheDocument()
 })
 
-test('navigates to the agent boundary', async () => {
+test('the fixture-driven sections are gone', async () => {
+  // Verdict, Regimes, Risk & Monte Carlo, Agents and Evolution all rendered one
+  // seeded run, so nothing on them could be acted on. Their absence is the
+  // feature; this test stops them coming back by accident.
   renderApp()
   await screen.findByText(/autonomous engine/i)
-  fireEvent.click(screen.getByRole('button', { name: 'Agents' }))
-  expect(await screen.findByText(/agents explain; the judge decides/i)).toBeInTheDocument()
+  for (const gone of ['Verdict', 'Regimes', 'Risk & Monte Carlo', 'Agents', 'Evolution']) {
+    expect(screen.queryByRole('button', { name: gone })).not.toBeInTheDocument()
+  }
 })
 
-test('exposes the strategy library as a first-class section', async () => {
+test('every remaining tab reaches a section that renders', async () => {
+  renderApp()
+  await screen.findByText(/autonomous engine/i)
+  for (const tab of ['Research Lab', 'Strategies', 'Prop Firm', 'Console', 'Settings']) {
+    fireEvent.click(screen.getByRole('button', { name: tab }))
+    expect(await screen.findByRole('heading', { name: tab, level: 1 })).toBeInTheDocument()
+    expect(screen.getByText(/paper only · fills are modelled/i)).toBeInTheDocument()
+  }
+})
+
+test('strategies offers a data set and a range before running anything', async () => {
   renderApp()
   await screen.findByText(/autonomous engine/i)
   fireEvent.click(screen.getByRole('button', { name: 'Strategies' }))
-  expect(await screen.findByText(/the code this system runs/i)).toBeInTheDocument()
+  expect(await screen.findByText(/select a strategy/i)).toBeInTheDocument()
 })
 
-test('prop firm lets you pick a strategy rather than scoring a fixture', async () => {
+test('prop firm opens on the matrix, not a single-strategy form', async () => {
   renderApp()
   await screen.findByText(/autonomous engine/i)
   fireEvent.click(screen.getByRole('button', { name: 'Prop Firm' }))
-  expect(await screen.findByText(/race the target against the loss boundary/i)).toBeInTheDocument()
+  expect(await screen.findByRole('button', { name: /run the matrix/i })).toBeInTheDocument()
+  expect(screen.getByText(/simulates every strategy that has a long enough backtest/i)).toBeInTheDocument()
 })
 
 test('research lab distinguishes untested cells from zero performance', async () => {

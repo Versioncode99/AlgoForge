@@ -125,9 +125,12 @@ export type EngineStatus = {
   last_error: string | null; current_stage: string
   config: { dataset: string; cycle_seconds: number; max_strategies: number; max_bars: number }
 }
+export type RangeOption = { years: number; label: string; bars: number; available: boolean }
 export type DatasetInfo = {
   key: string; label: string; symbol: string; interval: string; provider: string
   authority: string; is_real: boolean; cost_note: string; loaded: boolean; bar_count: number
+  is_imported: boolean; available: boolean
+  span_years: number; bars_per_year: number; ranges: RangeOption[]
 }
 export type PropResult = {
   simulation_id: string; strategy_id: string; rule: Rule
@@ -207,4 +210,43 @@ export type OracleInfo = {
 export type AskResult = {
   answer: string; model: string; grounded: boolean; note?: string
   input_tokens?: number; output_tokens?: number
+}
+
+/* ── Background jobs ─────────────────────────────────────────────────────── */
+export type Job = {
+  job_id: string; kind: string; label: string
+  status: 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED'
+  total: number; done: number; note: string; fraction: number
+  elapsed_seconds: number; eta_seconds: number | null
+  error: string | null; created_at: number
+  result?: unknown
+}
+export type BacktestJobResult = {
+  result: BacktestResult
+  meta: {
+    dataset: string; provider: string; is_real: boolean; bar_count: number
+    trade_count: number; evidence_tier: string
+    development_backtest_id?: string; development_net_pnl?: number
+    development_trade_count?: number
+  }
+}
+
+/* ── Prop matrix ─────────────────────────────────────────────────────────── */
+export type MatrixCell = {
+  strategy_id: string; strategy_name: string
+  rule_id: string; rule_name: string; provider: string; phase: string
+  pass_rate: number; interval_low: number; interval_high: number
+  risk_of_ruin: number; mean_payout: number; median_terminal: number
+  var_95: number; cvar_95: number; trading_days: number; verified: boolean
+}
+export type MatrixSkip = {
+  strategy_id: string; name: string; reason: string
+  days_observed?: number; days_required?: number; detail?: string
+}
+export type PropMatrix = {
+  cells: MatrixCell[]
+  strategies: { strategy_id: string; name: string; trading_days: number }[]
+  rules: { rule_id: string; display_name: string; provider: string; phase: string; verified: boolean }[]
+  skipped: MatrixSkip[]
+  paths: number
 }

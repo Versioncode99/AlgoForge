@@ -1,0 +1,301 @@
+/* The workspace layer: control strips, dense tables, the job bar, the matrix.
+
+   Loaded after app.css so this is the authority where the two overlap. The
+   governing decision is that a *table* is the primary container here, not a
+   card. This application compares things — strategies against each other, long
+   against short, one rule set against another — and a grid of cards cannot
+   express a comparison. Cards are for a single object with a picture. */
+
+/* ── the job bar: the one authored moment ─────────────────────────────────── */
+
+.jobbar {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  margin-bottom: var(--sp-3);
+  animation: af-expand var(--t) var(--ease-out) both;
+}
+.jobbar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--brand-wash);
+  border-right: 1px solid var(--brand-dim);
+  transition: width 420ms var(--ease-soft);
+}
+/* The sweep only exists while work is genuinely in flight. */
+.jobbar-sweep {
+  position: absolute; inset: 0; width: 30%;
+  background: linear-gradient(90deg, transparent, rgba(61, 220, 151, 0.16), transparent);
+  animation: af-sweep 1.5s var(--ease-soft) infinite;
+}
+.jobbar[data-status="done"] .jobbar-fill { background: var(--verdict-pass-wash); }
+.jobbar[data-status="failed"] .jobbar-fill { background: var(--verdict-fail-wash); border-right-color: var(--fail); }
+.jobbar[data-status="cancelled"] .jobbar-fill { background: var(--bg-2); }
+
+.jobbar-body {
+  position: relative;
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-xs);
+}
+.jobbar-icon { display: grid; place-items: center; color: var(--brand); }
+.jobbar-label { color: var(--fg-0); font-weight: 500; white-space: nowrap; }
+.jobbar-note { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--fs-nano); }
+.jobbar-body .spacer { flex: 1; }
+.jobbar-metric { display: flex; align-items: baseline; gap: 3px; color: var(--fg-1); white-space: nowrap; }
+.jobbar-metric em { font-style: normal; color: var(--fg-3); font-size: var(--fs-nano); }
+.jobbar-btn {
+  border: 1px solid var(--line-strong); background: var(--bg-2); color: var(--fg-1);
+  border-radius: var(--r-sm); padding: 3px 10px; font-size: var(--fs-nano);
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.jobbar-btn:hover { border-color: var(--fail); color: var(--fail); }
+.jobbar-error {
+  position: relative; padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--line); color: var(--fail);
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+}
+
+/* ── control strip ────────────────────────────────────────────────────────── */
+
+.control-strip {
+  display: flex; align-items: flex-end; flex-wrap: wrap; gap: var(--sp-4);
+  padding: var(--sp-3);
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--bg-1);
+  margin-bottom: var(--sp-3);
+}
+.ctl { display: grid; gap: 5px; }
+.ctl > span {
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .1em; text-transform: uppercase; color: var(--fg-2);
+}
+.ctl select {
+  background: var(--bg-2); border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm); padding: 5px 9px; font-size: var(--fs-sm);
+  min-width: 190px; transition: border-color var(--t-fast) var(--ease);
+}
+.ctl select:hover:not(:disabled) { border-color: var(--brand-dim); }
+.ctl select:disabled { opacity: 0.5; }
+
+.range-buttons { display: flex; gap: 1px; background: var(--line); border: 1px solid var(--line-strong); border-radius: var(--r-sm); overflow: hidden; }
+.range-buttons button {
+  background: var(--bg-2); border: 0; color: var(--fg-1);
+  padding: 5px 11px; font-size: var(--fs-xs); white-space: nowrap;
+}
+.range-buttons button:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-0); }
+.range-buttons button.active { background: var(--brand-dim); color: #fff; }
+.range-buttons button:disabled { color: var(--fg-3); cursor: not-allowed; }
+
+.ctl-readout { display: grid; gap: 2px; margin-left: auto; text-align: right; }
+.ctl-readout b { font-size: var(--fs-lg); color: var(--fg-0); }
+.ctl-readout span { font-size: var(--fs-xs); color: var(--fg-2); }
+.ctl-readout .sub { font-size: var(--fs-nano); color: var(--fg-3); }
+
+/* ── headline stats ───────────────────────────────────────────────────────── */
+
+.headline-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+  gap: 1px; background: var(--line);
+  border: 1px solid var(--line); border-radius: var(--r);
+  overflow: hidden; margin-bottom: var(--sp-3);
+}
+.headline-row .stat-tile { background: var(--bg-1); padding: var(--sp-3); }
+.stat-tile[data-tone="good"] .stat-value { color: var(--verdict-pass); }
+.stat-tile[data-tone="bad"] .stat-value { color: var(--verdict-fail); }
+.stat-tile[data-tone="unknown"] .stat-value { color: var(--verdict-unknown); }
+.stat-tile[data-wide="yes"] { grid-column: span 2; }
+
+/* ── pills ────────────────────────────────────────────────────────────────── */
+
+.verdict-pill, .tier-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .09em; padding: 2px 7px; border-radius: 2px;
+  border: 1px solid currentColor; white-space: nowrap;
+}
+.verdict-pill[data-tone="good"] { color: var(--verdict-pass); background: var(--verdict-pass-wash); }
+.verdict-pill[data-tone="bad"] { color: var(--verdict-fail); background: var(--verdict-fail-wash); }
+/* Amber, never red: "not measured" is not a failure. */
+.verdict-pill[data-tone="unknown"] { color: var(--verdict-unknown); background: var(--verdict-unknown-wash); }
+
+.tier-pill { border-style: dashed; }
+.tier-pill[data-tone="holdout"] { color: var(--tier-holdout); }
+.tier-pill[data-tone="oos"] { color: var(--tier-oos); }
+.tier-pill[data-tone="insample"] { color: var(--tier-insample); }
+.tier-pill[data-tone="synthetic"] { color: var(--tier-synthetic); }
+
+/* ── panels and empty states ──────────────────────────────────────────────── */
+
+.panel-head {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+.panel-head h2 { font-size: var(--fs-sm); font-weight: 600; color: var(--fg-0); }
+.panel-meta {
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  color: var(--fg-2); letter-spacing: .06em; text-transform: uppercase;
+}
+.panel-head > .side-switch { margin-left: auto; }
+
+.empty-state {
+  border: 1px dashed var(--line-strong); border-radius: var(--r);
+  background: var(--bg-1); padding: var(--sp-8) var(--sp-6);
+  display: grid; gap: var(--sp-2); justify-items: start; max-width: 720px;
+}
+.empty-state b { font-size: var(--fs-lg); color: var(--fg-0); }
+.empty-state p { font-size: var(--fs-sm); color: var(--fg-1); line-height: 1.65; }
+.empty-state .btn { margin-top: var(--sp-2); }
+
+/* ── switches ─────────────────────────────────────────────────────────────── */
+
+.side-switch { display: flex; gap: 1px; background: var(--line); border-radius: var(--r-sm); overflow: hidden; }
+.side-switch button {
+  background: var(--bg-1); border: 0; color: var(--fg-2);
+  padding: 3px 10px; font-size: var(--fs-nano);
+  letter-spacing: .08em; text-transform: uppercase;
+}
+.side-switch button:hover { background: var(--bg-3); color: var(--fg-0); }
+.side-switch button.active { background: var(--bg-raised); color: var(--brand); }
+
+/* ── tables ───────────────────────────────────────────────────────────────── */
+
+.table-scroll { overflow: auto; max-height: 620px; }
+.data-table, .stats-table, .matrix-table {
+  width: 100%; border-collapse: collapse; font-size: var(--fs-xs);
+}
+.data-table th, .stats-table th, .matrix-table th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--bg-2); color: var(--fg-2);
+  font-weight: 500; text-align: left;
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .08em; text-transform: uppercase;
+  padding: 6px var(--sp-3); border-bottom: 1px solid var(--line-strong);
+  white-space: nowrap;
+}
+.data-table td, .stats-table td, .matrix-table td {
+  padding: 5px var(--sp-3); border-bottom: 1px solid var(--line);
+  color: var(--fg-1);
+}
+.data-table tbody tr:hover, .matrix-table tbody tr:hover { background: var(--bg-2); }
+.num, th.num, td.num { text-align: right; }
+.data-table .sub, .stats-table .sub { color: var(--fg-2); }
+.pad { padding: var(--sp-2) var(--sp-3); }
+
+/* The statistics summary: row labels are the anchor, so they stay left and
+   quiet while the three value columns carry the comparison. */
+.stats-table tbody th {
+  position: static; background: transparent; text-transform: none;
+  letter-spacing: 0; font-family: var(--font-ui); font-size: var(--fs-xs);
+  color: var(--fg-1); font-weight: 400; border-bottom: 1px solid var(--line);
+  width: 40%;
+}
+.stats-table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.012); }
+.stats-table .hint {
+  display: inline-block; margin-left: 5px; width: 12px; height: 12px;
+  border: 1px solid var(--line-strong); border-radius: 50%;
+  font-size: 8px; line-height: 10px; text-align: center;
+  color: var(--fg-3); font-style: normal; cursor: help;
+}
+
+.side-tag {
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  padding: 1px 5px; border-radius: 2px; letter-spacing: .06em;
+}
+.side-tag.long { color: var(--tier-oos); background: var(--verdict-pass-wash); }
+.side-tag.short { color: var(--s4); background: rgba(255, 166, 87, 0.1); }
+
+.period-bar { position: relative; height: 9px; width: 100%; min-width: 110px; background: var(--bg-2); border-radius: 1px; }
+/* A period that made almost nothing still has to be visible as a period, so
+   the bar has a floor rather than collapsing to zero width. */
+.period-bar i { position: absolute; inset: 0 auto 0 0; height: 100%; border-radius: 1px; min-width: 2px; }
+.period-bar .pos { background: var(--verdict-pass); opacity: .75; }
+.period-bar .neg { background: var(--verdict-fail); opacity: .75; }
+
+/* ── the matrix ───────────────────────────────────────────────────────────── */
+
+.matrix-table .sticky-col {
+  position: sticky; left: 0; z-index: 3;
+  background: var(--bg-1); text-align: left;
+  font-family: var(--font-ui); text-transform: none; letter-spacing: 0;
+  font-size: var(--fs-xs); color: var(--fg-0); font-weight: 500;
+  border-right: 1px solid var(--line-strong); min-width: 220px;
+}
+.matrix-table thead .sticky-col { z-index: 4; background: var(--bg-2); }
+.rule-head { display: block; color: var(--fg-1); text-transform: none; letter-spacing: 0; font-size: var(--fs-xs); }
+.matrix-table thead em { font-style: normal; color: var(--fg-3); font-size: var(--fs-nano); }
+.matrix-cell { padding: 3px !important; }
+.cell-empty { color: var(--fg-3); text-align: center; }
+
+/* Each cell is a small horizontal gauge: the fill is the pass rate, so a row
+   can be read as a shape before any number is parsed. */
+.cell {
+  position: relative; display: block; width: 100%;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-2); padding: 6px 8px; text-align: right;
+  color: var(--fg-0); overflow: hidden;
+}
+.cell-fill {
+  position: absolute; inset: 0 auto 0 0; width: var(--fill);
+  background: var(--neutral); opacity: .22;
+}
+.cell[data-tone="good"] .cell-fill { background: var(--verdict-pass); }
+.cell[data-tone="mid"] .cell-fill { background: var(--verdict-unknown); }
+.cell[data-tone="bad"] .cell-fill { background: var(--verdict-fail); }
+.cell span { position: relative; font-size: var(--fs-xs); }
+.cell:hover { border-color: var(--line-strong); }
+.cell.active { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand-dim); }
+
+/* ── gates ────────────────────────────────────────────────────────────────── */
+
+.gate { display: grid; grid-template-columns: 34px 96px 1fr auto; gap: var(--sp-3); align-items: start; }
+.gate .observed { color: var(--fg-1); font-size: var(--fs-xs); align-self: center; white-space: nowrap; }
+
+/* ── strategy rail ────────────────────────────────────────────────────────── */
+
+.strat-item-foot { display: flex; align-items: center; gap: var(--sp-2); margin-top: 5px; }
+.strat-item-foot em { font-style: normal; font-family: var(--font-mono); font-size: var(--fs-nano); margin-left: auto; }
+
+.pane-body { min-height: 260px; }
+.prose { padding: var(--sp-4); font-size: var(--fs-sm); line-height: 1.7; color: var(--fg-1); max-width: 74ch; }
+
+@media (max-width: 900px) {
+  .control-strip { gap: var(--sp-3); }
+  .ctl select { min-width: 0; width: 100%; }
+  .ctl-readout { margin-left: 0; text-align: left; }
+  .jobbar-label, .jobbar-note { display: none; }
+}
+
+/* Containment.
+
+   Grid and flex children default to `min-width: auto`, which means a wide table
+   pushes its whole column open instead of scrolling inside it. On a 375px
+   viewport the library table was 729px wide and dragged the entire main column
+   with it. The scroller has to be the table, not the page. */
+.stack, .panel, .strat-detail, .pane-body, .prop-workspace { min-width: 0; }
+.engine, .engine-bar, .engine-state, .field { min-width: 0; }
+.table-scroll { max-width: 100%; }
+
+/* A select sizes itself to its longest option unless told otherwise, and
+   "NQ · 1m · 16 years · databento-batch · imported" is 383px of it. */
+.field select, .ctl select { max-width: 100%; text-overflow: ellipsis; }
+
+@media (max-width: 720px) {
+  .control-strip { flex-direction: column; align-items: stretch; }
+  .control-strip .ctl select { width: 100%; min-width: 0; }
+  .headline-row { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  .range-buttons { flex-wrap: wrap; }
+  .strat-layout { grid-template-columns: 1fr; }
+  /* The rail becomes a short scrollable strip rather than half the screen. */
+  .strat-list { max-height: 260px; }
+  .matrix-table .sticky-col { min-width: 150px; }
+  .jobbar-body { flex-wrap: wrap; gap: var(--sp-2); }
+  .empty-state { padding: var(--sp-5) var(--sp-4); }
+  /* Title, meta and a switch do not fit on one 375px line. */
+  .panel-head { flex-wrap: wrap; gap: var(--sp-2); }
+  .panel-head > .side-switch { margin-left: 0; }
+}

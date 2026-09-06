@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bot, Check, KeyRound, RefreshCw, Send, Server, X } from 'lucide-react'
 import { useState } from 'react'
 import { getJson, patchJson, postJson } from '../api'
-import type { AskResult, OracleInfo, SettingsPayload } from '../types'
+import { PanelHead, Stat } from '../components/ui'
+import type { AskResult, Evolution, OracleInfo, SettingsPayload } from '../types'
 
 export function SettingsView() {
   const qc = useQueryClient()
@@ -207,7 +208,47 @@ export function SettingsView() {
           </div>
         </div>
       </div>
+
+      <UpdatesPanel />
     </section>
+  )
+}
+
+/** Updates and provenance.
+ *
+ * This used to be a top-level tab, which put a read-only release checker on the
+ * same footing as the strategy workspace. It is a settings concern: nothing on
+ * it is part of research, and nothing on it changes without a person acting.
+ */
+function UpdatesPanel() {
+  const evolution = useQuery({
+    queryKey: ['evolution'],
+    queryFn: () => getJson<Evolution>('/evolution/overview'),
+  })
+  const e = evolution.data
+  return (
+    <div className="panel af-panel-in">
+      <PanelHead title="Updates and provenance" meta="research intake only" />
+      <div className="headline-row">
+        <Stat label="Automatic live changes" value={<span className="mono">NEVER</span>} tone="good"
+          note="no code path can promote itself without a person" />
+        <Stat label="Paper only" value={<span className="mono">{e?.paper_only === false ? 'NO' : 'YES'}</span>}
+          tone={e?.paper_only === false ? 'bad' : 'good'} note="no live-order path exists in the repo" />
+        <Stat label="Releases tracked" value={<span className="mono">{e?.release_count ?? 0}</span>}
+          note="signed build records on disk" />
+        <Stat label="Candidate lane" value={<span className="mono">{e?.candidate?.lane ?? '—'}</span>}
+          tone="unknown" note="discovered references stay quarantined until reviewed" />
+      </div>
+      {e?.candidate && (
+        <div className="panel-body">
+          <p className="sub">
+            Watching <b>{e.candidate.repository}</b> as a research reference. Features it proposes
+            ({e.candidate.proposed_features.join(', ') || 'none listed'}) are read, never merged
+            automatically.
+          </p>
+        </div>
+      )}
+    </div>
   )
 }
 
