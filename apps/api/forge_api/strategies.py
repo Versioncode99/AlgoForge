@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -7,12 +8,16 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from forge.contracts.models import ApiEnvelope
 from forge.data.models import Bar
-from forge.judge import Judge, JudgeInput
+from forge.judge import BacktestOverfitting, Judge, JudgeInput
 from forge.prop.engine import MAX_BACKTEST_BARS
 from forge.research import (
+    PathDistribution,
     ResearchLedger,
     ResearchSplitReceipt,
+    ValidationEvidence,
+    WalkForwardResult,
     chronological_split,
+    run_validation,
     source_data_hash,
 )
 from forge.strategy import (
@@ -51,11 +56,170 @@ class BacktestRequest(BaseModel):
     seed: int = 20260901
 
 
+class ValidationRequest(BaseModel):
+    dataset: str = "mnq_1m_3mo"
+    bar_count: int = Field(default=60_000, ge=2_000, le=MAX_BACKTEST_BARS)
+    seed: int = 20260901
+    parameters: dict[str, float] | None = None
+    folds: int = Field(default=6, ge=2, le=20)
+    groups: int = Field(default=6, ge=3, le=12)
+    test_groups: int = Field(default=2, ge=1, le=5)
+    blocks: int = Field(default=8, ge=2, le=16)
+    # Every trial is a full backtest, so the grid is capped rather than
+    # allowed to grow as the product of every parameter's range.
+    max_trials: int = Field(default=16, ge=2, le=120)
+
+
 class SweepRequest(BaseModel):
     parameter: str
     dataset: str = "mnq_1m_3mo"
     bar_count: int = Field(default=12_000, ge=400, le=60_000)
     seed: int = 20260901
+
+
+def validation_grid(parameters: tuple[Any, ...], max_trials: int) -> dict[str, list[float]]:
+    """A coarse but even grid over the spec's own declared ranges.
+
+    Every trial is a full backtest, so the full cartesian product of each
+    parameter's low..high range is not affordable. Each range is subsampled
+    evenly and the widest axis is thinned first until the product fits, which
+    keeps the corners of the space -- where overfitting shows up -- rather than
+    clustering around the defaults.
+    """
+    candidates: dict[str, list[float]] = {}
+    for spec in parameters:
+        low, high, step = float(spec.low), float(spec.high), float(spec.step)
+        if step <= 0 or high <= low:
+            continue
+        values: list[float] = []
+        value = low
+        while value <= high + 1e-9:
+            values.append(round(value, 10))
+            value += step
+        if len(values) > 1:
+            candidates[spec.name] = values
+    if not candidates:
+        return {}
+
+    per_axis = max(2, int(max_trials ** (1.0 / len(candidates))))
+    grid = {
+        name: _subsample(values, min(per_axis, len(values))) for name, values in candidates.items()
+    }
+    while _product(grid) > max_trials:
+        widest = max(grid, key=lambda name: len(grid[name]))
+        if len(grid[widest]) <= 2:
+            # Cannot thin further without dropping an axis entirely. Keep at
+            # least one axis so there is still a selection to audit.
+            if len(grid) <= 1:
+                break
+            del grid[widest]
+            continue
+        grid[widest] = _subsample(candidates[widest], len(grid[widest]) - 1)
+    return grid
+
+
+def _subsample(values: list[float], count: int) -> list[float]:
+    """`count` values spread evenly across the range, endpoints always kept."""
+    if count >= len(values):
+        return list(values)
+    if count <= 1:
+        return [values[0]]
+    step = (len(values) - 1) / (count - 1)
+    return [values[round(index * step)] for index in range(count)]
+
+
+def _product(grid: dict[str, list[float]]) -> int:
+    total = 1
+    for values in grid.values():
+        total *= len(values)
+    return total
+
+
+def per_bar_pnl(result: Any, bar_count: int) -> tuple[float, ...]:
+    """Place each trade's net P&L on the bar it closed on.
+
+    CSCV compares configurations on one shared time grid, so a per-trade series
+    is the wrong shape: two configurations that took different numbers of
+    trades would not be alignable at all.
+    """
+    series = [0.0] * bar_count
+    for trade in result.trades:
+        index = int(trade.exit_index)
+        if 0 <= index < bar_count:
+            series[index] += float(trade.net_pnl)
+    return tuple(series)
+
+
+def store_evidence(root: Path, strategy_id: str, evidence: ValidationEvidence) -> Path:
+    """Persist evidence so the judge can read it without re-running the stack."""
+    directory = root / "data" / "validation"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{strategy_id}.json"
+    path.write_text(
+        json.dumps(
+            {
+                **evidence.as_metadata(),
+                "trial_sharpes": list(evidence.trial_sharpes),
+                "overfitting": {
+                    "probability": evidence.overfitting.probability,
+                    "splits": evidence.overfitting.splits,
+                    "trials": evidence.overfitting.trials,
+                    "blocks": evidence.overfitting.blocks,
+                    "logits": list(evidence.overfitting.logits),
+                    "median_logit": evidence.overfitting.median_logit,
+                },
+                "walk_forward": vars(evidence.walk_forward),
+                "paths": vars(evidence.paths),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def load_evidence(root: Path, strategy_id: str) -> dict[str, Any] | None:
+    """Read stored evidence, or None when validation has never been run."""
+    path = root / "data" / "validation" / f"{strategy_id}.json"
+    if not path.exists():
+        return None
+    try:
+        payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # Unreadable evidence must read as absent, never as favourable.
+        return None
+    return payload
+
+
+def judge_evidence(root: Path, strategy_id: str) -> dict[str, Any]:
+    """Rehydrate stored validation evidence as JudgeInput keyword arguments.
+
+    Anything missing or malformed comes back absent rather than defaulted, so a
+    corrupted file downgrades the verdict to INCONCLUSIVE instead of quietly
+    supplying favourable numbers.
+    """
+    payload = load_evidence(root, strategy_id)
+    if payload is None:
+        return {}
+    try:
+        overfitting = payload["overfitting"]
+        walk = payload["walk_forward"]
+        paths = payload["paths"]
+        return {
+            "trial_sharpes": tuple(float(value) for value in payload["trial_sharpes"]),
+            "overfitting": BacktestOverfitting(
+                probability=float(overfitting["probability"]),
+                splits=int(overfitting["splits"]),
+                trials=int(overfitting["trials"]),
+                blocks=int(overfitting["blocks"]),
+                logits=tuple(float(value) for value in overfitting["logits"]),
+                median_logit=float(overfitting["median_logit"]),
+            ),
+            "walk_forward": WalkForwardResult(**walk),
+            "paths": PathDistribution(**paths),
+        }
+    except (KeyError, TypeError, ValueError):
+        return {}
 
 
 def build_router(
@@ -365,6 +529,122 @@ def build_router(
             },
         )
 
+    @router.post("/strategies/{strategy_id}/validate", response_model=ApiEnvelope[dict[str, Any]])
+    def validate_strategy(strategy_id: str, body: ValidationRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Run walk-forward, CSCV and CPCV, and store the evidence for the judge.
+
+        Until this has run, gates G5 and G11-G13 have nothing to read and the
+        verdict is INCONCLUSIVE by design.
+        """
+        try:
+            spec = library.get_spec(strategy_id)
+            module = library.load_module(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(404, {"code": "strategy_not_found"}) from exc
+        except GuardViolation as exc:
+            raise HTTPException(422, {"code": "guard_violation", "detail": str(exc)}) from exc
+
+        grid = validation_grid(spec.parameters, body.max_trials)
+        if not grid:
+            raise HTTPException(
+                422,
+                {
+                    "code": "no_sweepable_parameters",
+                    "detail": (
+                        "Validation audits how a parameter search behaves. This strategy "
+                        "declares no parameter with a usable low/high/step range, so there "
+                        "is no selection to audit."
+                    ),
+                },
+            )
+
+        try:
+            bars, is_real, provider = _bars(body)  # type: ignore[arg-type]
+        except Exception as exc:
+            raise HTTPException(422, {"code": "data_unavailable", "detail": str(exc)}) from exc
+        if not is_real:
+            raise HTTPException(
+                422,
+                {
+                    "code": "real_data_required",
+                    "detail": (
+                        "Synthetic bars carry no edge by construction, so validating against "
+                        "them measures the generator, not the strategy."
+                    ),
+                },
+            )
+
+        code_hash = library.code_hash(strategy_id)
+
+        def backtest(slice_bars: Any, parameters: Any) -> tuple[float, ...]:
+            result = run_backtest(
+                module,
+                spec,
+                list(slice_bars),
+                parameters=dict(parameters),
+                code_hash=code_hash,
+                labels=("REAL_DATA", "VALIDATION_TRIAL", "NON_PROMOTABLE"),
+                evidence_tier="DEVELOPMENT_IN_SAMPLE",
+                dataset_key=body.dataset,
+            )
+            return per_bar_pnl(result, len(slice_bars))
+
+        log.record(
+            "VALIDATE",
+            f"{strategy_id} validating {_product(grid)} configurations on "
+            f"{len(bars):,} {body.dataset} bars ({provider})",
+            "info",
+            strategy_id,
+        )
+        try:
+            evidence = run_validation(
+                bars,
+                warmup_bars=spec.warmup_bars,
+                backtest=backtest,
+                parameter_grid=grid,
+                folds=body.folds,
+                groups=body.groups,
+                test_groups=body.test_groups,
+                blocks=body.blocks,
+            )
+        except ValueError as exc:
+            log.record("VALIDATE", f"{strategy_id} failed: {exc}", "fail", strategy_id)
+            raise HTTPException(422, {"code": "validation_failed", "detail": str(exc)}) from exc
+
+        store_evidence(root, strategy_id, evidence)
+        survived = (
+            evidence.walk_forward.survives
+            and evidence.paths.robust
+            and not evidence.overfitting.selection_is_unreliable
+        )
+        log.record(
+            "VALIDATE",
+            f"{strategy_id} - PBO {evidence.overfitting.probability:.1%}, "
+            f"WF efficiency {evidence.walk_forward.efficiency:.2f}, "
+            f"path p05 {evidence.paths.sharpe_p05:+.3f}",
+            "pass" if survived else "warn",
+            evidence.evidence_id,
+        )
+        return ApiEnvelope(
+            data={
+                **evidence.as_metadata(),
+                "grid": grid,
+                "walk_forward": vars(evidence.walk_forward),
+                "paths": vars(evidence.paths),
+                "trial_sharpes": list(evidence.trial_sharpes),
+                "cscv_logits": list(evidence.overfitting.logits),
+            },
+            meta={
+                "dataset": body.dataset,
+                "bar_count": len(bars),
+                "survived": survived,
+                "note": (
+                    "Validation evidence, not a verdict. Run the judge to combine it "
+                    "with the remaining gates."
+                ),
+            },
+        )
+
     @router.post("/strategies/{strategy_id}/judge", response_model=ApiEnvelope[dict[str, Any]])
     def judge_strategy(strategy_id: str) -> ApiEnvelope[dict[str, Any]]:
         """Judge the most recent backtest of this strategy — its real trades, not a fixture."""
@@ -427,6 +707,12 @@ def build_router(
                 }
             ),
         )
+        evidence = judge_evidence(root, strategy_id)
+        overfitting = evidence.get("overfitting")
+        # The recorded artifact count is a floor on the trials run. When the
+        # validation sweep ran, its grid is the larger and more honest number.
+        if overfitting is not None:
+            trials = max(trials, overfitting.trials)
         validation_verdict = Judge().evaluate(
             JudgeInput(
                 run_id=latest["backtest_id"],
@@ -437,6 +723,7 @@ def build_router(
                 preregistered=True,
                 implementation_tests_passed=True,
                 lookahead_detected=not latest["lookahead_clean"],
+                **evidence,
             )
         )
         failed = [g for g in validation_verdict.gates if g.status != "PASS"]
@@ -503,6 +790,10 @@ def build_router(
         holdout_pnl = tuple(float(trade.net_pnl) for trade in holdout.trades)
         if not holdout_pnl:
             raise HTTPException(422, {"code": "holdout_no_trades", "holdout_spent": True})
+        holdout_evidence = judge_evidence(root, strategy_id)
+        holdout_overfitting = holdout_evidence.get("overfitting")
+        if holdout_overfitting is not None:
+            trials = max(trials, holdout_overfitting.trials)
         verdict = Judge().evaluate(
             JudgeInput(
                 run_id=holdout.backtest_id,
@@ -513,6 +804,7 @@ def build_router(
                 preregistered=True,
                 implementation_tests_passed=True,
                 lookahead_detected=not holdout.lookahead_clean,
+                **holdout_evidence,
             )
         )
         failed = [g for g in verdict.gates if g.status != "PASS"]
