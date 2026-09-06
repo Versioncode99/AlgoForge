@@ -6,7 +6,7 @@ import {
 import { useState } from 'react'
 import { getJson } from './api'
 import { Wordmark } from './components/Logo'
-import type { ActivityEvent, Rule, StrategyListItem, Summary } from './types'
+import type { ActivityEvent, StrategyListItem, Summary } from './types'
 import { OverviewView } from './views/Overview'
 import { PropFirmView } from './views/PropFirm'
 import { ResearchLabView } from './views/ResearchLab'
@@ -50,7 +50,6 @@ export function App() {
   })
   const summary = useQuery({ queryKey: ['summary'], queryFn: () => getJson<Summary>('/summary') })
   const strategies = useQuery({ queryKey: ['strategies'], queryFn: () => getJson<StrategyListItem[]>('/strategies') })
-  const rules = useQuery({ queryKey: ['rules'], queryFn: () => getJson<Rule[]>('/prop/rules') })
   const events = useQuery({
     queryKey: ['activity'], refetchInterval: 5_000,
     queryFn: () => getJson<ActivityEvent[]>('/activity?limit=80'),
@@ -59,7 +58,6 @@ export function App() {
   const online = health.isSuccess
   const list = strategies.data ?? []
   const tested = list.filter((s) => s.latest).length
-  const profitable = list.filter((s) => (s.latest?.net_pnl ?? 0) > 0).length
   const realEvidence = list.filter(
     (s) => s.latest?.evidence_tier === 'VALIDATION_OOS' || s.latest?.evidence_tier === 'HOLDOUT',
   ).length
@@ -90,59 +88,26 @@ export function App() {
             {online ? 'ENGINE LIVE' : 'ENGINE DOWN'}
           </span>
           <span className="topstat">STRATEGIES <b>{summary.data?.strategy_count ?? 0}</b></span>
-          <span className="topstat">BACKTESTS <b>{summary.data?.backtest_count ?? 0}</b></span>
+          <span className="topstat">TESTED <b>{tested}</b></span>
+          <span className="topstat" title="Runs on a held-out slice, the only kind that counts">
+            OOS <b className={realEvidence ? 'good' : ''}>{realEvidence}</b>
+          </span>
+          <span className="topstat">
+            DATA <b className={health.data?.data_gate?.startsWith('REAL') ? 'good' : 'bad'}>
+              {health.data?.data_gate ?? '—'}
+            </b>
+          </span>
           <span className="topstat"><LockKeyhole size={11} /> NO LIVE ORDERS</span>
         </div>
       </header>
 
-      <div className="body">
-        <aside className="rail" aria-label="Live counters">
-          <div className="rail-group af-panel-in">
-            <div className="rail-head"><span>Library</span><span>{summary.data?.strategy_count ?? 0}</span></div>
-            <div className="rail-row"><span>Strategies</span><b>{summary.data?.strategy_count ?? 0}</b></div>
-            <div className="rail-row"><span>Backtested</span><b>{tested}</b></div>
-            <div className="rail-row"><span>Net positive</span><b className={profitable ? 'good' : ''}>{profitable}</b></div>
-            <div className="rail-row"><span>Templates</span><b>{summary.data?.template_count ?? 0}</b></div>
-          </div>
-          <div className="rail-group af-panel-in">
-            <div className="rail-head"><span>Evidence</span></div>
-            <div className="rail-row"><span>Out-of-sample runs</span><b className={realEvidence ? 'good' : ''}>{realEvidence}</b></div>
-            <div className="rail-row"><span>Backtest artifacts</span><b>{summary.data?.backtest_count ?? 0}</b></div>
-            <div className="rail-row"><span>Prop rule sets</span><b>{rules.data?.length ?? 0}</b></div>
-            <div className="rail-row">
-              <span>Data gate</span>
-              <b className={health.data?.data_gate?.startsWith('REAL') ? 'good' : 'bad'}>
-                {health.data?.data_gate ?? '—'}
-              </b>
-            </div>
-          </div>
-          <div className="rail-group af-panel-in">
-            <div className="rail-head"><span>Families</span></div>
-            {(summary.data?.families ?? []).map((f) => (
-              <div className="rail-row" key={f}>
-                <span>{f}</span>
-                <b>{list.filter((s) => s.family === f).length}</b>
-              </div>
-            ))}
-            {!summary.data?.families.length && <div className="rail-row"><span className="sub">none yet</span></div>}
-          </div>
-          <div className="rail-group">
-            <div className="rail-head"><span>On disk</span></div>
-            <div className="rail-row"><span className="sub">{summary.data?.strategies_path ?? ''}</span></div>
-          </div>
-        </aside>
+      <div className="body is-full">
 
         <main className="main">
           <div className="view-head">
             <div>
               <p className="eyebrow">{EYEBROW[tab]}</p>
               <h1>{tab}</h1>
-            </div>
-            <div className="chips">
-              <span className="chip is-locked"><LockKeyhole /> PAPER ONLY</span>
-              <span className={health.data?.data_gate?.startsWith('REAL') ? 'chip is-good' : 'chip'}>
-                DATA {health.data?.data_gate ?? '—'}
-              </span>
             </div>
           </div>
 

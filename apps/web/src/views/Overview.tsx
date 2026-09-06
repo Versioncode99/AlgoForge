@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import { getJson } from '../api'
 import { PanelHead, TierPill } from '../components/ui'
 import { money, signed, stamp } from '../lib'
-import type { StrategyListItem } from '../types'
+import type { EngineStatus, StrategyListItem } from '../types'
 import { EnginePanel } from './Engine'
 
 type Sort = 'net' | 'recent' | 'name'
@@ -18,9 +18,20 @@ type Sort = 'net' | 'recent' | 'name'
  */
 export function OverviewView() {
   const [sort, setSort] = useState<Sort>('net')
+  const engine = useQuery({
+    queryKey: ['engine'],
+    queryFn: () => getJson<EngineStatus>('/engine'),
+    refetchInterval: (q) => (q.state.data?.running ? 2000 : 8000),
+  })
+  // The global staleTime is 30s, which is right for a page you read and wrong
+  // for one you watch: with the engine running the library changes every few
+  // seconds, and a stale list said "nothing has been backtested" while the
+  // counters above it climbed.
   const strategies = useQuery({
     queryKey: ['strategies'],
     queryFn: () => getJson<StrategyListItem[]>('/strategies'),
+    staleTime: 0,
+    refetchInterval: engine.data?.running ? 4000 : false,
   })
 
   const rows = useMemo(() => {

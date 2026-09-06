@@ -299,3 +299,84 @@
   .panel-head { flex-wrap: wrap; gap: var(--sp-2); }
   .panel-head > .side-switch { margin-left: 0; }
 }
+
+/* No rail.
+
+   The sidebar carried four groups of counters that never changed while you
+   worked and cost 232px of a dense workspace permanently. The two numbers that
+   mattered — how much has been tested, and how much of it is out-of-sample —
+   moved into the top bar, which was already where live figures lived. */
+.body.is-full { grid-template-columns: minmax(0, 1fr); }
+
+/* ── the agent swarm ──────────────────────────────────────────────────────── */
+
+.swarm {
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--bg-1); overflow: hidden; margin-bottom: var(--sp-3);
+}
+.swarm.is-idle {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-4); color: var(--fg-2); font-size: var(--fs-sm); line-height: 1.6;
+}
+.swarm-head {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line); background: var(--bg-2);
+}
+.swarm-title {
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .1em; text-transform: uppercase; color: var(--fg-1);
+}
+.swarm-legend { margin-left: auto; display: flex; gap: var(--sp-3); }
+.swarm-legend span {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--fs-nano); color: var(--fg-3); text-transform: uppercase; letter-spacing: .07em;
+}
+
+.swarm-lanes { display: grid; gap: 1px; background: var(--line); }
+.lane {
+  display: grid; grid-template-columns: 34px 1fr 90px; align-items: center;
+  gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); background: var(--bg-1);
+}
+.lane-id { font-size: var(--fs-nano); color: var(--fg-3); }
+.lane-stage { font-size: var(--fs-nano); color: var(--fg-2); text-align: right; }
+.lane[data-active="yes"] .lane-stage { color: var(--brand); }
+
+.lane-track { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; }
+.lane-step {
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 4px 6px; border-radius: var(--r-sm);
+  background: var(--bg-2); color: var(--fg-3);
+  font-size: var(--fs-nano); text-transform: uppercase; letter-spacing: .06em;
+  transition: background-color var(--t) var(--ease), color var(--t) var(--ease);
+}
+.lane-step[data-state="done"] { color: var(--fg-1); background: var(--bg-3); }
+/* The pulse marks the stage a worker is actually in. It is the only moving
+   thing here, so movement always means work. */
+.lane-step[data-state="active"] {
+  color: #fff; background: var(--brand-dim);
+  animation: af-blink 1.6s var(--ease-soft) infinite;
+}
+.lane-step[data-state="ahead"] { opacity: .45; }
+
+.swarm-foot {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-4);
+  padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--line); background: var(--bg-2);
+}
+.swarm-stat { display: inline-flex; align-items: baseline; gap: 5px; }
+.swarm-stat b { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--fg-0); }
+.swarm-stat em {
+  font-style: normal; font-size: var(--fs-nano); color: var(--fg-3);
+  text-transform: uppercase; letter-spacing: .07em;
+}
+.swarm-best {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--fs-xs); color: var(--verdict-pass);
+}
+.swarm-best.is-none { color: var(--fg-3); }
+
+@media (max-width: 720px) {
+  .lane { grid-template-columns: 28px 1fr; }
+  .lane-stage { display: none; }
+  .lane-step span { display: none; }
+  .swarm-legend { display: none; }
+}

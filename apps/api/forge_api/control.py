@@ -12,7 +12,7 @@ from forge.contracts.models import ApiEnvelope
 from forge.data.live import ProviderError
 from forge.oracles import nautilus_capability
 from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
-from forge.prop.engine import MIN_TRADING_DAYS
+from forge.prop.engine import MAX_BACKTEST_BARS, MIN_TRADING_DAYS
 from forge.research import ResearchLedger
 from forge.strategy import StrategyLibrary
 from pydantic import BaseModel, Field
@@ -42,8 +42,13 @@ from forge_api.settings_store import (
 class StartEngineRequest(BaseModel):
     dataset: str = DEFAULT_DATASET
     cycle_seconds: float = Field(default=8.0, ge=1.0, le=300.0)
-    max_strategies: int = Field(default=40, ge=1, le=500)
-    max_bars: int = Field(default=30_000, ge=1_000, le=200_000)
+    # A population cap, not a stop point: the engine retires its weakest
+    # survivor when full rather than halting.
+    max_strategies: int = Field(default=400, ge=1, le=5_000)
+    # Only the 20% validation slice reaches the prop simulator, so the window
+    # has to be about five times the one the 30-day gate needs.
+    max_bars: int = Field(default=250_000, ge=1_000, le=MAX_BACKTEST_BARS)
+    workers: int = Field(default=4, ge=1, le=16)
 
 
 class SettingsPatch(BaseModel):
@@ -286,6 +291,7 @@ def build_control_router(
                     cycle_seconds=body.cycle_seconds,
                     max_strategies=body.max_strategies,
                     max_bars=body.max_bars,
+                    workers=body.workers,
                 )
             )
         )

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CircleStop, Database, Play } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getJson, postJson } from '../api'
+import { AgentSwarm } from '../components/AgentSwarm'
 import type { DatasetInfo, EngineStatus } from '../types'
 
 /** Start/stop control for the autonomous engine, plus its live counters.
@@ -9,7 +10,7 @@ import type { DatasetInfo, EngineStatus } from '../types'
  *  strategies, backtests them and judges them on its own. */
 export function EnginePanel() {
   const qc = useQueryClient()
-  const [dataset, setDataset] = useState('mnq_1m_3mo')
+  const [dataset, setDataset] = useState('nq_1m_16y')
   const [error, setError] = useState<string | null>(null)
 
   const status = useQuery({
@@ -31,7 +32,11 @@ export function EnginePanel() {
   }
 
   const start = useMutation({
-    mutationFn: () => postJson<EngineStatus>('/engine/start', { dataset, cycle_seconds: 6, max_strategies: 60 }),
+    // A population cap rather than a stop point, and four workers so several
+    // candidates are in flight at once.
+    mutationFn: () => postJson<EngineStatus>('/engine/start', {
+      dataset, cycle_seconds: 4, max_strategies: 400, workers: 4,
+    }),
     onSuccess: () => { setError(null); refresh() },
     onError: (e: Error) => setError(e.message),
   })
@@ -85,6 +90,8 @@ export function EnginePanel() {
         </p>
       )}
       {error && <p className="warning bad">{error}</p>}
+
+      {s && <AgentSwarm status={s} />}
 
       <div className="engine-counters">
         <Counter label="Cycles" value={s?.cycles ?? 0} />

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,6 +73,11 @@ class ActivityLog:
         return list(self._buffer)[-limit:][::-1]
 
 
+# How long the in-memory index may go without a full rescan. Only matters for
+# artifacts written by another process; ours are inserted as they are saved.
+RESCAN_SECONDS = 30.0
+
+
 class BacktestStore:
     """Backtest results are immutable artifacts on disk, keyed by content hash."""
 
@@ -78,12 +85,27 @@ class BacktestStore:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self._meta: dict[str, tuple[str, str]] = {}
+        self._index_cache: dict[str, list[tuple[str, str]]] | None = None
+        self._index_built: float = -1e9
+        # The engine writes from several worker threads.
+        self._index_lock = threading.Lock()
 
     def save(self, result: Any) -> None:  # BacktestResult; Any avoids a circular import
         path = self.root / f"{result.backtest_id}.json"
         if path.exists():
             return  # immutable: identical inputs produce the identical artifact
         path.write_text(json.dumps(result.model_dump(mode="json"), indent=2), encoding="utf-8")
+        # Insert into the index rather than discarding it. Throwing the cache
+        # away meant a full rebuild on the next read, and with four workers
+        # saving every few seconds the list spent most of its time rebuilding:
+        # 6.6s while the engine ran, against 0.36s idle.
+        finished = str(result.model_dump(mode="json").get("finished_at", ""))
+        with self._index_lock:
+            self._meta[path.name] = (result.strategy_id, finished)
+            if self._index_cache is not None:
+                entries = self._index_cache.setdefault(result.strategy_id, [])
+                entries.append((path.name, finished))
+                entries.sort(key=lambda item: item[1], reverse=True)
 
     def load(self, backtest_id: str) -> dict[str, Any] | None:
         path = self.root / f"{backtest_id}.json"
@@ -93,24 +115,45 @@ class BacktestStore:
         return payload
 
     # Artifacts are immutable, so a filename -> (strategy, finished_at) index only
-    # ever grows. Without it, listing N strategies re-parsed every artifact N
-    # times, which turned the strategy list into an O(n^2) file read.
+    # ever grows. Caching the *file contents* was not enough: `_index` still
+    # re-globbed the directory and rebuilt the whole dict once per strategy, so
+    # listing 63 strategies over 379 artifacts meant 63 directory scans and took
+    # 8.7 seconds while the engine was writing. The built index is cached too,
+    # and invalidated by our own writes or by the directory changing underneath
+    # us.
     def _index(self) -> dict[str, list[tuple[str, str]]]:
-        index: dict[str, list[tuple[str, str]]] = {}
-        for path in self.root.glob("*.json"):
-            cached = self._meta.get(path.name)
-            if cached is None:
-                try:
-                    payload = json.loads(path.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
-                cached = (str(payload.get("strategy_id", "")), str(payload.get("finished_at", "")))
-                self._meta[path.name] = cached
-            index.setdefault(cached[0], []).append((path.name, cached[1]))
-        return index
+        with self._index_lock:
+            # Our own writes keep the index current, so a rescan only catches
+            # changes made by another process. Checking the directory mtime
+            # instead raced with four workers saving concurrently and forced a
+            # full rebuild on almost every read.
+            fresh = time.monotonic() - self._index_built < RESCAN_SECONDS
+            if self._index_cache is not None and fresh:
+                return self._index_cache
+
+            index: dict[str, list[tuple[str, str]]] = {}
+            for path in self.root.glob("*.json"):
+                cached = self._meta.get(path.name)
+                if cached is None:
+                    try:
+                        payload = json.loads(path.read_text(encoding="utf-8"))
+                    except Exception:
+                        continue
+                    cached = (
+                        str(payload.get("strategy_id", "")),
+                        str(payload.get("finished_at", "")),
+                    )
+                    self._meta[path.name] = cached
+                index.setdefault(cached[0], []).append((path.name, cached[1]))
+            # Sort once here rather than at every call site.
+            for entries in index.values():
+                entries.sort(key=lambda item: item[1], reverse=True)
+            self._index_cache = index
+            self._index_built = time.monotonic()
+            return index
 
     def for_strategy(self, strategy_id: str) -> list[dict[str, Any]]:
-        entries = sorted(self._index().get(strategy_id, []), key=lambda e: e[1], reverse=True)
+        entries = self._index().get(strategy_id, [])
         items: list[dict[str, Any]] = []
         for name, _ in entries:
             try:
@@ -121,7 +164,7 @@ class BacktestStore:
 
     def summary_for(self, strategy_id: str) -> tuple[int, dict[str, Any] | None]:
         """Count plus the newest artifact, without parsing the rest."""
-        entries = sorted(self._index().get(strategy_id, []), key=lambda e: e[1], reverse=True)
+        entries = self._index().get(strategy_id, [])
         if not entries:
             return 0, None
         return len(entries), self.load(Path(entries[0][0]).stem)
@@ -130,4 +173,4 @@ class BacktestStore:
         return self.summary_for(strategy_id)[1]
 
     def count(self) -> int:
-        return sum(1 for _ in self.root.glob("*.json"))
+        return sum(len(entries) for entries in self._index().values())

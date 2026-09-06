@@ -123,7 +123,14 @@ export type EngineStatus = {
   passed: number; rejected: number; skipped_by_memory: number; compute_saved: number
   validation_passed: number; holdout_passed: number; lineages_retired: number; engine_errors: number
   last_error: string | null; current_stage: string
-  config: { dataset: string; cycle_seconds: number; max_strategies: number; max_bars: number }
+  // One stage per search worker, keyed by worker index.
+  worker_stages?: Record<string, string>
+  pruned?: number; prop_tested?: number
+  best_pass_rate?: number; best_strategy?: string | null; best_rule?: string | null
+  config: {
+    dataset: string; cycle_seconds: number; max_strategies: number
+    max_bars: number; workers?: number
+  }
 }
 export type RangeOption = { years: number; label: string; bars: number; available: boolean }
 export type DatasetInfo = {

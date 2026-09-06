@@ -123,7 +123,8 @@ test('prop firm runs a matrix over every strategy, not one at a time', async ({ 
 
   if (await grid.isVisible()) {
     // Skipped strategies are reported with a reason, never dropped silently.
-    await expect(page.getByText('Skipped')).toBeVisible()
+    // Scoped to the heading: 'Skipped' is also a stat-tile label above it.
+    await expect(page.getByRole('heading', { name: 'Skipped' })).toBeVisible()
   } else {
     // The refusal must name the reason per strategy, not just decline.
     await expect(page.getByRole('columnheader', { name: 'What would fix it' })).toBeVisible()
