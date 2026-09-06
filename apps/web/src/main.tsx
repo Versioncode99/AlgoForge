@@ -5,6 +5,7 @@ import { App } from './App'
 import './styles/base.css'
 import './styles/app.css'
 import './styles/workspace.css'
+import './styles/command.css'
 
 const queryClient = new QueryClient({defaultOptions: {queries: {retry: 1, staleTime: 30_000}}})
 

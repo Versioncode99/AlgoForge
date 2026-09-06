@@ -6,9 +6,11 @@ from forge.strategy.runtime import LookaheadError, Position, Window, run_backtes
 from forge.strategy.synthetic import generate_bars
 from forge.strategy.templates import TEMPLATES, Template
 from forge.strategy.templates_quant import QUANT_TEMPLATES
+from forge.strategy.templates_statistical import STATISTICAL_TEMPLATES
 
 # Session-aware families are registered into the same dict every consumer holds.
 TEMPLATES.update(QUANT_TEMPLATES)
+TEMPLATES.update(STATISTICAL_TEMPLATES)
 
 __all__ = [
     "TEMPLATES",

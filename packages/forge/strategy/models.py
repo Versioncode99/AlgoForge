@@ -48,6 +48,8 @@ class StrategySpec(FrozenModel):
     tick_value: float = 0.50
     created_at: datetime
     created_by: str = "operator"
+    research_sources: tuple[str, ...] = ()
+    adaptation_note: str = ""
 
     @property
     def defaults(self) -> dict[str, ParamValue]:
@@ -84,6 +86,9 @@ class Trade(FrozenModel):
 
 
 class BacktestResult(FrozenModel):
+    calculation_version: str = "legacy-price-points"
+    point_value: float | None = None
+    tick_size: float | None = None
     backtest_id: str
     strategy_id: str
     spec_hash: str

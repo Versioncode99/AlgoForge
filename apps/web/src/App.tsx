@@ -1,17 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
 import {
   ChartNoAxesCombined, Layers, LockKeyhole, MessageSquare, Microscope,
-  ScrollText, ShieldCheck, SlidersHorizontal, TriangleAlert,
+  ScrollText, ShieldCheck, SlidersHorizontal, TriangleAlert, Network,
 } from 'lucide-react'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { getJson } from './api'
 import { Wordmark } from './components/Logo'
 import type { ActivityEvent, StrategyListItem, Summary } from './types'
 import { OverviewView } from './views/Overview'
-import { PropFirmView } from './views/PropFirm'
-import { ResearchLabView } from './views/ResearchLab'
-import { ConsoleView, SettingsView } from './views/Settings'
-import { StrategiesView } from './views/Strategies'
+const PropFirmView = lazy(() => import('./views/PropFirm').then(m => ({ default: m.PropFirmView })))
+const ResearchLabView = lazy(() => import('./views/ResearchLab').then(m => ({ default: m.ResearchLabView })))
+const ConsoleView = lazy(() => import('./views/Settings').then(m => ({ default: m.ConsoleView })))
+const SettingsView = lazy(() => import('./views/Settings').then(m => ({ default: m.SettingsView })))
+const StrategiesView = lazy(() => import('./views/Strategies').then(m => ({ default: m.StrategiesView })))
+const AgentCommandView = lazy(() => import('./views/AgentCommand').then(m => ({ default: m.AgentCommandView })))
 
 /* Five working sections and a console.
  *
@@ -20,11 +22,12 @@ import { StrategiesView } from './views/Strategies'
  * whatever was selected — nothing on them could be acted on. The judge's gates
  * now live inside Strategies, against the real strategy they judge. Evolution
  * moved into Settings, where an update check belongs. */
-const tabs = ['Overview', 'Research Lab', 'Strategies', 'Prop Firm', 'Console', 'Settings'] as const
+const tabs = ['Overview', 'Agent Command', 'Research Lab', 'Strategies', 'Prop Firm', 'Console', 'Settings'] as const
 type Tab = (typeof tabs)[number]
 
 const ICONS: Record<Tab, typeof Layers> = {
   Overview: ChartNoAxesCombined,
+  'Agent Command': Network,
   'Research Lab': Microscope,
   Strategies: Layers,
   'Prop Firm': ShieldCheck,
@@ -34,6 +37,7 @@ const ICONS: Record<Tab, typeof Layers> = {
 
 const EYEBROW: Record<Tab, string> = {
   Overview: 'AUTONOMOUS ENGINE',
+  'Agent Command': 'YOUR QUANT RESEARCH TEAM',
   'Research Lab': 'EVIDENCE INVENTORY',
   Strategies: 'BUILD · RUN · JUDGE',
   'Prop Firm': 'ACCOUNT SURVIVAL',
@@ -56,6 +60,7 @@ export function App() {
   })
 
   const online = health.isSuccess
+  const engineRunning = !!health.data?.engine_running
   const list = strategies.data ?? []
   const tested = list.filter((s) => s.latest).length
   const realEvidence = list.filter(
@@ -64,6 +69,7 @@ export function App() {
 
   return (
     <div className="app">
+      <a className="skip-link" href="#workspace">Skip to workspace</a>
       <header className="topbar">
         <Wordmark />
         <nav className="tabs" aria-label="Sections">
@@ -73,6 +79,7 @@ export function App() {
               <button
                 key={item}
                 aria-label={item}
+                aria-current={tab === item ? 'page' : undefined}
                 className={tab === item ? 'active af-press' : 'af-press'}
                 onClick={() => setTab(item)}
               >
@@ -85,7 +92,7 @@ export function App() {
         <div className="topstats">
           <span className={online ? 'topstat is-live' : 'topstat'}>
             <i className={online ? 'pulse' : 'pulse is-off'} />
-            {online ? 'ENGINE LIVE' : 'ENGINE DOWN'}
+            {online ? (engineRunning ? 'ENGINE RUNNING' : 'API CONNECTED') : 'API OFFLINE'}
           </span>
           <span className="topstat">STRATEGIES <b>{summary.data?.strategy_count ?? 0}</b></span>
           <span className="topstat">TESTED <b>{tested}</b></span>
@@ -103,7 +110,7 @@ export function App() {
 
       <div className="body is-full">
 
-        <main className="main">
+        <main className="main" id="workspace">
           <div className="view-head">
             <div>
               <p className="eyebrow">{EYEBROW[tab]}</p>
@@ -125,12 +132,17 @@ export function App() {
             </div>
           )}
 
-          {online && tab === 'Overview' && <OverviewView />}
+          <Suspense fallback={<div className="state" role="status">Opening workspace…</div>}>
+          <div className="view-content" key={tab}>
+          {online && tab === 'Overview' && <OverviewView onAgents={() => setTab('Agent Command')} />}
+          {online && tab === 'Agent Command' && <AgentCommandView />}
           {online && tab === 'Research Lab' && <ResearchLabView />}
           {online && tab === 'Strategies' && <StrategiesView />}
           {online && tab === 'Prop Firm' && <PropFirmView />}
           {online && tab === 'Console' && <ConsoleView />}
           {online && tab === 'Settings' && <SettingsView />}
+          </div>
+          </Suspense>
         </main>
       </div>
 
@@ -140,7 +152,7 @@ export function App() {
 }
 
 function OrchestratorLog({ events }: { events: ActivityEvent[] }) {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(true)
   return (
     <section className="logbar" data-collapsed={collapsed} aria-label="Orchestrator log">
       <div className="logbar-head">

@@ -1,4 +1,14 @@
-import ReactECharts from 'echarts-for-react'
+import ReactEChartsCore from 'echarts-for-react/lib/core'
+import * as echarts from 'echarts/core'
+import { BarChart, LineChart, ScatterChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, MarkLineComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+import type { ComponentProps } from 'react'
+
+echarts.use([BarChart, LineChart, ScatterChart, GridComponent, TooltipComponent, MarkLineComponent, CanvasRenderer])
+function ReactECharts(props: Omit<ComponentProps<typeof ReactEChartsCore>, 'echarts'>) {
+  return <ReactEChartsCore {...props} echarts={echarts} />
+}
 
 const AXIS = {
   axisLine: { lineStyle: { color: '#2a3037' } },

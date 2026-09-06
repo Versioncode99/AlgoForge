@@ -146,6 +146,7 @@ export function StrategiesView() {
 
   return (
     <section className="strategies">
+      {list.data?.some(item => item.latest?.calculation_version === 'legacy-price-points') && <p className="command-error">Older backtests used price points as dollar P&amp;L. Rerun them with corrected contract units before comparing results or simulating prop accounts.</p>}
       {banner && (
         <div className={banner.kind === 'ok' ? 'banner is-ok af-panel-in' : 'banner is-err af-panel-in'} role="status">
           {banner.kind === 'ok' ? <Check /> : <AlertTriangle />}

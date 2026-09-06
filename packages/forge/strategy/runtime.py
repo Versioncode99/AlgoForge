@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -9,7 +10,9 @@ import numpy as np
 
 from forge.contracts.hashing import content_hash, stable_id
 from forge.data.models import Bar
+from forge.data.validation import validate_bars
 from forge.research.models import EvidenceTier, ResearchSplitReceipt
+from forge.strategy.instruments import contract_units
 from forge.strategy.models import BacktestResult, ParamValue, StrategySpec, Trade
 
 
@@ -97,11 +100,8 @@ class Window:
 
     def session_start_index(self) -> int:
         """Index of the first bar of the current calendar day in this window."""
-        today = self._t[self.index].date()
-        i = self.index
-        while i > 0 and self._t[i - 1].date() == today:
-            i -= 1
-        return i
+        today = self._t[self.index].replace(hour=0, minute=0, second=0, microsecond=0)
+        return bisect_left(self._t, today, 0, self.index + 1)
 
     def bars_since_session_open(self) -> int:
         return self.index - self.session_start_index()
@@ -211,6 +211,10 @@ def run_backtest(
     params = dict(spec.defaults) | dict(parameters or {})
     if len(bars) < spec.warmup_bars + 5:
         raise ValueError(f"need at least {spec.warmup_bars + 5} bars, got {len(bars)}")
+    quality = validate_bars(bars)
+    if not quality.accepted:
+        raise ValueError(f"Invalid market data: {', '.join(quality.findings)}")
+    point_value, tick_size = contract_units(bars[0].symbol)
 
     o = np.array([b.open for b in bars], dtype=np.float64)
     h = np.array([b.high for b in bars], dtype=np.float64)
@@ -218,8 +222,10 @@ def run_backtest(
     c = np.array([b.close for b in bars], dtype=np.float64)
     v = np.array([b.volume for b in bars], dtype=np.float64)
     t = [b.event_time for b in bars]
+    for array in (o, h, lo, c, v):
+        array.setflags(write=False)
 
-    cost_per_side = spec.commission_per_side + spec.slippage_ticks * spec.tick_value
+    cost_per_side = spec.commission_per_side + spec.slippage_ticks * tick_size * point_value
     round_trip_cost = cost_per_side * 2.0
 
     trades: list[Trade] = []
@@ -236,14 +242,19 @@ def run_backtest(
         fill_index = i + 1
 
         if position is None:
+            if i == last - 1:
+                equity.append(round(running, 6))
+                continue
             direction = module.entry_signal(window, params)
             if direction in (1, -1):
                 position = Position(int(direction), i, fill_index, float(o[fill_index]))
         else:
-            reason = module.exit_signal(window, params, position)
+            reason = (
+                "end_of_data" if i == last - 1 else module.exit_signal(window, params, position)
+            )
             if reason:
                 exit_price = float(o[fill_index])
-                gross = (exit_price - position.entry_price) * position.direction
+                gross = (exit_price - position.entry_price) * position.direction * point_value
                 net = gross - round_trip_cost
                 running += net
                 trades.append(
@@ -273,7 +284,7 @@ def run_backtest(
     eq = np.array(equity, dtype=np.float64)
     peak = np.maximum.accumulate(eq)
     drawdown = float((peak - eq).max()) if eq.size else 0.0
-    data_hash = content_hash([b.model_dump(mode="json") for b in bars])
+    data_hash = quality.content_hash or ""
 
     # The invariant is asserted from the artifact, not assumed from the loop.
     clean = all(
@@ -283,7 +294,15 @@ def run_backtest(
     )
 
     return BacktestResult(
-        backtest_id=BacktestResult.make_id(spec.spec_hash, code_hash, data_hash, params),
+        backtest_id=BacktestResult.make_id(
+            spec.spec_hash,
+            content_hash({"code": code_hash, "runtime": "contract-units-v2"}),
+            data_hash,
+            params,
+        ),
+        calculation_version="contract-units-v2",
+        point_value=point_value,
+        tick_size=tick_size,
         strategy_id=spec.strategy_id,
         spec_hash=spec.spec_hash,
         code_hash=code_hash,

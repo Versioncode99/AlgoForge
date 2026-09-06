@@ -46,6 +46,7 @@ export type StrategySpec = {
   created_at: string; created_by: string
 }
 export type BacktestSummary = {
+  calculation_version?: string
   backtest_id: string; net_pnl: number; trade_count: number; win_rate: number
   max_drawdown: number; parameters?: Record<string, number>; finished_at: string
   evidence_tier?: string; split_id?: string | null
@@ -118,6 +119,7 @@ export type Summary = {
 
 /* ── Engine, datasets, prop ─────────────────────────────────────────────── */
 export type EngineStatus = {
+  stopping?: boolean
   running: boolean; started_at: string | null; cycles: number
   created: number; backtested: number; judged: number
   passed: number; rejected: number; skipped_by_memory: number; compute_saved: number

@@ -60,16 +60,17 @@ def check_source(source: str) -> list[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.split(".")[0] not in {i.split(".")[0] for i in ALLOWED_IMPORTS}:
+                if alias.name not in ALLOWED_IMPORTS:
                     problems.append(f"line {node.lineno}: import of '{alias.name}' is not allowed")
         elif isinstance(node, ast.ImportFrom):
-            root = (node.module or "").split(".")[0]
-            if root not in {i.split(".")[0] for i in ALLOWED_IMPORTS}:
+            if node.module not in ALLOWED_IMPORTS or node.level:
                 problems.append(f"line {node.lineno}: import from '{node.module}' is not allowed")
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id in BANNED_CALLS:
                 problems.append(f"line {node.lineno}: call to '{node.func.id}' is not allowed")
-        elif isinstance(node, ast.Attribute) and node.attr in BANNED_ATTRIBUTES:
+        elif isinstance(node, ast.Attribute) and (
+            node.attr in BANNED_ATTRIBUTES or node.attr.startswith("_")
+        ):
             problems.append(f"line {node.lineno}: attribute '{node.attr}' is not allowed")
         elif isinstance(node, ast.FunctionDef):
             defined.add(node.name)

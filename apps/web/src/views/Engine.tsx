@@ -32,10 +32,10 @@ export function EnginePanel() {
   }
 
   const start = useMutation({
-    // A population cap rather than a stop point, and four workers so several
+    // A population cap rather than a stop point, and eight workers so several
     // candidates are in flight at once.
     mutationFn: () => postJson<EngineStatus>('/engine/start', {
-      dataset, cycle_seconds: 4, max_strategies: 400, workers: 4,
+      dataset, cycle_seconds: 4, max_strategies: 400, workers: 8,
     }),
     onSuccess: () => { setError(null); refresh() },
     onError: (e: Error) => setError(e.message),
@@ -57,7 +57,7 @@ export function EnginePanel() {
           <i className={running ? 'pulse' : 'pulse is-off'} />
           <div>
             <span>AUTONOMOUS ENGINE</span>
-            <strong>{running ? s?.current_stage.toUpperCase() : 'STOPPED'}</strong>
+            <strong>{running ? s?.current_stage.toUpperCase() : s?.stopping ? 'STOPPING' : 'STOPPED'}</strong>
           </div>
         </div>
 
@@ -77,8 +77,8 @@ export function EnginePanel() {
             <CircleStop /> Stop
           </button>
         ) : (
-          <button className="btn primary" onClick={() => start.mutate()} disabled={start.isPending}>
-            <Play /> {start.isPending ? 'Starting…' : 'Start engine'}
+          <button className="btn primary" onClick={() => start.mutate()} disabled={start.isPending || s?.stopping}>
+            <Play /> {s?.stopping ? 'Finishing current work…' : start.isPending ? 'Starting…' : 'Start engine'}
           </button>
         )}
       </div>

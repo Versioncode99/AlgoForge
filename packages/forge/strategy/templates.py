@@ -259,6 +259,8 @@ Every strategy ships a lookahead trap. A suite without one is rejected by the
 harness, because the cheapest way to fake an edge is to read the future.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import numpy as np
 
 from forge.strategy.runtime import Window
@@ -268,7 +270,8 @@ def _window(n=300, seed=7):
     rng = np.random.default_rng(seed)
     close = 20000 + np.cumsum(rng.normal(0, 4, n))
     high, low = close + 3, close - 3
-    return Window(close, high, low, close, np.full(n, 1000.0), [None] * n, n - 1)
+    times = [datetime(2024, 1, 2, tzinfo=UTC) + timedelta(minutes=i) for i in range(n)]
+    return Window(close, high, low, close, np.full(n, 1000.0), times, n - 1)
 
 
 def test_entry_signal_returns_valid_direction():

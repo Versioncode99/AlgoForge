@@ -168,7 +168,14 @@ def per_bar_pnl(result: Any, bar_count: int) -> tuple[float, ...]:
     return tuple(series)
 
 
-def store_evidence(root: Path, strategy_id: str, evidence: ValidationEvidence) -> Path:
+def store_evidence(
+    root: Path,
+    strategy_id: str,
+    evidence: ValidationEvidence,
+    *,
+    code_hash: str = "",
+    split_id: str = "",
+) -> Path:
     """Persist evidence so the judge can read it without re-running the stack."""
     directory = root / "data" / "validation"
     directory.mkdir(parents=True, exist_ok=True)
@@ -177,6 +184,9 @@ def store_evidence(root: Path, strategy_id: str, evidence: ValidationEvidence) -
         json.dumps(
             {
                 **evidence.as_metadata(),
+                "code_hash": code_hash,
+                "split_id": split_id,
+                "calculation_version": "contract-units-v2",
                 "trial_sharpes": list(evidence.trial_sharpes),
                 "overfitting": {
                     "probability": evidence.overfitting.probability,
@@ -209,7 +219,13 @@ def load_evidence(root: Path, strategy_id: str) -> dict[str, Any] | None:
     return payload
 
 
-def judge_evidence(root: Path, strategy_id: str) -> dict[str, Any]:
+def judge_evidence(
+    root: Path,
+    strategy_id: str,
+    *,
+    code_hash: str = "",
+    split_id: str = "",
+) -> dict[str, Any]:
     """Rehydrate stored validation evidence as JudgeInput keyword arguments.
 
     Anything missing or malformed comes back absent rather than defaulted, so a
@@ -218,6 +234,12 @@ def judge_evidence(root: Path, strategy_id: str) -> dict[str, Any]:
     """
     payload = load_evidence(root, strategy_id)
     if payload is None:
+        return {}
+    if code_hash and (
+        payload.get("code_hash") != code_hash
+        or payload.get("split_id") != split_id
+        or payload.get("calculation_version") != "contract-units-v2"
+    ):
         return {}
     try:
         overfitting = payload["overfitting"]
@@ -298,6 +320,9 @@ def build_router(
                     if latest is None
                     else {
                         "backtest_id": latest["backtest_id"],
+                        "calculation_version": latest.get(
+                            "calculation_version", "legacy-price-points"
+                        ),
                         "net_pnl": latest["net_pnl"],
                         "trade_count": len(latest["trades"]),
                         "win_rate": latest["win_rate"],
@@ -780,6 +805,9 @@ def build_router(
                 },
             )
 
+        # Parameter selection must never inspect the reserved validation or holdout.
+        partitions = chronological_split(bars, warmup_bars=spec.warmup_bars)
+        bars = list(partitions.development)
         code_hash = library.code_hash(strategy_id)
 
         def backtest(slice_bars: Any, parameters: Any) -> tuple[float, ...]:
@@ -817,7 +845,9 @@ def build_router(
             log.record("VALIDATE", f"{strategy_id} failed: {exc}", "fail", strategy_id)
             raise HTTPException(422, {"code": "validation_failed", "detail": str(exc)}) from exc
 
-        store_evidence(root, strategy_id, evidence)
+        store_evidence(
+            root, strategy_id, evidence, code_hash=code_hash, split_id=partitions.receipt.split_id
+        )
         survived = (
             evidence.walk_forward.survives
             and evidence.paths.robust
@@ -861,6 +891,15 @@ def build_router(
         all_runs = store.for_strategy(strategy_id)
         if not all_runs:
             raise HTTPException(422, {"code": "no_backtest", "detail": "run a backtest first"})
+        all_runs = [r for r in all_runs if r.get("calculation_version") == "contract-units-v2"]
+        if not all_runs:
+            raise HTTPException(
+                422,
+                {
+                    "code": "legacy_units",
+                    "detail": "Rerun with corrected contract units before judging this strategy.",
+                },
+            )
         validation_runs = [
             item for item in all_runs if item.get("evidence_tier") == "VALIDATION_OOS"
         ]
@@ -913,7 +952,12 @@ def build_router(
                 }
             ),
         )
-        evidence = judge_evidence(root, strategy_id)
+        evidence = judge_evidence(
+            root,
+            strategy_id,
+            code_hash=latest["code_hash"],
+            split_id=(latest.get("split_receipt") or {}).get("split_id", ""),
+        )
         overfitting = evidence.get("overfitting")
         # The recorded artifact count is a floor on the trials run. When the
         # validation sweep ran, its grid is the larger and more honest number.
@@ -996,7 +1040,7 @@ def build_router(
         holdout_pnl = tuple(float(trade.net_pnl) for trade in holdout.trades)
         if not holdout_pnl:
             raise HTTPException(422, {"code": "holdout_no_trades", "holdout_spent": True})
-        holdout_evidence = judge_evidence(root, strategy_id)
+        holdout_evidence = evidence
         holdout_overfitting = holdout_evidence.get("overfitting")
         if holdout_overfitting is not None:
             trials = max(trials, holdout_overfitting.trials)
@@ -1075,7 +1119,7 @@ def build_router(
             tested: list[tuple[Any, dict[str, Any]]] = []
             for spec in variants:
                 latest = store.latest(spec.strategy_id)
-                if latest is not None:
+                if latest is not None and latest.get("calculation_version") == "contract-units-v2":
                     tested.append((spec, latest))
             expectancies = [
                 float(item["net_pnl"]) / max(1, len(item["trades"])) for _, item in tested
@@ -1105,7 +1149,11 @@ def build_router(
             )
             cells = []
             for market_name in markets:
-                candidates = [item for spec, item in tested if spec.symbol == market_name]
+                candidates = [
+                    item
+                    for spec, item in tested
+                    if spec.symbol.split(".")[0] == market_name.split(".")[0]
+                ]
                 best = (
                     max(candidates, key=lambda item: float(item["net_pnl"])) if candidates else None
                 )

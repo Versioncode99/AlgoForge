@@ -92,6 +92,50 @@ def test_validation_404s_for_an_unknown_strategy(client) -> None:
     assert response.status_code == 404
 
 
+def test_manual_validation_cannot_observe_reserved_bars(client, monkeypatch):
+    from types import SimpleNamespace
+
+    from forge.research import chronological_split
+    from forge.strategy import TEMPLATES, generate_bars
+    from forge_api.market import MarketService
+
+    bars = generate_bars(count=4000)
+    expected = chronological_split(bars, warmup_bars=TEMPLATES["momentum_breakout"].warmup_bars)
+    monkeypatch.setattr(
+        MarketService,
+        "load",
+        lambda *a, **kw: (bars, SimpleNamespace(is_real=True, provider="test", key="nq_1m_16y")),
+    )
+    observed = []
+
+    def inspect(data, **kwargs):
+        observed.extend(data)
+        raise ValueError("inspection complete")
+
+    monkeypatch.setattr("forge_api.strategies.run_validation", inspect)
+    strategy_id = _create(client)
+    response = client.post(
+        f"/api/v1/strategies/{strategy_id}/validate",
+        json={"dataset": "nq_1m_16y", "bar_count": 4000},
+    )
+    assert response.status_code == 422
+    assert observed == list(expected.development)
+    assert observed[-1].event_time < expected.validation[0].event_time
+
+
+def test_changed_inputs_invalidate_saved_validation_evidence(tmp_path, monkeypatch):
+    from forge_api.strategies import judge_evidence
+
+    payload = {
+        "code_hash": "old",
+        "split_id": "old-split",
+        "calculation_version": "contract-units-v2",
+    }
+    monkeypatch.setattr("forge_api.strategies.load_evidence", lambda *a: payload)
+    assert judge_evidence(tmp_path, "candidate", code_hash="new", split_id="old-split") == {}
+    assert judge_evidence(tmp_path, "candidate", code_hash="old", split_id="new-split") == {}
+
+
 def test_judge_withholds_a_pass_until_validation_has_run(client, tmp_path) -> None:
     """The whole point of the upgrade, asserted end to end."""
     strategy_id = _create(client)

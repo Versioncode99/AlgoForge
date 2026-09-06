@@ -1,10 +1,11 @@
 import '@testing-library/jest-dom/vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, configure, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { App } from './App'
 
-vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="chart" /> }))
+vi.mock('echarts-for-react/lib/core', () => ({ default: () => <div data-testid="chart" /> }))
+configure({ asyncUtilTimeout: 5000 })
 
 const summary = {
   strategy_count: 2, backtest_count: 3, template_count: 3,

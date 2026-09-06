@@ -63,6 +63,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         seed_demo(ledger)
         app.state.ledger = ledger
         yield
+        engine.stop()
         ledger.close()
 
     app = FastAPI(

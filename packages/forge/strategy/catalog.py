@@ -19,6 +19,33 @@ class StrategyCapability(FrozenModel):
 
 LOCKED_RESEARCH: tuple[StrategyCapability, ...] = (
     StrategyCapability(
+        key="options_exposure_walls",
+        name="Options-implied range and dealer exposure",
+        family="derivatives",
+        status="LOCKED_DATA",
+        runnable=False,
+        required_data=(
+            "OPTIONS_CHAIN",
+            "IMPLIED_VOLATILITY",
+            "OPEN_INTEREST",
+            "POSITION_ASSUMPTIONS",
+        ),
+        minimum_timeframe="snapshot",
+        description="Tests options-implied range and exposure hypotheses from timestamped chains.",
+        missing_capability="Futures OHLCV cannot identify dealer positioning or a 90% price wall.",
+    ),
+    StrategyCapability(
+        key="factor_residual_stat_arb",
+        name="Factor-residual statistical arbitrage",
+        family="relative_value",
+        status="LOCKED_UNIVERSE",
+        runnable=False,
+        required_data=("SYNCHRONIZED_MULTI_ASSET", "FACTOR_RETURNS", "BORROW_COSTS"),
+        minimum_timeframe="daily",
+        description="Fit factor-neutral residuals and trade equilibrium deviations.",
+        missing_capability="Single-contract backtests lack a hedge basket and aligned universe.",
+    ),
+    StrategyCapability(
         key="order_book_imbalance",
         name="Order-book imbalance continuation",
         family="microstructure",

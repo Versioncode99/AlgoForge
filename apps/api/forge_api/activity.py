@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections import deque
@@ -32,6 +33,7 @@ class ActivityLog:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._buffer: deque[ActivityEvent] = deque(maxlen=capacity)
+        self._lock = threading.Lock()
         self._load()
 
     def _load(self) -> None:
@@ -64,13 +66,15 @@ class ActivityLog:
             message=message,
             ref=ref,
         )
-        self._buffer.append(event)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(event.model_dump_json() + "\n")
+        with self._lock:
+            self._buffer.append(event)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(event.model_dump_json() + "\n")
         return event
 
     def recent(self, limit: int = 120) -> list[ActivityEvent]:
-        return list(self._buffer)[-limit:][::-1]
+        with self._lock:
+            return list(self._buffer)[-max(1, min(limit, 500)) :][::-1]
 
 
 # How long the in-memory index may go without a full rescan. Only matters for
@@ -92,15 +96,18 @@ class BacktestStore:
 
     def save(self, result: Any) -> None:  # BacktestResult; Any avoids a circular import
         path = self.root / f"{result.backtest_id}.json"
-        if path.exists():
-            return  # immutable: identical inputs produce the identical artifact
-        path.write_text(json.dumps(result.model_dump(mode="json"), indent=2), encoding="utf-8")
+        payload = result.model_dump(mode="json")
         # Insert into the index rather than discarding it. Throwing the cache
         # away meant a full rebuild on the next read, and with four workers
         # saving every few seconds the list spent most of its time rebuilding:
         # 6.6s while the engine ran, against 0.36s idle.
-        finished = str(result.model_dump(mode="json").get("finished_at", ""))
+        finished = str(payload.get("finished_at", ""))
         with self._index_lock:
+            if path.exists():
+                return
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            temporary.replace(path)
             self._meta[path.name] = (result.strategy_id, finished)
             if self._index_cache is not None:
                 entries = self._index_cache.setdefault(result.strategy_id, [])
@@ -108,10 +115,15 @@ class BacktestStore:
                 entries.sort(key=lambda item: item[1], reverse=True)
 
     def load(self, backtest_id: str) -> dict[str, Any] | None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", backtest_id):
+            return None
         path = self.root / f"{backtest_id}.json"
         if not path.exists():
             return None
-        payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
         return payload
 
     # Artifacts are immutable, so a filename -> (strategy, finished_at) index only

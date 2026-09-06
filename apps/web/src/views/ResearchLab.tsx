@@ -4,8 +4,9 @@ import { useState } from 'react'
 import { getJson } from '../api'
 import { pct, signed } from '../lib'
 import type { ResearchOverview } from '../types'
+import { ResearchBrain } from './AgentCommand'
 
-type Pane = 'families' | 'matrix' | 'capabilities'
+type Pane = 'families' | 'matrix' | 'capabilities' | 'papers'
 
 /** A research inventory, not a leaderboard. Empty cells and locked families are
  *  first-class so the screen cannot imply breadth that has not been tested. */
@@ -39,6 +40,9 @@ export function ResearchLabView() {
       </div>
 
       <div className="research-switch" role="tablist" aria-label="Research views">
+        <button className={pane === 'papers' ? 'active' : ''} onClick={() => setPane('papers')}>
+          <FlaskConical /> Research papers
+        </button>
         <button className={pane === 'families' ? 'active' : ''} onClick={() => setPane('families')}>
           <FlaskConical /> Families
         </button>
@@ -49,6 +53,7 @@ export function ResearchLabView() {
           <Database /> Capability map
         </button>
       </div>
+      {pane === 'papers' && <ResearchBrain />}
 
       {pane === 'families' && (
         <div className="family-grid">

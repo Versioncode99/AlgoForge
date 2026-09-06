@@ -18,6 +18,7 @@ from forge.strategy import StrategyLibrary
 from pydantic import BaseModel, Field
 
 from forge_api.activity import ActivityLog, BacktestStore
+from forge_api.agent_service import AgentService
 from forge_api.assistant import Assistant
 from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.jobs import REGISTRY, JobHandle
@@ -48,7 +49,19 @@ class StartEngineRequest(BaseModel):
     # Only the 20% validation slice reaches the prop simulator, so the window
     # has to be about five times the one the 30-day gate needs.
     max_bars: int = Field(default=250_000, ge=1_000, le=MAX_BACKTEST_BARS)
-    workers: int = Field(default=4, ge=1, le=16)
+    workers: int = Field(default=8, ge=1, le=8)
+
+
+class AgentTaskRequest(BaseModel):
+    task: str = Field(default="", max_length=2000)
+
+
+class AgentControlRequest(BaseModel):
+    enabled: bool
+
+
+class WorkerControlRequest(BaseModel):
+    paused: bool
 
 
 class SettingsPatch(BaseModel):
@@ -138,6 +151,48 @@ def build_control_router(
     engine = AutonomousEngine(library, store, log, market, root, research_ledger)
     settings_store = SettingsStore(root / "config" / "settings.json")
     assistant = Assistant(root, library, store, log, settings_store)
+    agents = AgentService(root, log, settings_store)
+    engine.agents = agents
+    agents.context = lambda: {
+        "running": engine.state.running,
+        "dataset": engine.state.config.dataset,
+        "experiments": engine.experiments.recent(engine._scope(), 30),
+        "worker_stages": engine.status()["worker_stages"],
+        "evidence_boundary": "Development-only feedback; validation and holdout values excluded",
+    }
+
+    @router.get("/agent-command")
+    def agent_command() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data={**agents.snapshot(), "engine": engine.status()})
+
+    @router.get("/research/sources")
+    def research_sources() -> ApiEnvelope[list[dict[str, Any]]]:
+        return ApiEnvelope(data=agents.research.list())
+
+    @router.post("/agent-command/{role}/run")
+    def run_agent(role: str, body: AgentTaskRequest) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            return ApiEnvelope(data=agents.submit(role, body.task))
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown agent") from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @router.patch("/agent-command/{role}")
+    def control_agent(role: str, body: AgentControlRequest) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            agents.control(role, body.enabled)
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown agent") from exc
+        return ApiEnvelope(data=agents.snapshot())
+
+    @router.patch("/engine/workers/{worker}")
+    def control_worker(worker: int, body: WorkerControlRequest) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            engine.control_worker(worker, body.paused)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return ApiEnvelope(data=engine.status())
 
     # ── settings ─────────────────────────────────────────────────────────────
     @router.get("/settings", response_model=ApiEnvelope[dict[str, Any]])
@@ -203,7 +258,9 @@ def build_control_router(
             default_dataset=body.default_dataset or current.default_dataset,
             engine_cycle_seconds=body.engine_cycle_seconds or current.engine_cycle_seconds,
             engine_max_strategies=body.engine_max_strategies or current.engine_max_strategies,
-            databento_max_cost_usd=body.databento_max_cost_usd or current.databento_max_cost_usd,
+            databento_max_cost_usd=current.databento_max_cost_usd
+            if body.databento_max_cost_usd is None
+            else body.databento_max_cost_usd,
         )
         settings_store.save(updated)
         log.record("SETTINGS", "updated", "info")
@@ -333,6 +390,16 @@ def build_control_router(
                     {"strategy_id": spec.strategy_id, "name": spec.name, "reason": "no_backtest"}
                 )
                 continue
+            if latest.get("calculation_version") != "contract-units-v2":
+                skipped.append(
+                    {
+                        "strategy_id": spec.strategy_id,
+                        "name": spec.name,
+                        "reason": "legacy_units",
+                        "detail": "Rerun: old results used price points as dollar P&L.",
+                    }
+                )
+                continue
             daily = daily_pnl_from_trades(latest["trades"])
             coverage = assess_day_coverage(
                 trading_days=len(daily),
@@ -453,6 +520,14 @@ def build_control_router(
         latest = store.latest(strategy_id)
         if latest is None:
             raise HTTPException(422, {"code": "no_backtest", "detail": "run a backtest first"})
+        if latest.get("calculation_version") != "contract-units-v2":
+            raise HTTPException(
+                422,
+                {
+                    "code": "legacy_units",
+                    "detail": "Rerun this backtest: old results used price points as dollar P&L.",
+                },
+            )
 
         daily = daily_pnl_from_trades(latest["trades"])
         coverage = assess_day_coverage(

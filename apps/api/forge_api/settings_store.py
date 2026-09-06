@@ -28,6 +28,12 @@ MODEL_MIGRATIONS = {
 # reason routing exists: hypothesis work is rare and hard, tagging is constant
 # and easy.
 ROLES: list[dict[str, str]] = [
+    {"key": "research", "label": "Research scout", "detail": "Scholarly search and provenance"},
+    {
+        "key": "validation",
+        "label": "Validation analyst",
+        "detail": "Walk-forward and evidence review",
+    },
     {
         "key": "hypothesis",
         "label": "Hypothesis analyst",
@@ -36,7 +42,7 @@ ROLES: list[dict[str, str]] = [
     {
         "key": "strategy_code",
         "label": "Strategy engineer",
-        "detail": "Writes strategy code and its tests",
+        "detail": "Proposes source-linked variants within tested strategy templates",
     },
     {
         "key": "post_mortem",
@@ -62,6 +68,8 @@ class BudgetSettings:
 # the whole point of routing. The reasoning jobs are rare enough to afford a
 # frontier model; the constant ones go to the cheapest thing with headroom.
 DEFAULT_ROUTING: dict[str, str] = {
+    "research": "deepseek-v4-flash",
+    "validation": "deepseek-v4-pro",
     "hypothesis": "deepseek-v4-pro",  # strongest reasoning; ~5,200/month
     "strategy_code": "kimi-k2.7-code",  # code-tuned; ~6,750/month
     "post_mortem": "glm-5.3",  # ~1,080/month, and post-mortems are rare

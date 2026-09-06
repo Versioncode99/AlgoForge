@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
@@ -39,7 +40,12 @@ class StrategyLibrary:
 
     # ── paths ────────────────────────────────────────────────────────────────
     def dir_for(self, strategy_id: str) -> Path:
-        return self.root / strategy_id
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", strategy_id):
+            raise KeyError("invalid strategy ID")
+        folder = (self.root / strategy_id).resolve()
+        if folder.parent != self.root.resolve():
+            raise KeyError("strategy path leaves the library")
+        return folder
 
     def source_path(self, strategy_id: str) -> Path:
         return self.dir_for(strategy_id) / "strategy.py"
@@ -60,6 +66,9 @@ class StrategyLibrary:
         market: str = "futures",
         bar_spec: str = "1m",
         created_by: str = "operator",
+        parameters: dict[str, float] | None = None,
+        research_sources: tuple[str, ...] = (),
+        hypothesis: str | None = None,
     ) -> StrategySpec:
         template = TEMPLATES.get(template_key)
         if template is None:
@@ -67,7 +76,7 @@ class StrategyLibrary:
 
         display = name or template.name
         base = slugify(display)
-        strategy_id, n = base, 2
+        strategy_id, n = f"{base}_{uuid.uuid4().hex[:10]}", 2
         while self.dir_for(strategy_id).exists():
             strategy_id, n = f"{base}_v{n}", n + 1
 
@@ -80,12 +89,21 @@ class StrategyLibrary:
             symbol=symbol,
             bar_spec=bar_spec,
             template=template.key,
-            hypothesis=template.hypothesis,
+            hypothesis=hypothesis or template.hypothesis,
             falsifiable_prediction=template.falsifiable_prediction,
-            parameters=template.parameters,
+            parameters=tuple(
+                p.model_copy(update={"default": parameters[p.name]})
+                if parameters and p.name in parameters
+                else p
+                for p in template.parameters
+            ),
             warmup_bars=template.warmup_bars,
             created_at=datetime.now(UTC),
             created_by=created_by,
+            research_sources=research_sources,
+            adaptation_note="Research adaptation; not a verified paper replication."
+            if research_sources
+            else "",
         )
 
         assert_safe(template.source)  # never write code that would be refused at run time

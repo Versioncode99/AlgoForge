@@ -47,8 +47,10 @@ class Assistant:
     def context(self) -> dict[str, Any]:
         specs = self.library.list_specs()
         rows = []
-        for spec in specs[:40]:
+        for spec in specs:
             latest = self.store.latest(spec.strategy_id)
+            if latest and latest.get("calculation_version") != "contract-units-v2":
+                latest = None
             rows.append(
                 {
                     "id": spec.strategy_id,
@@ -84,9 +86,8 @@ class Assistant:
         if "best" in q or "winner" in q or "profitable" in q:
             if not winners:
                 return (
-                    "Nothing is net positive after costs. On real MNQ data every family so far "
-                    "loses money, which is the expected outcome for textbook logic on real "
-                    "futures costs."
+                    "No current-calculation backtest in this library is net positive after costs. "
+                    "Untested strategies and older results requiring a units rerun are excluded."
                 )
             best = max(winners, key=lambda s: s["net_pnl"])
             return (
@@ -103,7 +104,7 @@ class Assistant:
             "No model credential is configured, so I can only answer from the local ledger. "
             f"Right now: {ctx['strategy_count']} strategies, {ctx['backtest_count']} backtests, "
             f"families {', '.join(ctx['families']) or 'none yet'}. "
-            "Enable the OmniRoute provider in Settings for open-ended questions."
+            "Configure the model provider in Settings for open-ended questions."
         )
 
     # ── model-backed answer ──────────────────────────────────────────────────

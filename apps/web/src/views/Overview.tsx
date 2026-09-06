@@ -16,7 +16,7 @@ type Sort = 'net' | 'recent' | 'name'
  * carries, and what it last did. That is also the fastest route to the work —
  * the rows are the shortlist you act on.
  */
-export function OverviewView() {
+export function OverviewView({ onAgents }: { onAgents?: () => void }) {
   const [sort, setSort] = useState<Sort>('net')
   const engine = useQuery({
     queryKey: ['engine'],
@@ -48,6 +48,11 @@ export function OverviewView() {
 
   return (
     <div className="stack">
+      <div className="overview-welcome">
+        <div><p className="command-kicker">ALGOFORGE / RESEARCH WORKSTATION</p><h2>A clearer path<br />from signal to strategy.</h2><p>Research with a mechanism. Experiments with a memory. Every result traceable to its evidence.</p>
+          <button className="btn primary" onClick={onAgents}>Open Agent Command <span aria-hidden="true">↗</span></button></div>
+        <div className="overview-orbit" aria-hidden="true"><div /><div /><div /><span>08<small>SPECIALISTS</small></span><i /><i /><i /><i /></div>
+      </div>
       <EnginePanel />
 
       <div className="panel af-panel-in">
@@ -97,7 +102,7 @@ export function OverviewView() {
                   >
                     <td>{s.name}</td>
                     <td className="sub">{s.family}</td>
-                    <td><TierPill tier={s.latest?.evidence_tier} /></td>
+                    <td>{s.latest?.calculation_version === 'legacy-price-points' ? <span className="warn">Rerun · old units</span> : <TierPill tier={s.latest?.evidence_tier} />}</td>
                     <td className={(s.latest?.net_pnl ?? 0) >= 0 ? 'mono num good' : 'mono num bad'}>
                       {signed(s.latest?.net_pnl ?? 0)}
                     </td>

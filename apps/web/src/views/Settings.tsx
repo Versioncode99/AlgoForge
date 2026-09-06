@@ -38,7 +38,7 @@ export function SettingsView() {
 
       <div className="panel">
         <header>
-          <h2>AI agents · OmniRoute gateway</h2>
+          <h2>AI team · Model routing</h2>
           <div className="panel-actions">
             <button className="btn" onClick={() => testGateway.mutate()} disabled={testGateway.isPending}>
               <RefreshCw /> {testGateway.isPending ? 'Testing...' : 'Test connection'}
@@ -132,14 +132,15 @@ export function SettingsView() {
 
       <div className="grid-2">
         <div className="panel">
-          <header><h2>Budget ceilings</h2></header>
+          <header><h2>Execution limits and budget planning</h2></header>
           <div className="panel-body">
+            <p className="sub">Specialist tasks enforce 48 model calls per UTC day, two concurrent model requests, and a 1,600-token response limit. Dollar values below are planning preferences; provider billing is not metered here.</p>
             <div className="stack">
               {([
-                ['daily_usd_hard', 'Daily hard ceiling', 'All agent work halts'],
-                ['daily_usd_soft', 'Daily soft ceiling', 'Frontier calls downgrade'],
-                ['monthly_usd_hard', 'Monthly hard ceiling', 'Manual reset required'],
-                ['per_session_usd', 'Per session', 'One agent invocation'],
+                ['daily_usd_hard', 'Daily allocation', 'Planning value in USD'],
+                ['daily_usd_soft', 'Daily target', 'Planning value in USD'],
+                ['monthly_usd_hard', 'Monthly allocation', 'Planning value in USD'],
+                ['per_session_usd', 'Per task target', 'Planning value in USD'],
               ] as const).map(([key, label, note]) => (
                 <label className="budget-row" key={key}>
                   <span>{label}<small>{note}</small></span>
