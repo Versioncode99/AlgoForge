@@ -27,13 +27,12 @@ from forge_api.opencode import (
     temperature_for,
 )
 from forge_api.providers import (
-    PROVIDER_AUTO,
-    PROVIDER_NVIDIA,
-    PROVIDER_OMNIROUTE,
     PROVIDER_OPENCODE,
     PROVIDERS,
     catalog_for,
     client_for,
+    default_model,
+    model_for,
 )
 
 KEYS = ("OPENCODE_API_KEY", "OPENCODE_API_KEY_2")
@@ -63,17 +62,23 @@ def test_go_is_a_different_endpoint_from_zen():
     assert client_for(PROVIDER_OPENCODE).base_url == OPENCODE_GO_DEFAULT_URL
 
 
-def test_go_is_advertised_and_selectable():
-    ids = {p["id"] for p in PROVIDERS}
-    assert ids == {PROVIDER_AUTO, PROVIDER_OMNIROUTE, PROVIDER_NVIDIA, PROVIDER_OPENCODE}
+def test_go_is_the_only_provider():
+    """OmniRoute needed a local process that never ran; NIM offered three usable
+    models behind a key that 404s for most of its catalogue. Both were removed."""
+    assert [p["id"] for p in PROVIDERS] == [PROVIDER_OPENCODE]
 
 
-def test_go_stays_out_of_the_auto_catalogue():
-    """`auto` never routes to Go, so its fixed monthly allowance is never spent
-    by an unattended engine loop without being asked."""
-    auto_ids = {model["id"] for model in catalog_for(PROVIDER_AUTO)}
-    go_ids = {model["id"] for model in catalog_for(PROVIDER_OPENCODE)}
-    assert not (auto_ids & go_ids)
+def test_a_stale_auto_routing_choice_does_not_become_a_model_name():
+    """Settings saved before the collapse still hold `auto/*` pseudo-models."""
+    assert model_for(PROVIDER_OPENCODE, "auto") == default_model()
+    assert model_for(PROVIDER_OPENCODE, "auto/smart") == default_model()
+    assert model_for(PROVIDER_OPENCODE, "none") == default_model()
+    assert model_for(PROVIDER_OPENCODE, "") == default_model()
+    assert model_for(PROVIDER_OPENCODE, "glm-5.3") == "glm-5.3"
+
+
+def test_the_default_model_is_one_that_actually_exists():
+    assert default_model() in {m["id"] for m in catalog_for()}
 
 
 def test_every_catalogued_model_was_verified_working():
@@ -287,7 +292,7 @@ def test_catalogue_entries_are_internally_consistent():
 
 
 def _absent():
-    from forge_api.model_gateway import CredentialMaterial
+    from forge_api.credentials import CredentialMaterial
 
     return CredentialMaterial("", "none")
 

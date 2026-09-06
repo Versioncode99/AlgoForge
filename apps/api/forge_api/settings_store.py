@@ -13,13 +13,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from forge_api.model_gateway import (
-    OMNIROUTE_DEFAULT_URL,
-    resolve_omniroute_credential,
-)
+from forge_api.opencode import resolve_opencode_credential, resolve_opencode_standby
 from forge_api.providers import catalog_for
 
-KNOWN_MODELS: list[dict[str, Any]] = catalog_for("auto")
+KNOWN_MODELS: list[dict[str, Any]] = catalog_for()
 MODEL_MIGRATIONS = {
     "claude-opus-5": "auto/smart",
     "claude-sonnet-5": "auto",
@@ -61,21 +58,25 @@ class BudgetSettings:
     halt_on_breach: bool = True
 
 
+# Roles mapped onto real models by cost profile and monthly allowance, which is
+# the whole point of routing. The reasoning jobs are rare enough to afford a
+# frontier model; the constant ones go to the cheapest thing with headroom.
+DEFAULT_ROUTING: dict[str, str] = {
+    "hypothesis": "deepseek-v4-pro",  # strongest reasoning; ~5,200/month
+    "strategy_code": "kimi-k2.7-code",  # code-tuned; ~6,750/month
+    "post_mortem": "glm-5.3",  # ~1,080/month, and post-mortems are rare
+    "risk": "deepseek-v4-pro",
+    "chat": "deepseek-v4-flash",  # fast and ~37,800/month
+    "bulk": "mimo-v2.5",  # cheapest on the plan; ~150,400/month
+}
+
+
 @dataclass
 class AISettings:
-    enabled: bool = False
-    provider: str = "auto"
-    base_url: str = OMNIROUTE_DEFAULT_URL
-    routing: dict[str, str] = field(
-        default_factory=lambda: {
-            "hypothesis": "auto/smart",
-            "strategy_code": "auto/coding",
-            "post_mortem": "auto/smart",
-            "risk": "auto/smart",
-            "chat": "auto",
-            "bulk": "auto/cheap",
-        }
-    )
+    enabled: bool = True
+    provider: str = "opencode_go"
+    base_url: str = "https://opencode.ai/zen/go/v1"
+    routing: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ROUTING))
     budget: BudgetSettings = field(default_factory=BudgetSettings)
 
 
@@ -89,7 +90,6 @@ class Settings:
 
 
 CREDENTIALS = [
-    ("NVIDIA_NIM_API_KEY", "NVIDIA NIM", "Hosted model endpoint. Backup when OmniRoute is down."),
     ("DATABENTO_API_KEY", "Databento", "CME futures data. Charged per request."),
     ("FRED_API_KEY", "FRED", "Macro series. Free."),
     ("BINANCE_TESTNET_KEY", "Binance testnet", "Optional. Crypto data needs no key."),
@@ -112,16 +112,29 @@ class SettingsStore:
         budget = BudgetSettings(**{**asdict(BudgetSettings()), **ai_raw.get("budget", {})})
         routing = {**AISettings().routing, **ai_raw.get("routing", {})}
         routing = {role: MODEL_MIGRATIONS.get(model, model) for role, model in routing.items()}
+        # Settings written before the provider collapse still carry OmniRoute's
+        # `auto/*` pseudo-models and a provider id that no longer exists. Left
+        # alone they make every save fail validation, so they are migrated on
+        # read rather than requiring the file to be deleted by hand.
+        routing = {
+            role: DEFAULT_ROUTING.get(role, "deepseek-v4-flash")
+            if model in {"auto", "none"} or model.startswith("auto/")
+            else model
+            for role, model in routing.items()
+        }
+        provider = str(ai_raw.get("provider", "opencode_go"))
+        if provider not in {"opencode_go"}:
+            provider = "opencode_go"
         ai = AISettings(
-            enabled=bool(ai_raw.get("enabled", False)),
-            provider=str(ai_raw.get("provider", "auto")),
-            base_url=str(ai_raw.get("base_url", OMNIROUTE_DEFAULT_URL)),
+            enabled=bool(ai_raw.get("enabled", True)),
+            provider=provider,
+            base_url="https://opencode.ai/zen/go/v1",
             routing=routing,
             budget=budget,
         )
         return Settings(
             ai=ai,
-            default_dataset=raw.get("default_dataset", "mnq_1m_3mo"),
+            default_dataset=raw.get("default_dataset", "nq_1m_16y"),
             engine_cycle_seconds=float(raw.get("engine_cycle_seconds", 6.0)),
             engine_max_strategies=int(raw.get("engine_max_strategies", 60)),
             databento_max_cost_usd=float(raw.get("databento_max_cost_usd", 2.50)),
@@ -137,16 +150,25 @@ class SettingsStore:
         from forge.data.live import load_keys
 
         load_keys()
-        omni = resolve_omniroute_credential()
+        primary = resolve_opencode_credential()
+        standby = resolve_opencode_standby()
         rows = [
             {
-                "key": "OMNIROUTE_API_KEY",
-                "label": "OmniRoute endpoint",
-                "detail": "OpenAI-compatible local model gateway.",
-                "present": omni.present,
-                "hint": "configured" if omni.present else "not set",
-                "source": omni.source,
-            }
+                "key": "OPENCODE_API_KEY",
+                "label": "OpenCode Go",
+                "detail": "Subscription key. Every model in the app runs on this.",
+                "present": primary.present,
+                "hint": "configured" if primary.present else "not set",
+                "source": primary.source,
+            },
+            {
+                "key": "OPENCODE_API_KEY_2",
+                "label": "OpenCode Go standby",
+                "detail": "Optional. Retried once if the primary key is refused.",
+                "present": standby.present,
+                "hint": "configured" if standby.present else "not set",
+                "source": standby.source,
+            },
         ]
         for name, label, detail in CREDENTIALS:
             value = os.environ.get(name, "")

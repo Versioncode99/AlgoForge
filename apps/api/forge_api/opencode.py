@@ -46,7 +46,7 @@ from typing import Any, Literal
 
 import httpx
 
-from forge_api.model_gateway import CredentialMaterial
+from forge_api.credentials import CredentialMaterial
 
 OPENCODE_GO_DEFAULT_URL = "https://opencode.ai/zen/go/v1"
 OPENCODE_ZEN_DEFAULT_URL = "https://opencode.ai/zen/v1"

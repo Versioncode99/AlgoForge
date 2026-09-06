@@ -177,22 +177,23 @@ def test_settings_never_return_secret_values(client, monkeypatch):
 
 
 def test_settings_routing_can_be_changed_per_role(client):
-    updated = client.patch("/api/v1/settings", json={"routing": {"chat": "auto/fast"}}).json()[
-        "data"
-    ]
-    assert updated["ai"]["routing"]["chat"] == "auto/fast"
-    assert updated["ai"]["routing"]["hypothesis"] == "auto/smart", "other roles untouched"
+    updated = client.patch("/api/v1/settings", json={"routing": {"chat": "glm-5.3"}}).json()["data"]
+    assert updated["ai"]["routing"]["chat"] == "glm-5.3"
+    assert updated["ai"]["routing"]["hypothesis"] == "deepseek-v4-pro", "other roles untouched"
 
 
 def test_settings_reject_unknown_model_and_role(client):
     assert client.patch("/api/v1/settings", json={"routing": {"chat": "gpt-9"}}).status_code == 422
     assert (
-        client.patch("/api/v1/settings", json={"routing": {"nope": "auto/smart"}}).status_code
-        == 422
+        client.patch("/api/v1/settings", json={"routing": {"nope": "glm-5.3"}}).status_code == 422
     )
 
 
 def test_assistant_answers_from_the_ledger_without_a_key(client):
+    # AI is on by default now that a provider is configured, so the ledger path
+    # is reached by turning it off rather than by having no key. Tests must not
+    # reach the network either way.
+    client.patch("/api/v1/settings", json={"ai_enabled": False})
     body = client.post("/api/v1/ask", json={"question": "how many strategies are there?"}).json()
     assert body["data"]["model"] == "local-ledger"
     assert body["data"]["grounded"] is True

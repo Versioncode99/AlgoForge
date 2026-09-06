@@ -6,7 +6,6 @@ from collections import defaultdict
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
 from forge.contracts.models import ApiEnvelope
@@ -23,9 +22,9 @@ from forge_api.assistant import Assistant
 from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
-from forge_api.model_gateway import OmniRouteClient
+from forge_api.opencode import OPENCODE_GO_DEFAULT_URL
 from forge_api.providers import (
-    PROVIDER_OMNIROUTE,
+    PROVIDER_OPENCODE,
     PROVIDERS,
     catalog_for,
     status_for,
@@ -172,20 +171,11 @@ def build_control_router(
                 422, {"code": "unsupported_ai_provider", "known": sorted(known_providers)}
             )
 
-        proposed_url = body.ai_base_url or current.ai.base_url
-        # base_url configures the OmniRoute gateway only, and that gateway is a
-        # local process — so it must stay on loopback. The hosted provider has a
-        # fixed endpoint of its own and is unaffected by this field.
-        parsed = urlparse(proposed_url)
-        if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
-            raise HTTPException(422, {"code": "omniroute_loopback_url_required"})
-
-        gateway = OmniRouteClient(proposed_url, timeout_seconds=1.0)
-        valid = (
-            {m["id"] for m in gateway.model_catalog()}
-            | {m["id"] for m in KNOWN_MODELS}
-            | {m["id"] for m in catalog_for(provider)}
-        )
+        # The base URL was only ever a knob for the local OmniRoute gateway,
+        # which is gone. The hosted endpoint is fixed, so the field is accepted
+        # and ignored rather than removed from the wire and breaking clients.
+        proposed_url = OPENCODE_GO_DEFAULT_URL
+        valid = {m["id"] for m in KNOWN_MODELS} | {m["id"] for m in catalog_for(provider)}
         role_keys = {r["key"] for r in ROLES}
 
         routing = dict(current.ai.routing)
@@ -223,7 +213,7 @@ def build_control_router(
     def ai_test() -> ApiEnvelope[dict[str, Any]]:
         current = settings_store.load()
         status = status_for(current.ai.provider, current.ai.base_url)
-        name = status.get("selected") or status.get("provider") or PROVIDER_OMNIROUTE
+        name = status.get("provider") or PROVIDER_OPENCODE
         log.record(
             "AI",
             f"{name} connection verified" if status["connected"] else f"{name} unavailable",
