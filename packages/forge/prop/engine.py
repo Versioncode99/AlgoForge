@@ -155,9 +155,11 @@ def replay_path(rule: PropRuleSet, daily_pnl: np.ndarray) -> tuple[PathOutcome, 
 # resampling a handful of numbers into a shape they cannot support.
 MIN_TRADING_DAYS = 30
 
-# Largest window a single backtest request may ask for. A suggestion beyond it
-# is not advice, it is a finding: the strategy trades too rarely to evaluate.
-MAX_BACKTEST_BARS = 500_000
+# Largest window a single backtest request may ask for. The sixteen-year NQ
+# archive is 4.8M bars, so the ceiling has to clear it or the longest range on
+# offer would be rejected by the request model before anything ran. Runs this
+# size go through the job queue rather than blocking a request.
+MAX_BACKTEST_BARS = 5_000_000
 
 
 @dataclass(frozen=True)

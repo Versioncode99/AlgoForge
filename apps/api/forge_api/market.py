@@ -97,6 +97,25 @@ DATASETS: dict[str, Dataset] = {
 
 DEFAULT_DATASET = "nq_1m_16y"
 
+# How much history a run covers, offered as a choice rather than a bar count.
+# Nobody thinks in bars; they think "the last three years".
+RANGE_YEARS: tuple[float, ...] = (0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 16.0)
+
+RANGE_LABELS: dict[float, str] = {
+    0.25: "3 months",
+    0.5: "6 months",
+    1.0: "1 year",
+    2.0: "2 years",
+    3.0: "3 years",
+    5.0: "5 years",
+    10.0: "10 years",
+    16.0: "Max",
+}
+
+
+def range_label(years: float) -> str:
+    return RANGE_LABELS.get(years, f"{years:g} years")
+
 
 class MarketService:
     """Loads and caches dataset bars. Real providers fail closed; nothing is mocked."""
@@ -162,6 +181,70 @@ class MarketService:
             return len(self._frames[key])
         return int(pd.read_parquet(path, columns=["event_time"]).shape[0])
 
+    def bars_per_year(self, key: str) -> float:
+        """Bars per calendar year, measured from the archive rather than assumed.
+
+        A session-hour assumption would be wrong for every dataset in a
+        different way — holidays, half-days, the 23-hour futures session, the
+        24/7 crypto one. Dividing what is actually there by the span it covers
+        is both simpler and correct.
+        """
+        dataset = DATASETS.get(key)
+        if dataset is None or dataset.months <= 0:
+            return 0.0
+        rows = self.available_rows(key)
+        if rows <= 0:
+            return 0.0
+        return rows / (dataset.months / 12.0)
+
+    def resolve_bars(self, key: str, years: float | None, bar_count: int | None) -> int:
+        """Turn a requested range into a bar count for this dataset.
+
+        `bar_count` wins when both are given, so a caller that knows exactly
+        what it wants is never second-guessed.
+        """
+        if bar_count is not None:
+            return bar_count
+        if years is None:
+            return 0
+        density = self.bars_per_year(key)
+        if density <= 0:
+            # Streaming and synthetic sets have no measurable archive; fall back
+            # to the session-hours estimate rather than refusing outright.
+            dataset = DATASETS.get(key)
+            interval = dataset.interval if dataset else "1m"
+            per_day = {"1m": 1380, "5m": 276, "1h": 23, "1d": 1}.get(interval, 1380)
+            density = per_day * 252
+        return round(density * years)
+
+    def ranges_for(self, key: str) -> list[dict[str, object]]:
+        """The ranges offered for a dataset, each with the bars it resolves to.
+
+        Ranges longer than the archive are still listed but marked unavailable,
+        so the interface can show why 10 years is greyed out on a 5-year set
+        instead of silently omitting it.
+        """
+        dataset = DATASETS.get(key)
+        if dataset is None:
+            return []
+        rows = self.available_rows(key) if dataset.is_imported else 0
+        span_years = dataset.months / 12.0 if dataset.months else 0.0
+        options: list[dict[str, object]] = []
+        for years in RANGE_YEARS:
+            bars = self.resolve_bars(key, years, None)
+            if rows > 0:
+                bars = min(bars, rows)
+            fits = span_years <= 0 or years <= span_years + 0.01
+            options.append(
+                {
+                    "years": years,
+                    "label": range_label(years),
+                    "bars": bars,
+                    "available": fits,
+                }
+            )
+        return options
+
     def status(self) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
         for dataset in DATASETS.values():
@@ -186,6 +269,9 @@ class MarketService:
                     "cost_note": dataset.cost_note,
                     "loaded": cached,
                     "bar_count": bar_count,
+                    "span_years": round(dataset.months / 12.0, 2) if dataset.months else 0.0,
+                    "bars_per_year": round(self.bars_per_year(dataset.key), 1),
+                    "ranges": self.ranges_for(dataset.key),
                 }
             )
         return rows

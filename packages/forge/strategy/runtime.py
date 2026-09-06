@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -179,6 +179,12 @@ class StrategyModule(Protocol):
     def exit_signal(self, w: Window, p: dict[str, ParamValue], pos: Position) -> str | None: ...
 
 
+# Reporting every bar would cost more than the work it measures. At 15k bars
+# per second this is roughly three updates a second, which is as often as a
+# progress bar can usefully move.
+PROGRESS_INTERVAL = 5_000
+
+
 def run_backtest(
     module: StrategyModule,
     spec: StrategySpec,
@@ -190,11 +196,16 @@ def run_backtest(
     dataset_key: str | None = None,
     partition_name: str | None = None,
     split_receipt: ResearchSplitReceipt | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> BacktestResult:
     """Execute a strategy over bars with a structural no-lookahead guarantee.
 
     The loop decides on bar `i` (closed) and fills on bar `i + 1` open, so every
     trade satisfies `decision_index == entry_index - 1` by construction.
+
+    `progress` is called every `PROGRESS_INTERVAL` bars with `(done, total)`. It
+    may raise to abort the run: a multi-million-bar backtest has to be
+    interruptible, and the loop has no other safe cancellation point.
     """
     started = datetime.now(UTC)
     params = dict(spec.defaults) | dict(parameters or {})
@@ -217,7 +228,10 @@ def run_backtest(
     position: Position | None = None
     last = len(bars) - 1
 
+    total_steps = max(1, last - spec.warmup_bars)
     for i in range(spec.warmup_bars, last):
+        if progress is not None and (i - spec.warmup_bars) % PROGRESS_INTERVAL == 0:
+            progress(i - spec.warmup_bars, total_steps)
         window = Window(o, h, lo, c, v, t, i)
         fill_index = i + 1
 

@@ -35,11 +35,22 @@ def test_suggestion_is_scaled_back_to_the_full_request_window() -> None:
     assert "bar_count of about 216,000" in partitioned.explain()
 
 
-def test_a_strategy_that_trades_too_rarely_is_told_so_plainly() -> None:
+def test_a_thin_window_still_gets_an_actionable_number() -> None:
+    """One trading day in 30k bars is extrapolatable, and now fits the cap."""
     coverage = assess_day_coverage(trading_days=1, bars_used=30_000, span_days=21)
-    assert coverage.suggestion_exceeds_limit is True
+    assert coverage.suggestion_exceeds_limit is False
     message = coverage.explain()
     assert "Only 1 trading day produced trades" in message
+    assert "bar_count of about 1,080,000" in message
+
+
+def test_a_strategy_that_trades_too_rarely_is_told_so_plainly() -> None:
+    """Past the cap the answer is a finding, not advice."""
+    coverage = assess_day_coverage(trading_days=1, bars_used=250_000, span_days=90)
+    assert coverage.suggested_request_bars is not None
+    assert coverage.suggested_request_bars > MAX_BACKTEST_BARS
+    assert coverage.suggestion_exceeds_limit is True
+    message = coverage.explain()
     assert "trades too rarely" in message
     assert f"{MAX_BACKTEST_BARS:,}" in message
 

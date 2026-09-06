@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.assistant import Assistant
 from forge_api.engine import AutonomousEngine, EngineConfig
+from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
 from forge_api.model_gateway import OmniRouteClient
 from forge_api.providers import (
@@ -66,6 +67,18 @@ class PropRequest(BaseModel):
     rule_id: str
     paths: int = Field(default=1000, ge=100, le=10_000)
     seed: int = 20260901
+
+
+class PropMatrixRequest(BaseModel):
+    """Run every backtested strategy against every rule set at once."""
+
+    paths: int = Field(default=1000, ge=100, le=10_000)
+    seed: int = 20260901
+    phase: Literal["CHALLENGE", "FUNDED", "ALL"] = "ALL"
+    # Strategies with too short a track record are reported as skipped rather
+    # than silently dropped: "no cell here" and "we did not look" are different
+    # answers and the grid has to distinguish them.
+    strategy_ids: list[str] | None = None
 
 
 def daily_pnl_from_trades(trades: list[dict[str, Any]]) -> tuple[float, ...]:
@@ -295,6 +308,148 @@ def build_control_router(
     def engine_constraints() -> ApiEnvelope[list[dict[str, str]]]:
         rows = engine.constraints()
         return ApiEnvelope(data=rows, meta={"total": len(rows)})
+
+    @router.post("/prop/matrix", response_model=ApiEnvelope[dict[str, Any]])
+    def prop_matrix(body: PropMatrixRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Every strategy against every rule, as one job.
+
+        A single strategy against a single rule answers almost nothing: prop
+        rule sets differ in ways that reverse the ranking, and a strategy that
+        clears a no-daily-loss-limit evaluation can fail a trailing one on the
+        same P&L. The comparison is the product.
+        """
+        rules = [
+            rule
+            for rule in load_rules(root / "rules")
+            if body.phase == "ALL" or rule.phase == body.phase
+        ]
+        if not rules:
+            raise HTTPException(422, {"code": "no_rules", "phase": body.phase})
+
+        candidates: list[tuple[str, str, tuple[float, ...]]] = []
+        skipped: list[dict[str, Any]] = []
+        for spec in library.list_specs():
+            if body.strategy_ids and spec.strategy_id not in body.strategy_ids:
+                continue
+            latest = store.latest(spec.strategy_id)
+            if latest is None:
+                skipped.append(
+                    {"strategy_id": spec.strategy_id, "name": spec.name, "reason": "no_backtest"}
+                )
+                continue
+            daily = daily_pnl_from_trades(latest["trades"])
+            coverage = assess_day_coverage(
+                trading_days=len(daily),
+                bars_used=int(latest.get("bar_count") or 0),
+                span_days=_calendar_span_days(latest["trades"]),
+                partition_fraction=_partition_fraction(latest),
+            )
+            if not coverage.sufficient:
+                skipped.append(
+                    {
+                        "strategy_id": spec.strategy_id,
+                        "name": spec.name,
+                        "reason": "insufficient_days",
+                        "days_observed": coverage.trading_days,
+                        "days_required": coverage.days_required,
+                        "detail": coverage.explain(),
+                    }
+                )
+                continue
+            candidates.append((spec.strategy_id, spec.name, daily))
+
+        if not candidates:
+            raise HTTPException(
+                422,
+                {
+                    "code": "nothing_to_simulate",
+                    "skipped": skipped,
+                    "detail": (
+                        "No strategy has a backtest long enough to simulate. Run a backtest "
+                        "over a longer range first."
+                    ),
+                },
+            )
+
+        total = len(candidates) * len(rules)
+
+        def work(handle: JobHandle) -> dict[str, Any]:
+            cells: list[dict[str, Any]] = []
+            done = 0
+            for strategy_id, name, daily in candidates:
+                for rule in rules:
+                    handle.progress(done, f"{name} vs {rule.display_name}")
+                    simulation = simulate_prop_paths(
+                        strategy_id,
+                        rule,
+                        daily,
+                        seed=body.seed,
+                        paths=body.paths,
+                        allow_unverified=True,
+                    )
+                    cells.append(
+                        {
+                            "strategy_id": strategy_id,
+                            "strategy_name": name,
+                            "rule_id": rule.rule_id,
+                            "rule_name": rule.display_name,
+                            "provider": rule.provider,
+                            "phase": rule.phase,
+                            "pass_rate": simulation.pass_rate,
+                            "interval_low": simulation.interval_low,
+                            "interval_high": simulation.interval_high,
+                            "risk_of_ruin": simulation.risk_of_ruin,
+                            "mean_payout": simulation.mean_payout,
+                            "median_terminal": simulation.tail_risk.terminal_median,
+                            "var_95": simulation.tail_risk.var_95,
+                            "cvar_95": simulation.tail_risk.cvar_95,
+                            "trading_days": len(daily),
+                            "verified": rule.verified,
+                        }
+                    )
+                    done += 1
+            handle.progress(total, "complete")
+            log.record(
+                "PROP",
+                f"matrix: {len(candidates)} strategies x {len(rules)} rules, "
+                f"best {max((c['pass_rate'] for c in cells), default=0):.1%}",
+                "info",
+            )
+            return {
+                "cells": cells,
+                "strategies": [
+                    {"strategy_id": sid, "name": name, "trading_days": len(daily)}
+                    for sid, name, daily in candidates
+                ],
+                "rules": [
+                    {
+                        "rule_id": rule.rule_id,
+                        "display_name": rule.display_name,
+                        "provider": rule.provider,
+                        "phase": rule.phase,
+                        "verified": rule.verified,
+                    }
+                    for rule in rules
+                ],
+                "skipped": skipped,
+                "paths": body.paths,
+            }
+
+        job = REGISTRY.submit(
+            "prop_matrix",
+            f"{len(candidates)} strategies x {len(rules)} rules x {body.paths:,} paths",
+            total,
+            work,
+        )
+        return ApiEnvelope(
+            data=job.as_dict(),
+            meta={
+                "strategies": len(candidates),
+                "rules": len(rules),
+                "skipped": len(skipped),
+                "note": "Every cell is a full block-bootstrap simulation.",
+            },
+        )
 
     # ── prop simulation, linked to a real strategy ───────────────────────────
     @router.post("/strategies/{strategy_id}/prop", response_model=ApiEnvelope[dict[str, Any]])

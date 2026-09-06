@@ -32,6 +32,7 @@ from forge.strategy import (
 from pydantic import BaseModel, Field
 
 from forge_api.activity import ActivityLog, BacktestStore, Level
+from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.market import DEFAULT_DATASET, MarketService
 
 
@@ -49,12 +50,28 @@ class UpdateSourceRequest(BaseModel):
 class BacktestRequest(BaseModel):
     parameters: dict[str, float] | None = None
     dataset: str = DEFAULT_DATASET
+    # Nobody thinks in bars. `years` is resolved against the dataset's measured
+    # density; `bar_count` still wins when given, so scripts stay exact.
+    years: float | None = Field(default=None, gt=0, le=25)
     # Only the 20% validation slice reaches the prop simulator, so the request
     # has to be five times the window the gate needs. At 250k one-minute bars
     # the validation partition spans about 39 trading days, clearing the 30-day
     # minimum; anything much smaller makes the gate unreachable by construction.
     bar_count: int = Field(default=250_000, ge=400, le=MAX_BACKTEST_BARS)
+    # A ceiling the operator sets, independent of the range. Asking for sixteen
+    # years on a slow machine should be capped by choice, not by a surprise.
+    max_bars: int | None = Field(default=None, ge=400, le=MAX_BACKTEST_BARS)
     seed: int = 20260901
+
+    def resolved_bars(self, market: MarketService) -> int:
+        """Bar count after the range and the operator's cap are applied."""
+        if self.years is not None:
+            bars = market.resolve_bars(self.dataset, self.years, None) or self.bar_count
+        else:
+            bars = self.bar_count
+        if self.max_bars is not None:
+            bars = min(bars, self.max_bars)
+        return max(400, min(bars, MAX_BACKTEST_BARS))
 
 
 class ValidationRequest(BaseModel):
@@ -236,9 +253,14 @@ def build_router(
     def _bars(request: BacktestRequest) -> tuple[list[Bar], bool, str]:
         """Resolve a request to bars. Real datasets fail closed rather than
         silently falling back to synthetic data."""
+        limit = (
+            request.resolved_bars(market)
+            if isinstance(request, BacktestRequest)
+            else request.bar_count
+        )
         if request.dataset == "synthetic":
-            return generate_bars(count=request.bar_count, seed=request.seed), False, "generator"
-        bars, dataset = market.load(request.dataset, limit=request.bar_count)
+            return generate_bars(count=limit, seed=request.seed), False, "generator"
+        bars, dataset = market.load(request.dataset, limit=limit)
         return bars, dataset.is_real, dataset.provider
 
     # ── templates ────────────────────────────────────────────────────────────
@@ -528,6 +550,189 @@ def build_router(
                 "trials_counted": len(points),
                 "note": "Sweep results are exploratory and can never promote a strategy.",
             },
+        )
+
+    # ── long runs ────────────────────────────────────────────────────────────
+    @router.post(
+        "/strategies/{strategy_id}/backtest/async", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def backtest_async(strategy_id: str, body: BacktestRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Start a backtest as a job and return its id immediately.
+
+        The synchronous route stays for scripts and tests. Anything driven by a
+        person goes through here, because sixteen years is minutes of work and
+        an interface with no progress to show is indistinguishable from a hang.
+        """
+        try:
+            spec = library.get_spec(strategy_id)
+            library.load_module(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(404, {"code": "strategy_not_found"}) from exc
+        except GuardViolation as exc:
+            raise HTTPException(422, {"code": "guard_violation", "detail": str(exc)}) from exc
+
+        requested = body.resolved_bars(market)
+        available = market.available_rows(body.dataset)
+        if available and requested > available:
+            requested = available
+
+        def work(handle: JobHandle) -> dict[str, Any]:
+            handle.progress(0, f"loading {requested:,} bars")
+            envelope = _run_backtest_job(strategy_id, spec, body, requested, handle)
+            return envelope
+
+        job = REGISTRY.submit(
+            "backtest",
+            f"{spec.name} · {requested:,} bars · {body.dataset}",
+            requested,
+            work,
+        )
+        log.record(
+            "BACKTEST",
+            f"{strategy_id} queued on {requested:,} {body.dataset} bars",
+            "info",
+            strategy_id,
+        )
+        return ApiEnvelope(
+            data=job.as_dict(),
+            meta={"dataset": body.dataset, "requested_bars": requested},
+        )
+
+    def _run_backtest_job(
+        strategy_id: str,
+        spec: Any,
+        body: BacktestRequest,
+        requested: int,
+        handle: JobHandle,
+    ) -> dict[str, Any]:
+        module = library.load_module(strategy_id)
+        if body.dataset == "synthetic":
+            bars, is_real, provider = (
+                generate_bars(count=requested, seed=body.seed),
+                False,
+                "generator",
+            )
+        else:
+            loaded, dataset = market.load(body.dataset, limit=requested)
+            bars, is_real, provider = loaded, dataset.is_real, dataset.provider
+
+        code_hash = library.code_hash(strategy_id)
+        split_meta: dict[str, Any] = {}
+        # Two partitions are run, so progress is reported across both rather
+        # than jumping back to zero when the validation pass starts.
+        if is_real:
+            partitions = chronological_split(bars, warmup_bars=spec.warmup_bars)
+            dev_total = len(partitions.development)
+            val_total = len(partitions.validation)
+            combined = max(1, dev_total + val_total)
+
+            def dev_progress(done: int, total: int) -> None:
+                handle.progress(
+                    int(requested * (done / combined)), f"in-sample · {done:,}/{dev_total:,}"
+                )
+
+            def val_progress(done: int, total: int) -> None:
+                handle.progress(
+                    int(requested * ((dev_total + done) / combined)),
+                    f"out-of-sample · {done:,}/{val_total:,}",
+                )
+
+            development = run_backtest(
+                module,
+                spec,
+                partitions.development,
+                labels=("REAL_DATA", "DEVELOPMENT_IN_SAMPLE", "UNCALIBRATED"),
+                evidence_tier="DEVELOPMENT_IN_SAMPLE",
+                partition_name="DEVELOPMENT",
+                parameters=body.parameters,
+                code_hash=code_hash,
+                dataset_key=body.dataset,
+                split_receipt=partitions.receipt,
+                progress=dev_progress,
+            )
+            result = run_backtest(
+                module,
+                spec,
+                partitions.validation,
+                labels=("REAL_DATA", "VALIDATION_OOS", "UNCALIBRATED"),
+                evidence_tier="VALIDATION_OOS",
+                partition_name="VALIDATION",
+                parameters=body.parameters,
+                code_hash=code_hash,
+                dataset_key=body.dataset,
+                split_receipt=partitions.receipt,
+                progress=val_progress,
+            )
+            store.save(development)
+            split_meta = {
+                "split_receipt": partitions.receipt.model_dump(mode="json"),
+                "development_backtest_id": development.backtest_id,
+                "validation_backtest_id": result.backtest_id,
+                "development_net_pnl": development.net_pnl,
+                "development_trade_count": len(development.trades),
+            }
+        else:
+
+            def plain_progress(done: int, total: int) -> None:
+                handle.progress(int(requested * (done / max(total, 1))), f"{done:,}/{total:,}")
+
+            result = run_backtest(
+                module,
+                spec,
+                bars,
+                parameters=body.parameters,
+                code_hash=code_hash,
+                labels=("SYNTHETIC_DATA", "UNCALIBRATED"),
+                evidence_tier="SYNTHETIC",
+                dataset_key=body.dataset,
+                progress=plain_progress,
+            )
+
+        store.save(result)
+        log.record(
+            "BACKTEST",
+            f"{strategy_id} finished - {len(result.trades)} trades, net {result.net_pnl:+.2f}",
+            "pass" if result.net_pnl > 0 else "warn",
+            result.backtest_id,
+        )
+        return {
+            "result": result.model_dump(mode="json"),
+            "meta": {
+                "dataset": body.dataset,
+                "provider": provider,
+                "is_real": is_real,
+                "bar_count": len(bars),
+                "trade_count": len(result.trades),
+                "evidence_tier": result.evidence_tier,
+                **split_meta,
+            },
+        }
+
+    @router.get("/jobs", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def list_jobs(limit: int = 20) -> ApiEnvelope[list[dict[str, Any]]]:
+        rows = [job.as_dict() for job in REGISTRY.recent(limit)]
+        return ApiEnvelope(data=rows, meta={"total": len(rows)})
+
+    @router.get("/jobs/{job_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def get_job(job_id: str) -> ApiEnvelope[dict[str, Any]]:
+        job = REGISTRY.get(job_id)
+        if job is None:
+            raise HTTPException(404, {"code": "job_not_found", "job_id": job_id})
+        payload = job.as_dict()
+        # The result rides along only once, on completion, so polling stays cheap.
+        if job.status == "DONE":
+            payload["result"] = job.result
+        return ApiEnvelope(data=payload)
+
+    @router.post("/jobs/{job_id}/cancel", response_model=ApiEnvelope[dict[str, Any]])
+    def cancel_job(job_id: str) -> ApiEnvelope[dict[str, Any]]:
+        job = REGISTRY.get(job_id)
+        if job is None:
+            raise HTTPException(404, {"code": "job_not_found", "job_id": job_id})
+        accepted = REGISTRY.cancel(job_id)
+        return ApiEnvelope(
+            data={"job_id": job_id, "cancelling": accepted, "status": job.status},
+            meta={"note": "Cancellation takes effect at the run's next checkpoint."},
         )
 
     @router.post("/strategies/{strategy_id}/validate", response_model=ApiEnvelope[dict[str, Any]])
