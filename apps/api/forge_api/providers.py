@@ -1,14 +1,20 @@
 """Model providers behind one OpenAI-compatible interface.
 
-Two are wired:
+Three are wired:
 
 - **OmniRoute** — a local gateway that does its own quota, health and cost-aware
   routing. Preferred when it is running, because nothing leaves the machine.
 - **NVIDIA NIM** — a hosted OpenAI-compatible endpoint. Works without any local
   process, so it is the natural backup when OmniRoute is not listening.
+- **OpenCode Zen** — a hosted gateway over many families at once, including the
+  Chinese frontier models (DeepSeek, GLM, Kimi, MiniMax, Qwen). Most of its
+  catalogue is gated on account balance rather than capability.
 
-`auto` tries OmniRoute first and falls back to NIM. Either can also be pinned
-explicitly from Settings, so the choice is the operator's rather than implied.
+`auto` tries OmniRoute first and falls back to NIM. Any of the three can be
+pinned explicitly from Settings, so the choice is the operator's rather than
+implied. Zen is not in the automatic chain on purpose: with an unfunded account
+only its free tier answers, and silently routing a research role onto a
+free-tier model would be a quiet downgrade rather than a decision.
 
 Credentials are resolved server-side and never returned across the API.
 """
@@ -31,9 +37,15 @@ from forge_api.nvidia_nim import (
     NvidiaNimClient,
     resolve_nvidia_credential,
 )
+from forge_api.opencode_zen import (
+    OPENCODE_ZEN_DEFAULT_URL,
+    OpenCodeZenClient,
+    resolve_opencode_credential,
+)
 
 PROVIDER_OMNIROUTE = "omniroute"
 PROVIDER_NVIDIA = "nvidia_nim"
+PROVIDER_OPENCODE = "opencode_zen"
 PROVIDER_AUTO = "auto"
 
 PROVIDERS: tuple[dict[str, str], ...] = (
@@ -52,6 +64,14 @@ PROVIDERS: tuple[dict[str, str], ...] = (
         "label": "NVIDIA NIM (hosted)",
         "detail": "Hosted OpenAI-compatible endpoint. Needs NVIDIA_NIM_API_KEY.",
     },
+    {
+        "id": PROVIDER_OPENCODE,
+        "label": "OpenCode Zen (hosted)",
+        "detail": (
+            "DeepSeek, GLM, Kimi, MiniMax, Qwen, Claude, Gemini and Grok behind one key. "
+            "Most models need account credit; the free tier answers without it."
+        ),
+    },
 )
 
 
@@ -68,6 +88,8 @@ class Resolved:
 def credential_for(provider: str) -> CredentialMaterial:
     if provider == PROVIDER_NVIDIA:
         return resolve_nvidia_credential()
+    if provider == PROVIDER_OPENCODE:
+        return resolve_opencode_credential()
     return resolve_omniroute_credential()
 
 
@@ -76,6 +98,8 @@ def client_for(provider: str, base_url: str | None = None) -> Any:
     # endpoint; passing the loopback URL to it would probe the wrong host.
     if provider == PROVIDER_NVIDIA:
         return NvidiaNimClient(NVIDIA_NIM_DEFAULT_URL)
+    if provider == PROVIDER_OPENCODE:
+        return OpenCodeZenClient(OPENCODE_ZEN_DEFAULT_URL)
     return OmniRouteClient(base_url or OMNIROUTE_DEFAULT_URL)
 
 
@@ -83,17 +107,25 @@ def catalog_for(provider: str) -> list[dict[str, str]]:
     """Models offered for a provider. Includes both sets under `auto`."""
     if provider == PROVIDER_NVIDIA:
         return [dict(m) for m in NVIDIA_NIM_MODELS]
+    if provider == PROVIDER_OPENCODE:
+        # Ask the client rather than the constant: it filters out the models
+        # this code path cannot drive (the /responses family and the
+        # upstream-dead ones) and puts the verified ones first.
+        return OpenCodeZenClient().model_catalog()
     if provider == PROVIDER_OMNIROUTE:
         return [dict(m) for m in OMNIROUTE_FALLBACK_MODELS]
     merged = {m["id"]: dict(m) for m in OMNIROUTE_FALLBACK_MODELS}
     for model in NVIDIA_NIM_MODELS:
         merged.setdefault(model["id"], dict(model))
+    # Zen is deliberately absent from `auto`: it is not in the fallback chain,
+    # so offering its models here would let one be selected and then routed
+    # somewhere else entirely.
     return list(merged.values())
 
 
 def status_for(provider: str, base_url: str | None = None) -> dict[str, Any]:
     """Probe one provider, or both when `auto`."""
-    if provider in {PROVIDER_OMNIROUTE, PROVIDER_NVIDIA}:
+    if provider in {PROVIDER_OMNIROUTE, PROVIDER_NVIDIA, PROVIDER_OPENCODE}:
         return dict(client_for(provider, base_url).status())
 
     omni = OmniRouteClient(base_url or OMNIROUTE_DEFAULT_URL).status()
@@ -120,6 +152,9 @@ def resolve(provider: str, base_url: str | None = None) -> Resolved:
     if provider == PROVIDER_NVIDIA:
         nim_only = NvidiaNimClient()
         return Resolved(PROVIDER_NVIDIA, nim_only, nim_only.status(), False)
+    if provider == PROVIDER_OPENCODE:
+        zen_only = OpenCodeZenClient()
+        return Resolved(PROVIDER_OPENCODE, zen_only, zen_only.status(), False)
 
     omni = OmniRouteClient(base_url or OMNIROUTE_DEFAULT_URL)
     omni_status = omni.status()

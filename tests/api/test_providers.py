@@ -8,6 +8,7 @@ from forge_api.providers import (
     PROVIDER_AUTO,
     PROVIDER_NVIDIA,
     PROVIDER_OMNIROUTE,
+    PROVIDER_OPENCODE,
     PROVIDERS,
     catalog_for,
     client_for,
@@ -30,7 +31,7 @@ def _dead(request: httpx.Request) -> httpx.Response:
 
 def test_every_advertised_provider_is_selectable():
     ids = {p["id"] for p in PROVIDERS}
-    assert ids == {PROVIDER_AUTO, PROVIDER_OMNIROUTE, PROVIDER_NVIDIA}
+    assert ids == {PROVIDER_AUTO, PROVIDER_OMNIROUTE, PROVIDER_NVIDIA, PROVIDER_OPENCODE}
 
 
 def test_nim_client_ignores_the_omniroute_loopback_url():

@@ -104,7 +104,10 @@ export function SettingsView() {
                       onChange={(e) => patch.mutate({ routing: { [role.key]: e.target.value } })}
                     >
                       {s.models.map((m) => (
-                        <option key={m.id} value={m.id}>{m.label}</option>
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                          {m.status === 'needs_credit' ? ' · needs credit' : ''}
+                        </option>
                       ))}
                     </select>
                   </td>
@@ -112,6 +115,13 @@ export function SettingsView() {
               ))}
             </tbody>
           </table>
+          {s.models.some((m) => m.status === 'needs_credit') && (
+            <p className="warning">
+              Models marked <b>needs credit</b> are real and correctly configured, but this
+              account has no balance, so they answer with a billing error rather than a
+              completion. Only the free-tier models work until it is topped up.
+            </p>
+          )}
           <p className="warning">
             Routing exists because the jobs differ in cost profile: hypothesis work is rare and
             hard, tagging is constant and easy. Putting everything on a frontier model is the

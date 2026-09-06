@@ -175,7 +175,13 @@ export type ResearchOverview = {
 }
 
 /* ── Settings & assistant ───────────────────────────────────────────────── */
-export type ModelInfo = { id: string; label: string; tier: string; note: string }
+export type ModelInfo = {
+  id: string; label: string; tier: string; note: string
+  // OpenCode Zen only: most of its catalogue is gated on account balance
+  // rather than capability, so a model can be real, listed and still refuse.
+  status?: 'verified' | 'needs_credit' | 'unavailable'
+  origin?: 'china' | 'us' | 'other'
+}
 export type RoleInfo = { key: string; label: string; detail: string }
 export type CredentialInfo = {
   key: string; label: string; detail: string; present: boolean; hint: string; source: string
