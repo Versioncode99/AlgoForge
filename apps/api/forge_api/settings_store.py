@@ -82,7 +82,7 @@ class AISettings:
 @dataclass
 class Settings:
     ai: AISettings = field(default_factory=AISettings)
-    default_dataset: str = "mnq_1m_3mo"
+    default_dataset: str = "nq_1m_16y"
     engine_cycle_seconds: float = 6.0
     engine_max_strategies: int = 60
     databento_max_cost_usd: float = 2.50

@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Check, FileCode2, FlaskConical, Gavel, Play, Plus, Trash2, Waves } from 'lucide-react'
+import { AlertTriangle, Check, FileCode2, FlaskConical, Gavel, Play, Plus, ShieldCheck, Trash2, Waves } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { deleteJson, getJson, postJson, putJson } from '../api'
 import { CurveChart, SweepChart } from '../charts'
 import { clock, money, pct, shortHash, signed } from '../lib'
 import type {
-  BacktestResult, StrategyDetail, StrategyListItem, SweepResult, TemplateInfo, Verdict,
+  BacktestResult, StrategyDetail, StrategyListItem, SweepResult, TemplateInfo,
+  ValidationEvidence, Verdict,
 } from '../types'
 
 type Pane = 'code' | 'hypothesis' | 'results' | 'trades'
@@ -50,9 +51,13 @@ export function StrategiesView() {
   const [result, setResult] = useState<BacktestResult | null>(null)
   const [verdict, setVerdict] = useState<Verdict | null>(null)
   const [sweep, setSweep] = useState<SweepResult | null>(null)
+  const [evidence, setEvidence] = useState<ValidationEvidence | null>(null)
 
   const backtest = useMutation({
-    mutationFn: () => postJson<BacktestResult>(`/strategies/${selected}/backtest`, { bar_count: 4000 }),
+    // No bar_count: 4,000 one-minute bars is under three sessions, which can
+    // never reach the 30 distinct trading days the prop gate needs. The
+    // server default is sized against that requirement.
+    mutationFn: () => postJson<BacktestResult>(`/strategies/${selected}/backtest`, {}),
     onSuccess: (data) => {
       setResult(data); setVerdict(null); setPane('results')
       setBanner({ kind: 'ok', text: `${data.trades.length} trades · net ${signed(data.net_pnl)}` })
@@ -71,6 +76,21 @@ export function StrategiesView() {
     onError: fail,
   })
 
+  const validate = useMutation({
+    mutationFn: () => postJson<ValidationEvidence>(`/strategies/${selected}/validate`, {}),
+    onSuccess: (data) => {
+      setEvidence(data); setVerdict(null); setPane('results')
+      setBanner({
+        kind: data.probability_of_overfitting < 0.5 ? 'ok' : 'err',
+        text: `Validation: PBO ${pct(data.probability_of_overfitting)} · `
+          + `walk-forward efficiency ${data.walk_forward_efficiency.toFixed(2)} · `
+          + `${data.trial_count} trials`,
+      })
+      refresh()
+    },
+    onError: fail,
+  })
+
   const runSweep = useMutation({
     mutationFn: (parameter: string) => postJson<SweepResult>(`/strategies/${selected}/sweep`, { parameter }),
     onSuccess: (data) => { setSweep(data); setPane('results'); refresh() },
@@ -79,7 +99,7 @@ export function StrategiesView() {
 
   const remove = useMutation({
     mutationFn: (id: string) => deleteJson(`/strategies/${id}`),
-    onSuccess: () => { setSelected(null); setResult(null); setVerdict(null); setSweep(null); refresh() },
+    onSuccess: () => { setSelected(null); setResult(null); setVerdict(null); setSweep(null); setEvidence(null); refresh() },
     onError: fail,
   })
 
@@ -89,7 +109,7 @@ export function StrategiesView() {
     onError: fail,
   })
 
-  const busy = backtest.isPending || judge.isPending || runSweep.isPending
+  const busy = backtest.isPending || judge.isPending || runSweep.isPending || validate.isPending
   const spec = detail.data?.spec
 
   return (
@@ -117,7 +137,7 @@ export function StrategiesView() {
               <button
                 key={item.strategy_id}
                 className={item.strategy_id === selected ? 'strat-item active' : 'strat-item'}
-                onClick={() => { setSelected(item.strategy_id); setResult(null); setVerdict(null); setSweep(null) }}
+                onClick={() => { setSelected(item.strategy_id); setResult(null); setVerdict(null); setSweep(null); setEvidence(null) }}
               >
                 <b>{item.name}</b>
                 <small>{item.family} · {item.symbol}</small>
@@ -153,6 +173,10 @@ export function StrategiesView() {
                 <div className="actions">
                   <button className="btn primary" disabled={busy} onClick={() => backtest.mutate()}>
                     <Play />{backtest.isPending ? 'Running…' : 'Run backtest'}
+                  </button>
+                  <button className="btn" disabled={busy} onClick={() => validate.mutate()}
+                    title="Walk-forward, CSCV and CPCV. The judge cannot pass a strategy without this.">
+                    <ShieldCheck />{validate.isPending ? 'Validating…' : 'Validate'}
                   </button>
                   <button className="btn" disabled={busy} onClick={() => judge.mutate()}>
                     <Gavel />{judge.isPending ? 'Judging…' : 'Judge'}
@@ -221,7 +245,7 @@ export function StrategiesView() {
               )}
 
               {pane === 'results' && (
-                <ResultsPane result={result} verdict={verdict} sweep={sweep} history={detail.data?.backtests ?? []} />
+                <ResultsPane result={result} verdict={verdict} evidence={evidence} sweep={sweep} history={detail.data?.backtests ?? []} />
               )}
 
               {pane === 'trades' && <TradesPane result={result} />}
@@ -278,11 +302,11 @@ function CodePane({ source, tests, codeHash, onSave, saving }: {
   )
 }
 
-function ResultsPane({ result, verdict, sweep, history }: {
-  result: BacktestResult | null; verdict: Verdict | null
+function ResultsPane({ result, verdict, evidence, sweep, history }: {
+  result: BacktestResult | null; verdict: Verdict | null; evidence: ValidationEvidence | null
   sweep: SweepResult | null; history: { backtest_id: string; net_pnl: number; trade_count: number; finished_at: string }[]
 }) {
-  if (!result && !sweep && history.length === 0) {
+  if (!result && !sweep && !evidence && history.length === 0) {
     return <div className="state">No results yet. Run a backtest to produce them.</div>
   }
   return (
@@ -313,12 +337,35 @@ function ResultsPane({ result, verdict, sweep, history }: {
 
       {verdict && (
         <div className="panel">
-          <header><h2>Judge verdict · {verdict.decision} · grade {verdict.grade}</h2></header>
+          <header>
+            <h2>Judge verdict · {verdict.decision} · grade {verdict.grade}</h2>
+            {verdict.decision === 'INCONCLUSIVE' && (
+              <span className="chip is-locked">EVIDENCE MISSING</span>
+            )}
+          </header>
+          <div className="stat-row">
+            <Stat label="Deflated Sharpe" value={fmt(verdict.metrics.deflated_sharpe)}
+              note={`vs best-of-${verdict.metrics.trial_count} hurdle ${fmt(verdict.metrics.expected_max_sharpe)}`} />
+            <Stat label="Probabilistic Sharpe" value={fmt(verdict.metrics.probabilistic_sharpe)}
+              note="undeflated — ignores how many things were tried" />
+            <Stat label="Permutation p" value={fmt(verdict.metrics.permutation_p_value)}
+              note="share of sign-flipped resamples that did better" />
+            <Stat label="Calmar" value={fmt(verdict.metrics.calmar)}
+              note={`max drawdown ${money(verdict.metrics.max_drawdown)}`} />
+          </div>
+          {verdict.decision === 'INCONCLUSIVE' && (
+            <p className="warning">
+              Gates below marked NOT MEASURED have no evidence behind them. Absent evidence is
+              never read as a pass — run <b>Validate</b> to measure them.
+            </p>
+          )}
           <div className="gates">
             {verdict.gates.map((g) => (
               <div className="gate" key={g.gate}>
                 <span className="id">{g.gate}</span>
-                <b className={`status ${g.status === 'PASS' ? 'good' : 'bad'}`}>{g.status}</b>
+                <b className={`status ${g.status === 'PASS' ? 'good' : g.status === 'INCONCLUSIVE' ? 'warn' : 'bad'}`}>
+                  {g.status === 'INCONCLUSIVE' ? 'NOT MEASURED' : g.status}
+                </b>
                 <div>
                   <span className="name">{g.name}</span>
                   <p>{g.finding}</p>
@@ -326,6 +373,40 @@ function ResultsPane({ result, verdict, sweep, history }: {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {evidence && (
+        <div className="panel">
+          <header>
+            <h2>Validation evidence</h2>
+            <span className={`chip ${evidence.probability_of_overfitting < 0.5 ? 'is-good' : 'is-locked'}`}>
+              {evidence.trial_count} TRIALS · {evidence.cscv_splits} CSCV SPLITS
+            </span>
+          </header>
+          <div className="stat-row">
+            <Stat label="Overfitting probability"
+              value={pct(evidence.probability_of_overfitting)}
+              bad={evidence.probability_of_overfitting >= 0.5}
+              note="how often the in-sample winner ranks below the out-of-sample median" />
+            <Stat label="Walk-forward efficiency"
+              value={evidence.walk_forward_efficiency.toFixed(2)}
+              bad={evidence.walk_forward_efficiency < 0.5}
+              note={`${evidence.walk_forward.positive_folds}/${evidence.walk_forward_folds} folds positive`} />
+            <Stat label="Worst CPCV path"
+              value={evidence.path_sharpe_p05.toFixed(3)}
+              bad={evidence.path_sharpe_p05 <= 0}
+              note={`5th percentile Sharpe across ${evidence.cpcv_paths} reconstructed paths`} />
+            <Stat label="Selection stability"
+              value={pct(evidence.selection_stability)}
+              bad={evidence.selection_stability < 0.5}
+              note="how often the search picks the same configuration as the window moves" />
+          </div>
+          <p className="warning">
+            Parameters were re-selected inside every fold and every split, so the out-of-sample
+            numbers include the cost of choosing. Winner:{' '}
+            <b>{Object.entries(evidence.best_parameters).map(([k, val]) => `${k}=${val}`).join(' · ') || 'defaults'}</b>.
+          </p>
         </div>
       )}
 
@@ -405,6 +486,21 @@ function TradesPane({ result }: { result: BacktestResult | null }) {
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+const fmt = (value: number | undefined) =>
+  value === undefined || value === -1 ? '—' : value.toFixed(3)
+
+function Stat({ label, value, note, bad }: {
+  label: string; value: string; note: string; bad?: boolean
+}) {
+  return (
+    <div className="stat-tile">
+      <span className="stat-label">{label}</span>
+      <b className={bad ? 'stat-value bad' : 'stat-value'}>{value}</b>
+      <p className="stat-note">{note}</p>
     </div>
   )
 }

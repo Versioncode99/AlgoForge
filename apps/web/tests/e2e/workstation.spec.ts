@@ -5,11 +5,11 @@ const TABS = ['Strategies', 'Verdict', 'Regimes', 'Risk & Monte Carlo', 'Prop Fi
 test('every section is reachable and the truth label persists', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
-  await expect(page.getByText(/PAPER ONLY · UNCALIBRATED/)).toBeVisible()
+  await expect(page.getByText(/PAPER ONLY · FILLS ARE MODELLED/)).toBeVisible()
   for (const tab of TABS) {
     await page.getByRole('button', { name: tab, exact: true }).click()
     await expect(page.getByRole('heading', { name: tab, exact: true })).toBeVisible()
-    await expect(page.getByText(/PAPER ONLY · UNCALIBRATED/)).toBeVisible()
+    await expect(page.getByText(/PAPER ONLY · FILLS ARE MODELLED/)).toBeVisible()
   }
   await page.getByRole('button', { name: 'Evolution', exact: true }).click()
   await expect(page.getByText('Automatic live changes: NEVER')).toBeVisible()
@@ -44,11 +44,15 @@ test('a backtest runs real strategy code and produces real trades', async ({ pag
 test('prop firm is driven by a chosen strategy, not a fixture', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Prop Firm', exact: true }).click()
-  await expect(page.getByText(/Would this strategy have passed/)).toBeVisible()
+  await expect(page.getByRole('heading', { name: /Race the target against the loss boundary/ })).toBeVisible()
   await expect(page.getByLabel('Strategy')).toBeVisible()
+  // The rule list is filtered by the account phase, so only the challenge
+  // fixtures are offered until the switch is flipped to Funded.
   const rules = page.getByLabel('Rule fixture')
   await expect(rules).toBeVisible()
-  expect(await rules.locator('option').count()).toBeGreaterThanOrEqual(4)
+  expect(await rules.locator('option').count()).toBeGreaterThanOrEqual(2)
+  await page.getByRole('button', { name: 'Funded', exact: true }).click()
+  expect(await rules.locator('option').count()).toBeGreaterThanOrEqual(2)
 })
 
 test('overview exposes autonomous engine control', async ({ page }) => {

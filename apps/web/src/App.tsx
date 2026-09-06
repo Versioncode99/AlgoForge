@@ -154,7 +154,7 @@ export function App() {
           <div className="notice">
             <TriangleAlert />
             <span>
-              PAPER ONLY · REAL DATA IS NOT OOS — fills are modelled; validation is chronological,
+              PAPER ONLY · FILLS ARE MODELLED — walk-forward, CSCV and CPCV gate every verdict,
               holdout is burn-once, and NinjaTrader calibration is still required.
             </span>
           </div>

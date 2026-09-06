@@ -32,7 +32,7 @@ from forge.strategy import (
 from pydantic import BaseModel, Field
 
 from forge_api.activity import ActivityLog, BacktestStore, Level
-from forge_api.market import MarketService
+from forge_api.market import DEFAULT_DATASET, MarketService
 
 
 class CreateStrategyRequest(BaseModel):
@@ -48,16 +48,17 @@ class UpdateSourceRequest(BaseModel):
 
 class BacktestRequest(BaseModel):
     parameters: dict[str, float] | None = None
-    dataset: str = "mnq_1m_3mo"
-    # 30k one-minute bars is roughly 21 futures sessions, which can never
-    # reach the 30 distinct trading days a prop evaluation needs. The
-    # default is sized so the downstream prop gate is reachable at all.
-    bar_count: int = Field(default=60_000, ge=400, le=MAX_BACKTEST_BARS)
+    dataset: str = DEFAULT_DATASET
+    # Only the 20% validation slice reaches the prop simulator, so the request
+    # has to be five times the window the gate needs. At 250k one-minute bars
+    # the validation partition spans about 39 trading days, clearing the 30-day
+    # minimum; anything much smaller makes the gate unreachable by construction.
+    bar_count: int = Field(default=250_000, ge=400, le=MAX_BACKTEST_BARS)
     seed: int = 20260901
 
 
 class ValidationRequest(BaseModel):
-    dataset: str = "mnq_1m_3mo"
+    dataset: str = DEFAULT_DATASET
     bar_count: int = Field(default=60_000, ge=2_000, le=MAX_BACKTEST_BARS)
     seed: int = 20260901
     parameters: dict[str, float] | None = None
@@ -72,7 +73,7 @@ class ValidationRequest(BaseModel):
 
 class SweepRequest(BaseModel):
     parameter: str
-    dataset: str = "mnq_1m_3mo"
+    dataset: str = DEFAULT_DATASET
     bar_count: int = Field(default=12_000, ge=400, le=60_000)
     seed: int = 20260901
 

@@ -21,7 +21,18 @@ def test_short_window_is_sized_from_observed_trade_density() -> None:
     # 6,000 bars/day * 30 days * 1.2 margin
     assert coverage.suggested_bar_count == 216_000
     assert coverage.suggestion_exceeds_limit is False
-    assert "216,000 bars" in coverage.explain()
+    assert "bar_count of about 216,000" in coverage.explain()
+
+
+def test_suggestion_is_scaled_back_to_the_full_request_window() -> None:
+    """Only the validation slice reaches the simulator; advice must say so."""
+    partitioned = assess_day_coverage(
+        trading_days=10, bars_used=12_000, span_days=14, partition_fraction=0.2
+    )
+    assert partitioned.suggested_bar_count == 43_200
+    # 43,200 partition bars means asking for five times that.
+    assert partitioned.suggested_request_bars == 216_000
+    assert "bar_count of about 216,000" in partitioned.explain()
 
 
 def test_a_strategy_that_trades_too_rarely_is_told_so_plainly() -> None:

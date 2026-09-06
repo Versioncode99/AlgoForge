@@ -781,3 +781,17 @@ code {
   border-radius: var(--r-sm); padding: 6px var(--sp-3);
   font-family: var(--font-mono); font-size: var(--fs-xs);
 }
+
+/* Validation and verdict statistics ------------------------------------- */
+.stat-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px; background: var(--line); border-bottom: 1px solid var(--line);
+}
+.stat-tile { background: var(--bg-1); padding: var(--sp-3); display: grid; gap: 4px; align-content: start; }
+.stat-label {
+  font-family: var(--font-mono); font-size: var(--fs-nano); letter-spacing: .09em;
+  text-transform: uppercase; color: var(--fg-2);
+}
+.stat-value { font-family: var(--font-mono); font-size: var(--fs-lg); color: var(--fg-0); font-weight: 500; }
+.stat-value.bad { color: var(--fail); }
+.stat-note { font-size: var(--fs-xs); color: var(--fg-2); line-height: 1.5; }

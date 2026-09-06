@@ -178,10 +178,22 @@ class DayCoverage:
     suggested_bar_count: int | None
     max_bar_count: int
     suggestion_exceeds_limit: bool
+    # Share of the requested window that reached this artifact. The prop
+    # simulator reads the validation partition only, so a suggestion phrased in
+    # partition bars would understate the request by five times.
+    partition_fraction: float
 
     @property
     def sufficient(self) -> bool:
         return self.trading_days >= self.days_required
+
+    @property
+    def suggested_request_bars(self) -> int | None:
+        """The suggestion in request units, not partition units."""
+        if self.suggested_bar_count is None:
+            return None
+        fraction = self.partition_fraction if self.partition_fraction > 0 else 1.0
+        return math.ceil(self.suggested_bar_count / fraction)
 
     def explain(self) -> str:
         if self.sufficient:
@@ -201,12 +213,13 @@ class DayCoverage:
         if self.suggested_bar_count and not self.suggestion_exceeds_limit:
             parts.append(
                 f"At the observed rate of {self.bars_per_trading_day:,.0f} bars per trading "
-                f"day, re-run the backtest over about {self.suggested_bar_count:,} bars."
+                f"day, re-run the backtest with bar_count of about "
+                f"{self.suggested_request_bars:,}."
             )
         elif self.suggested_bar_count:
             parts.append(
-                f"Reaching {self.days_required} trading days would take roughly "
-                f"{self.suggested_bar_count:,} bars, beyond the {self.max_bar_count:,}-bar "
+                f"Reaching {self.days_required} trading days would take a bar_count of "
+                f"roughly {self.suggested_request_bars:,}, beyond the {self.max_bar_count:,}-bar "
                 "limit for a single run. This strategy trades too rarely to be evaluated "
                 "against a prop account on the available window."
             )
@@ -224,6 +237,7 @@ def assess_day_coverage(
     span_days: int,
     required: int = MIN_TRADING_DAYS,
     max_bar_count: int = MAX_BACKTEST_BARS,
+    partition_fraction: float = 1.0,
 ) -> DayCoverage:
     """Diagnose a short backtest and size the window that would fix it.
 
@@ -246,7 +260,11 @@ def assess_day_coverage(
         bars_per_trading_day=round(density, 2),
         suggested_bar_count=suggested,
         max_bar_count=max_bar_count,
-        suggestion_exceeds_limit=suggested is not None and suggested > max_bar_count,
+        suggestion_exceeds_limit=(
+            suggested is not None
+            and math.ceil(suggested / (partition_fraction or 1.0)) > max_bar_count
+        ),
+        partition_fraction=partition_fraction,
     )
 
 

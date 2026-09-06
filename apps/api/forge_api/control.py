@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.assistant import Assistant
 from forge_api.engine import AutonomousEngine, EngineConfig
-from forge_api.market import DATASETS, MarketService
+from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
 from forge_api.model_gateway import OmniRouteClient
 from forge_api.providers import (
     PROVIDER_OMNIROUTE,
@@ -40,7 +40,7 @@ from forge_api.settings_store import (
 
 
 class StartEngineRequest(BaseModel):
-    dataset: str = "mnq_1m_3mo"
+    dataset: str = DEFAULT_DATASET
     cycle_seconds: float = Field(default=8.0, ge=1.0, le=300.0)
     max_strategies: int = Field(default=40, ge=1, le=500)
     max_bars: int = Field(default=30_000, ge=1_000, le=200_000)
@@ -92,6 +92,21 @@ def _calendar_span_days(trades: list[dict[str, Any]]) -> int:
         return (date.fromisoformat(last) - date.fromisoformat(first)).days + 1
     except ValueError:
         return 0
+
+
+def _partition_fraction(artifact: dict[str, Any]) -> float:
+    """Share of the requested window that reached this artifact.
+
+    Only the validation partition is simulated against prop rules, so a
+    suggested bar count derived from it has to be divided back out or it
+    understates the request by the size of the split.
+    """
+    receipt = artifact.get("split_receipt")
+    bars = int(artifact.get("bar_count") or 0)
+    if not isinstance(receipt, dict) or bars <= 0:
+        return 1.0
+    source = int(receipt.get("source_bar_count") or 0)
+    return bars / source if source > 0 else 1.0
 
 
 def build_control_router(
@@ -293,6 +308,7 @@ def build_control_router(
             trading_days=len(daily),
             bars_used=int(latest.get("bar_count") or 0),
             span_days=_calendar_span_days(latest["trades"]),
+            partition_fraction=_partition_fraction(latest),
         )
         if not coverage.sufficient:
             # The refusal stands, but it now carries the bar count that would
@@ -307,7 +323,8 @@ def build_control_router(
                     "bars_used": coverage.bars_used,
                     "span_days": coverage.span_days,
                     "bars_per_trading_day": coverage.bars_per_trading_day,
-                    "suggested_bar_count": coverage.suggested_bar_count,
+                    "suggested_bar_count": coverage.suggested_request_bars,
+                    "partition_fraction": round(coverage.partition_fraction, 4),
                     "dataset": latest.get("dataset_key"),
                     "detail": coverage.explain(),
                 },

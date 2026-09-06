@@ -51,6 +51,24 @@ export type BacktestSummary = {
   evidence_tier?: string; split_id?: string | null
 }
 export type StrategyListItem = StrategySpec & { backtest_count: number; latest: BacktestSummary | null }
+export type WalkForward = {
+  fold_count: number; in_sample_sharpe: number; out_of_sample_sharpe: number
+  efficiency: number; positive_folds: number; consistency: number; degradation: number
+}
+export type PathSpread = {
+  paths: number; mean_sharpe: number; median_sharpe: number
+  sharpe_p05: number; sharpe_p95: number; positive_share: number; dispersion: number
+}
+export type ValidationEvidence = {
+  evidence_id: string; trial_count: number
+  probability_of_overfitting: number; cscv_splits: number
+  walk_forward_efficiency: number; walk_forward_folds: number; walk_forward_consistency: number
+  cpcv_paths: number; path_sharpe_p05: number; path_positive_share: number
+  selection_stability: number; best_parameters: Record<string, number>
+  grid: Record<string, number[]>
+  walk_forward: WalkForward; paths: PathSpread
+  trial_sharpes: number[]; cscv_logits: number[]
+}
 export type Trade = {
   trade_id: string; direction: number
   entry_decision_index: number; entry_index: number
