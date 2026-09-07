@@ -13,25 +13,10 @@ import { FlaskConical, GitBranch, Layers } from 'lucide-react'
 import { useState } from 'react'
 import { getJson } from '../api'
 import { PanelHead, Stat } from '../components/ui'
+import type { ExperimentRecord } from '../types'
 
-type Experiment = {
-  id: string
-  template: string
-  parameters: Record<string, number>
-  status?: string
-  policy?: string
-  family?: string
-  parent_id?: string
-  seed?: number
-  failure_class?: string
-  failure_gate?: string
-  failure_reason?: string
-  verdict_id?: string
-  strategy_id?: string
-  created_at?: string
-  finished_at?: string
-  development_sharpe?: number
-}
+// Shared so the global search can index experiments from the same shape.
+type Experiment = ExperimentRecord
 
 type Lineage = {
   experiment: Experiment | null
@@ -84,7 +69,7 @@ function Row({
   )
 }
 
-export function ExperimentsView() {
+export function ExperimentsView({ mode = 'experiments' }: { mode?: 'experiments' | 'lineage' }) {
   const [selected, setSelected] = useState('')
   const [rootsOnly, setRootsOnly] = useState(false)
 
@@ -111,10 +96,9 @@ export function ExperimentsView() {
 
   return (
     <section className="stack experiments-view">
-      <div className="section-title">
-        <p>WHAT WAS TRIED · WHERE IT CAME FROM</p>
-        <h2>The search, as a record.</h2>
-      </div>
+      <p className="view-note">{mode === 'lineage'
+        ? 'Each experiment records the one it was derived from, so a result can be traced back to the question that produced it.'
+        : 'Every candidate the engine forms is recorded here with its hypothesis, its verdict and the line it came from — failures included.'}</p>
 
       <div className="headline-row">
         <Stat label="Experiments" value={<span className="mono">{rows.length}</span>}

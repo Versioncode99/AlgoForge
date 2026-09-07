@@ -39,7 +39,7 @@
   background: var(--bg-1); padding: var(--sp-4);
 }
 .orch-launch label {
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   letter-spacing: .12em; text-transform: uppercase; color: var(--fg-2);
 }
 .orch-launch textarea {
@@ -99,7 +99,7 @@
 .mission-caret { flex: none; color: var(--fg-3); transition: transform var(--t) var(--ease); }
 .mission-card[data-open="yes"] .mission-caret { transform: rotate(90deg); }
 .mission-status {
-  flex: none; font-family: var(--font-mono); font-size: var(--fs-nano);
+  flex: none; font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   letter-spacing: .1em; text-transform: uppercase;
   border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 3px var(--sp-2);
 }
@@ -128,7 +128,7 @@
 .action-card p { font-size: var(--fs-xs); color: var(--fg-1); line-height: 1.5; }
 .action-card footer { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: auto; }
 .action-card footer small {
-  font-family: var(--font-mono); font-size: var(--fs-nano); color: var(--fg-3);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); color: var(--fg-3);
   border: 1px solid var(--line); border-radius: var(--r-sm); padding: 2px 5px;
 }
 .action-card footer small.req { color: var(--fg-1); border-color: var(--line-strong); }

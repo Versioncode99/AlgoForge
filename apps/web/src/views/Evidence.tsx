@@ -89,10 +89,11 @@ export function EvidenceView() {
   const ancestors = (provenance?.ancestors ?? []) as Array<Record<string, unknown>>
 
   return <section className="stack evidence-view">
-    <div className="section-title">
-      <p>PROVENANCE · VERDICT · DISSENT · LIMITATIONS</p>
-      <h2>Why this candidate is trusted, or is not.</h2>
-    </div>
+    <p className="view-note">
+      One dossier per candidate: the verdict and its gate ladder, the lineage behind it, the
+      specialist positions with their disagreement intact, and every limitation attached to a
+      number. Sections with no data say so and give the reason.
+    </p>
 
     <div className="validation-toolbar panel">
       <label>Strategy<select value={selected} onChange={event => setSelected(event.target.value)}>

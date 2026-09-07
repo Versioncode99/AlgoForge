@@ -1,4 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+/* Fonts are self-hosted (see main.tsx). AlgoForge is a private, local-first
+   desktop application: a runtime request to a font CDN meant the interface
+   silently fell back to Consolas whenever the machine was offline, and sent a
+   request off-box from a product whose whole claim is that it does not. */
 @import './tokens.css';
 @import './motion.css';
 

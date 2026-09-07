@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, Check, FileCode2, Gavel, Play, Plus, ShieldCheck, Trash2, Waves,
+  AlertTriangle, ArrowLeft, Check, FileCode2, Gavel, Play, Plus, ShieldCheck, Trash2, Waves,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { deleteJson, getJson, postJson, putJson } from '../api'
@@ -9,6 +9,7 @@ import { CurveChart, SweepChart } from '../charts'
 import { JobBar } from '../components/JobBar'
 import { Empty, PanelHead, Rolling, Stat, TierPill, VerdictPill } from '../components/ui'
 import { useJob } from '../hooks/useJob'
+import { StrategyCatalogue } from './StrategyCatalogue'
 import { money, pct, shortHash, signed, stamp } from '../lib'
 import type {
   BacktestJobResult, BacktestResult, DatasetInfo, Job, StrategyDetail, StrategyListItem,
@@ -48,7 +49,8 @@ export function StrategiesView() {
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => getJson<TemplateInfo[]>('/templates') })
   const datasets = useQuery({ queryKey: ['datasets'], queryFn: () => getJson<DatasetInfo[]>('/datasets') })
 
-  useEffect(() => { if (!selected && list.data?.length) setSelected(list.data[0].strategy_id) }, [list.data, selected])
+  // The catalogue is the landing surface. Auto-selecting the first record
+  // hid four hundred others behind a detail pane nobody asked for.
   useEffect(() => {
     if (!dataset && datasets.data?.length) {
       const real = datasets.data.find((d) => d.is_imported && d.available) ?? datasets.data[0]
@@ -157,45 +159,34 @@ export function StrategiesView() {
 
       {job.job && <JobBar job={job.job} onCancel={job.cancel} onDismiss={job.clear} />}
 
-      <div className="strat-layout">
-        <aside className="strat-list">
-          <header><span>{list.data?.length ?? 0} STRATEGIES</span></header>
-          <div className="strat-items">
-            {list.data?.map((item, i) => (
-              <button
-                key={item.strategy_id}
-                className={item.strategy_id === selected ? 'strat-item active af-row-in' : 'strat-item af-row-in'}
-                style={{ animationDelay: `${Math.min(i, 14) * 16}ms` }}
-                aria-label={`${item.name}, ${item.family}, ${item.latest ? `net ${item.latest.net_pnl.toFixed(2)}` : 'never run'}`}
-                aria-pressed={item.strategy_id === selected}
-                onClick={() => { setSelected(item.strategy_id); reset() }}
-              >
-                <b>{item.name}</b>
-                <small>{item.family} · {item.symbol}</small>
-                <div className="strat-item-foot">
-                  <TierPill tier={item.latest?.evidence_tier} />
-                  <em className={item.latest ? (item.latest.net_pnl >= 0 ? 'good' : 'bad') : ''}>
-                    {item.latest ? `${signed(item.latest.net_pnl)} · ${item.latest.trade_count}t` : 'never run'}
-                  </em>
-                </div>
-              </button>
-            ))}
-            {list.data?.length === 0 && <p className="empty">No strategies yet. Create one below.</p>}
+      {!selected && (
+        <>
+          <StrategyCatalogue
+            items={list.data ?? []}
+            pending={list.isPending}
+            onOpen={(id) => { setSelected(id); reset() }}
+          />
+          <div className="panel">
+            <PanelHead title="New from template" meta={`${templates.data?.length ?? 0} registered templates`} />
+            <div className="template-grid">
+              {templates.data?.map((t) => (
+                <button key={t.key} className="tmpl af-press" disabled={create.isPending} onClick={() => create.mutate(t.key)}>
+                  <Plus />
+                  <span>{t.name}</span>
+                  <small>{t.line_count} lines</small>
+                </button>
+              ))}
+            </div>
           </div>
-          <footer>
-            <span className="new-label">NEW FROM TEMPLATE</span>
-            {templates.data?.map((t) => (
-              <button key={t.key} className="tmpl af-press" disabled={create.isPending} onClick={() => create.mutate(t.key)}>
-                <Plus />
-                <span>{t.name}</span>
-                <small>{t.line_count} lines</small>
-              </button>
-            ))}
-          </footer>
-        </aside>
+        </>
+      )}
 
-        <div className="strat-detail">
-          {!spec && <div className="state">Select a strategy.</div>}
+      {selected && (
+        <div className="strat-detail is-full">
+          <button className="text-action back-link" onClick={() => { setSelected(null); reset() }}>
+            <ArrowLeft aria-hidden="true" /> All strategies
+          </button>
+          {!spec && <div className="state" role="status">Opening strategy…</div>}
           {spec && (
             <>
               <div className="strat-head">
@@ -263,7 +254,7 @@ export function StrategiesView() {
             </>
           )}
         </div>
-      </div>
+      )}
     </section>
   )
 }

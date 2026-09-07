@@ -42,7 +42,7 @@
 }
 .jobbar-icon { display: grid; place-items: center; color: var(--brand); }
 .jobbar-label { color: var(--fg-0); font-weight: 500; white-space: nowrap; }
-.jobbar-note { color: var(--fg-2); font-family: var(--font-mono); font-size: var(--fs-nano); }
+.jobbar-note { color: var(--fg-2); font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); }
 .jobbar-body .spacer { flex: 1; }
 .jobbar-metric { display: flex; align-items: baseline; gap: 3px; color: var(--fg-1); white-space: nowrap; }
 .jobbar-metric em { font-style: normal; color: var(--fg-3); font-size: var(--fs-nano); }
@@ -69,7 +69,7 @@
 }
 .ctl { display: grid; gap: 5px; }
 .ctl > span {
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   letter-spacing: .1em; text-transform: uppercase; color: var(--fg-2);
 }
 .ctl select {
@@ -131,7 +131,7 @@
 
 .verdict-pill, .tier-pill {
   display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   letter-spacing: .09em; padding: 2px 7px; border-radius: 2px;
   border: 1px solid currentColor; white-space: nowrap;
 }
@@ -156,7 +156,7 @@
 }
 .panel-head h2 { font-size: var(--fs-sm); font-weight: 600; color: var(--fg-0); }
 .panel-meta {
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   color: var(--fg-2); letter-spacing: .06em; text-transform: uppercase;
 }
 .panel-head > .side-switch { margin-left: auto; }
@@ -191,7 +191,7 @@
   position: sticky; top: 0; z-index: 2;
   background: var(--bg-2); color: var(--fg-2);
   font-weight: 500; text-align: left;
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   letter-spacing: .08em; text-transform: uppercase;
   padding: 6px var(--sp-3); border-bottom: 1px solid var(--line-strong);
   white-space: nowrap;
@@ -222,7 +222,7 @@
 }
 
 .side-tag {
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   padding: 1px 5px; border-radius: 2px; letter-spacing: .06em;
 }
 .side-tag.long { color: var(--tier-oos); background: var(--verdict-pass-wash); }
@@ -277,7 +277,7 @@
 /* ── strategy rail ────────────────────────────────────────────────────────── */
 
 .strat-item-foot { display: flex; align-items: center; gap: var(--sp-2); margin-top: 5px; }
-.strat-item-foot em { font-style: normal; font-family: var(--font-mono); font-size: var(--fs-nano); margin-left: auto; }
+.strat-item-foot em { font-style: normal; font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); margin-left: auto; }
 
 .pane-body { min-height: 260px; }
 .prose { padding: var(--sp-4); font-size: var(--fs-sm); line-height: 1.7; color: var(--fg-1); max-width: 74ch; }
@@ -342,7 +342,7 @@
   padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line); background: var(--bg-2);
 }
 .swarm-title {
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   letter-spacing: .1em; text-transform: uppercase; color: var(--fg-1);
 }
 .swarm-legend { margin-left: auto; display: flex; gap: var(--sp-3); }

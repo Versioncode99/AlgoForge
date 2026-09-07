@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, ArrowUpRight, BookOpen, BrainCircuit, Check, Clock3, Cpu, FlaskConical, Network, Pause, Play, Search, Send, Sparkles } from 'lucide-react'
+import { Activity, ArrowUpRight, BookOpen, Check, Clock3, Cpu, FlaskConical, Network, Pause, Play, Search, Send, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { getJson, patchJson, postJson } from '../api'
 import type { EngineStatus, ResearchLoopStatus } from '../types'
@@ -28,12 +28,6 @@ const SHORT: Record<string, string> = {
 }
 const isBusy = (agent: Agent) => ['running', 'queued'].includes(agent.status)
 
-/** Roles are a registry, so their geometry must be derived from the response. */
-const specialistPosition = (index: number, count: number) => {
-  const angle = -Math.PI / 2 + (Math.PI * 2 * index) / Math.max(count, 1)
-  return { x: 50 + Math.cos(angle) * 38, y: 50 + Math.sin(angle) * 39 }
-}
-
 export function AgentCommandView() {
   const qc = useQueryClient()
   const [selected, setSelected] = useState('research')
@@ -56,10 +50,10 @@ export function AgentCommandView() {
   if (!data) return <div className="command-loading" role="status">{command.isError ? 'Agent connection unavailable. Retrying…' : 'Connecting to the research team…'}<div className="skeleton" /></div>
 
   return <section className="command-page">
-    <div className="command-hero">
-      <div><div className="command-kicker"><span className="signal-dot" /> RESEARCH INTELLIGENCE / 08</div>
-        <h2>Ideas into evidence.<br /><span>Your team, in view.</span></h2>
-        <p>Follow every experiment. Direct every specialist. See what the research actually supports.</p>
+    <div className="command-hero command-hero-compact">
+      <div><div className="command-kicker"><span className="signal-dot" /> AUTONOMOUS / SPECIALIST OPERATIONS</div>
+        <h2>Agent Command</h2>
+        <p>Inspect declared tasks, execution state, elapsed time and source evidence. No simulated thought process.</p>
       </div>
       <div className="command-vitals">
         <div><Network /><strong>{active}<span>/ 8</span></strong><p>specialists active</p></div>
@@ -87,35 +81,18 @@ export function AgentCommandView() {
     {pane === 'network' && <>
       <div className="command-workspace">
         <div className="neural-panel">
-          <div className="neural-heading"><span><i /> NEURAL LINK</span><span>{active > 0 ? 'PROCESSING' : 'AWAITING WORK'}</span></div>
-          <div className="neural-map">
-            <svg className="neural-links" viewBox="0 0 1000 650" preserveAspectRatio="none" aria-hidden="true">
-              <defs><radialGradient id="core-glow"><stop offset="0" stopColor="#71dfb5" stopOpacity=".16" /><stop offset="1" stopColor="#71dfb5" stopOpacity="0" /></radialGradient></defs>
-              <ellipse cx="500" cy="325" rx="240" ry="230" fill="url(#core-glow)" />
-              {[130, 200, 275].map((r) => <circle key={r} cx="500" cy="325" r={r} className="neural-orbit" />)}
-              {specialists.map((role, i) => {
-                const { x, y } = specialistPosition(i, specialists.length)
-                const path = `M 500 325 Q ${x < 50 ? 400 : 600} ${y * 6.5} ${x * 10} ${y * 6.5}`
-                return <g key={role.id} data-flow={isBusy(role) ? 'active' : 'idle'} className={selected === role.id ? 'selected-link' : ''}>
-                  <path d={path} className="neural-wire" /><path d={path} className="neural-packet" />
-                </g>
-              })}
-            </svg>
-            <div className={`neural-core ${active || (coordinator && isBusy(coordinator)) ? 'is-processing' : ''}`}>
-              <div className="core-ring" /><BrainCircuit size={34} /><strong>FORGE</strong><span>RESEARCH CORE</span>
-              <small>{coordinator && isBusy(coordinator) ? 'Orchestrating mission' : active ? `${active} active connections` : 'Ready to explore'}</small>
-            </div>
-            {specialists.map((role, i) => {
-              const position = specialistPosition(i, specialists.length)
-              return <button key={role.id} aria-pressed={selected === role.id}
-              className={`neural-node ${selected === role.id ? 'selected' : ''} ${isBusy(role) ? 'is-working' : ''}`}
-              style={{ left: `${position.x}%`, top: `${position.y}%`, animationDelay: `${i * 50}ms` }}
-              onClick={() => { setSelected(role.id); setTask('') }}>
-              <span className="node-number">0{i + 1}<i data-status={!role.enabled ? 'paused' : role.status} /></span>
-              <strong>{SHORT[role.id]}</strong><small>{!role.enabled ? 'Paused' : role.status}</small>
-            </button>})}
+          <div className="neural-heading"><span><i /> SPECIALIST REGISTER</span><span>{active > 0 ? `${active} ACTIVE` : 'AWAITING WORK'}</span></div>
+          <div className="agent-register" role="list" aria-label="Research specialists">
+            {coordinator && <div className="agent-register-coordinator"><span>ORCHESTRATOR</span><strong>{coordinator.task || coordinator.mission}</strong><small>{coordinator.status} · {coordinator.mode.replaceAll('_', ' ')}</small></div>}
+            {specialists.map((role, i) => <button key={role.id} role="listitem" aria-pressed={selected === role.id} className={selected === role.id ? 'is-selected' : ''} onClick={() => { setSelected(role.id); setTask('') }}>
+              <span className="mono">{String(i + 1).padStart(2, '0')}</span>
+              <span><strong>{role.label}</strong><small>{role.task || role.mission}</small></span>
+              <span className={`agent-status status-${role.enabled ? role.status : 'paused'}`}>{role.enabled ? role.status : 'paused'}</span>
+              <span className="mono">{role.elapsed_seconds.toFixed(1)}s</span>
+              <span>{role.source_ids.length} sources</span>
+            </button>)}
           </div>
-          <div className="neural-caption"><span><i className="legend-active" /> Live task</span><span><i /> Available</span><p>Select a specialist to inspect and direct its work</p></div>
+          <div className="neural-caption"><span><i className="legend-active" /> Active task</span><span><i /> Available</span><p>Select a specialist to inspect and direct bounded work</p></div>
         </div>
 
         {agent && <aside className="agent-inspector" key={agent.id}>

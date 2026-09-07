@@ -110,9 +110,12 @@ export function EnginePanel() {
   )
 }
 
+/* Named distinctly from the overview's `.counter`: these count what this engine
+   session has done, not what the library holds, and sharing a class name meant
+   two stylesheets fighting over one element. */
 function Counter({ label, value, tone }: { label: string; value: number; tone?: string }) {
   return (
-    <div className="counter">
+    <div className="engine-counter">
       <span>{label}</span>
       <strong className={tone}>{value.toLocaleString()}</strong>
     </div>

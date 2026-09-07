@@ -1,0 +1,245 @@
+/* Research surfaces — the control centre and the record views.
+   Density is held by line-height and padding, never by shrinking the glyphs.
+   Nothing in here animates on a loop: motion is reserved for arrival. */
+
+/* ── Mission strip ──────────────────────────────────────────────────────── */
+.mission-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.mission-strip > section {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-1);
+  min-width: 0;
+}
+.mission-strip span {
+  font-family: var(--font-label); font-weight: 600;
+  font-size: var(--fs-nano); letter-spacing: .05em; text-transform: uppercase;
+  color: var(--fg-3);
+}
+.mission-strip strong {
+  font-size: var(--fs-lg); font-weight: 600; color: var(--fg-0); line-height: 1.25;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mission-strip small { font-size: var(--fs-micro); color: var(--fg-2); }
+
+/* ── Counter band ───────────────────────────────────────────────────────── */
+.counter-band {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.counter {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-1);
+  text-align: left;
+  border: 0;
+  min-width: 0;
+}
+.counter.is-link { transition: background var(--t-fast) var(--ease); }
+.counter.is-link:hover { background: var(--bg-2); }
+.counter-label {
+  font-family: var(--font-label); font-weight: 600;
+  font-size: var(--fs-nano); letter-spacing: .05em; text-transform: uppercase;
+  color: var(--fg-3);
+}
+.counter-value {
+  font-size: var(--fs-2xl); font-weight: 500; line-height: 1.1;
+  color: var(--fg-0); font-variant-numeric: tabular-nums;
+}
+.counter-value[data-tone='good'] { color: var(--verdict-pass); }
+.counter-value[data-tone='bad'] { color: var(--verdict-fail); }
+.counter-value[data-tone='warn'] { color: var(--verdict-unknown); }
+.counter-note { font-size: var(--fs-nano); color: var(--fg-3); }
+
+/* ── Split layout ───────────────────────────────────────────────────────── */
+.overview-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: start;
+}
+@media (max-width: 1180px) { .overview-split { grid-template-columns: minmax(0, 1fr); } }
+
+/* ── Timeline ───────────────────────────────────────────────────────────── */
+.research-timeline { list-style: none; margin: 0; padding: var(--sp-2) 0; max-height: 340px; overflow-y: auto; }
+.research-timeline li {
+  display: grid; grid-template-columns: 62px minmax(0, 1fr);
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border-left: 2px solid transparent;
+}
+.research-timeline li[data-level='pass'] { border-left-color: var(--verdict-pass); }
+.research-timeline li[data-level='fail'] { border-left-color: var(--verdict-fail); }
+.research-timeline li[data-level='warn'] { border-left-color: var(--verdict-unknown); }
+.research-timeline li[data-level='info'] { border-left-color: var(--line-strong); }
+.research-timeline time { font-size: var(--fs-nano); color: var(--fg-3); padding-top: 2px; }
+.research-timeline strong {
+  display: block; font-size: var(--fs-micro); font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase; color: var(--fg-1);
+}
+.research-timeline p { font-size: var(--fs-sm); color: var(--fg-2); line-height: 1.45; }
+
+/* ── Constraint list ────────────────────────────────────────────────────── */
+.constraint-list { list-style: none; margin: 0; padding: var(--sp-2) 0; }
+.constraint-list li {
+  display: grid; grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-3); align-items: start;
+  padding: var(--sp-2) var(--sp-4);
+}
+.constraint-list strong { display: block; font-size: var(--fs-sm); color: var(--fg-1); }
+.constraint-list p { font-size: var(--fs-sm); color: var(--fg-2); line-height: 1.45; }
+
+/* One informational line per view. The context bar already names the screen,
+   so this says what the screen is for — it is not a headline. */
+.view-note {
+  max-width: 96ch;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--fg-2);
+}
+
+/* ── Catalogue ──────────────────────────────────────────────────────────── */
+.catalogue { display: flex; flex-direction: column; gap: var(--sp-3); min-height: 0; }
+.catalogue-bar {
+  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+.field-search {
+  display: flex; align-items: center; gap: var(--sp-2);
+  flex: 1 1 260px; min-width: 200px;
+  padding: 5px var(--sp-3);
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.field-search:focus-within { border-color: var(--brand-dim); }
+.field-search svg { width: 14px; height: 14px; color: var(--fg-3); flex: none; }
+.field-search input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--fg-0); }
+.field-search input::placeholder { color: var(--fg-3); }
+.field-search button { display: flex; background: none; border: 0; color: var(--fg-2); padding: 0; }
+.field-search button svg { width: 13px; height: 13px; }
+.field-select { display: flex; align-items: center; gap: var(--sp-2); }
+.field-select > span {
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
+  letter-spacing: .05em; text-transform: uppercase; color: var(--fg-3);
+}
+.field-select select {
+  background: var(--bg-0); color: var(--fg-1);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 5px var(--sp-2); font-size: var(--fs-sm);
+}
+.catalogue-count { margin-left: auto; font-size: var(--fs-sm); color: var(--fg-2); }
+.catalogue-count b { color: var(--fg-0); }
+
+/* Windowed rows: the viewport scrolls, the header stays. */
+.catalogue-viewport {
+  height: clamp(320px, calc(100vh - 330px), 1100px);
+  overflow: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  contain: strict;
+}
+.catalogue-table { width: 100%; border-collapse: collapse; }
+.catalogue-table thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line-strong);
+  padding: 0;
+}
+.catalogue-table thead th button {
+  display: flex; align-items: center; gap: 4px; width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: none; border: 0; color: var(--fg-2);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
+  letter-spacing: .05em; text-transform: uppercase;
+}
+.catalogue-table thead th.num button { justify-content: flex-end; }
+.catalogue-table thead th button:hover { color: var(--fg-0); }
+.catalogue-table thead th button svg { width: 11px; height: 11px; color: var(--brand); }
+.catalogue-table tbody tr { border-bottom: 1px solid var(--bg-2); cursor: pointer; }
+.catalogue-table tbody tr:hover { background: var(--bg-2); }
+.catalogue-table tbody tr.is-picked { background: var(--brand-wash); }
+.catalogue-table td { padding: 0 var(--sp-3); font-size: var(--fs-sm); white-space: nowrap; }
+.catalogue-table .col-pick { width: 30px; padding-left: var(--sp-3); }
+.catalogue-table .col-pick svg { width: 12px; height: 12px; color: var(--fg-3); }
+.catalogue-table .col-name span {
+  display: block; max-width: 34ch; overflow: hidden;
+  text-overflow: ellipsis; color: var(--fg-0);
+}
+.compare-panel td[data-absent='yes'] { color: var(--fg-3); font-style: italic; }
+
+.template-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: var(--sp-2); padding: var(--sp-3);
+}
+.strat-detail.is-full { width: 100%; }
+.back-link { display: inline-flex; align-items: center; gap: 6px; margin-bottom: var(--sp-3); }
+.back-link svg { width: 13px; height: 13px; }
+
+/* ── Engine session counters ────────────────────────────────────────────── */
+/* Nine figures describing the current run. They are secondary to the library
+   counters above them, so they read as one compact strip rather than a second
+   headline block competing with the first. */
+.engine-counters {
+  display: flex; flex-wrap: wrap; gap: var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+.engine-counter { display: flex; align-items: baseline; gap: var(--sp-2); }
+.engine-counter span {
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
+  letter-spacing: .04em; text-transform: uppercase; color: var(--fg-3);
+}
+.engine-counter strong {
+  font-family: var(--font-mono); font-size: var(--fs-base); font-weight: 500;
+  color: var(--fg-1); font-variant-numeric: tabular-nums;
+}
+.engine-counter strong.good { color: var(--verdict-pass); }
+.engine-counter strong.bad { color: var(--verdict-fail); }
+.engine-counter strong.warn { color: var(--verdict-unknown); }
+
+/* ── Palette groups ─────────────────────────────────────────────────────── */
+.palette-group + .palette-group { border-top: 1px solid var(--line); margin-top: var(--sp-2); padding-top: var(--sp-2); }
+.palette-group h3 {
+  padding: var(--sp-1) var(--sp-4);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
+  letter-spacing: .05em; text-transform: uppercase; color: var(--fg-3);
+}
+.palette-results button[data-active='yes'] { background: var(--bg-3); }
+.palette-results button[data-active='yes'] strong { color: var(--brand); }
+
+/* ── Loading ────────────────────────────────────────────────────────────── */
+/* Contextual placeholders sized like the rows they stand in for, so the layout
+   does not jump when real records arrive. */
+.skeleton-rows { display: flex; flex-direction: column; gap: 1px; padding: var(--sp-3) var(--sp-4); }
+.skeleton-row {
+  height: 22px; border-radius: var(--r-sm);
+  background: linear-gradient(90deg, var(--bg-2) 0%, var(--bg-3) 50%, var(--bg-2) 100%);
+  background-size: 220% 100%;
+  animation: skeleton-sweep 1.4s var(--ease-soft) infinite;
+}
+.skeleton-num {
+  display: inline-block; width: 3ch; height: 0.75em; border-radius: var(--r-sm);
+  background: var(--bg-3);
+  animation: skeleton-sweep 1.4s var(--ease-soft) infinite;
+}
+@keyframes skeleton-sweep { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-row, .skeleton-num { animation: none; background: var(--bg-2); }
+}

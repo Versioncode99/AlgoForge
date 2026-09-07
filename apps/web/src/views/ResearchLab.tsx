@@ -28,7 +28,7 @@ export function ResearchLabView() {
   return (
     <section className="research-lab stack">
       <div className="section-title research-title">
-        <div><p>CAPABILITY-AWARE STRATEGY RESEARCH</p><h2>What has evidence, what is only an idea, and what is impossible here</h2></div>
+        <p className="view-note">Which families have evidence, which are only ideas, and which the installed providers cannot serve at all. An untested cell stays untested; it is never filled with a zero.</p>
         <span className="evidence-badge">NO EMPTY-CELL IMPUTATION</span>
       </div>
 

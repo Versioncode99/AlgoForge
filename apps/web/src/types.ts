@@ -1,4 +1,16 @@
-export type Run = { run_id: string; tier: string; labels: string[]; created_at: string }
+export type Run = {
+  run_id: string; preregistration_id: string; preregistration_hash: string
+  tier: string; source_hash: string; data_hash: string; cost_hash: string
+  engine_version: string; status: string; labels: string[]; created_at: string
+}
+export type ResearchConstraint = {
+  template: string; failure_class: string; reason: string; gate?: string | null
+  strategy_id?: string | null; created_at?: string; [key: string]: unknown
+}
+export type ResearchMemoryPayload = {
+  scope: string; counts: Record<string, number>; total: number
+  constraints: ResearchConstraint[]
+}
 export type Gate = { gate: string; name: string; status: string; finding: string; observed?: string | number; rule?: string }
 export type Verdict = {
   verdict_id: string; decision: string; grade: string
@@ -335,4 +347,25 @@ export type MissionSnapshot = {
   missions: Mission[]; current: string | null; running: boolean
   actions: ActionSchema[]; recent_actions: ActionRecord[]
   roles: string[]; max_steps: number
+}
+
+/** One candidate the engine formed, with the line it came from.
+ *  Shared between the Experiments view and the global search. */
+export type ExperimentRecord = {
+  id: string
+  template: string
+  parameters: Record<string, number>
+  status?: string
+  policy?: string
+  family?: string
+  parent_id?: string
+  seed?: number
+  failure_class?: string
+  failure_gate?: string
+  failure_reason?: string
+  verdict_id?: string
+  strategy_id?: string
+  created_at?: string
+  finished_at?: string
+  development_sharpe?: number
 }

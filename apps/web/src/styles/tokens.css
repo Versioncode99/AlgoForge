@@ -12,7 +12,7 @@
 
   --line: #292724;
   --line-strong: #3a3732;
-  --line-glow: #424b35;
+  --line-glow: #67513f;
 
   /* Text */
   --fg-0: #f4f2ed;
@@ -21,9 +21,9 @@
   --fg-3: #625d55;
 
   /* Brand + semantic */
-  --brand: #a2e65d;
-  --brand-dim: #587c36;
-  --brand-wash: rgba(162, 230, 93, 0.08);
+  --brand: #c58a5a;
+  --brand-dim: #765039;
+  --brand-wash: rgba(197, 138, 90, 0.1);
 
   --pass: #8fce6a;
   --fail: #c1503f;
@@ -39,22 +39,29 @@
   --s1: #58a6ff; --s2: #bc8cff; --s3: #39c5cf; --s4: #ffa657;
   --s5: #7ee787; --s6: #f778ba; --s7: #a5a5a5; --s8: #e3b341;
 
-  /* Type */
-  /* Plex Sans and Plex Mono are one superfamily, so the pairing is structural
-     rather than a mood choice. Manrope was replaced: it is one of the faces
-     every generated interface reaches for. */
-  --font-ui: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Type — two faces, split by job rather than by mood.
+     Inter carries the interface: it is engineered for dense UI at 11-14px,
+     which is the range almost every label in this application lives in.
+     Plex Mono carries data only — figures, hashes, ids, timestamps, code.
+     The previous build ran labels through the mono face at 9px, which is what
+     made a research workstation read as a terminal emulator. */
+  --font-ui: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  /* Small caps-style labels. Sans, not mono: tracking does the work. */
+  --font-label: var(--font-ui);
 
-  --fs-nano: 9px;
-  --fs-micro: 10px;
-  --fs-xs: 11px;
+  /* 9px was below the floor at which a label can be read at arm's length on a
+     1440p panel. Everything shifts up one step; density is held by tighter
+     line-height and padding instead of smaller glyphs. */
+  --fs-nano: 10px;
+  --fs-micro: 11px;
+  --fs-xs: 12px;
   --fs-sm: 12px;
   --fs-base: 13px;
   --fs-lg: 15px;
-  --fs-xl: 19px;
-  --fs-2xl: 26px;
-  --fs-hero: 46px;
+  --fs-xl: 18px;
+  --fs-2xl: 22px;
+  --fs-hero: 28px;
 
   /* Spacing — everything is a multiple of 4 */
   --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;

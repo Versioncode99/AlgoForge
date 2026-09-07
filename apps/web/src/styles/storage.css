@@ -12,7 +12,7 @@
 }
 .storage-current > div:first-child { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .storage-current span {
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3);
 }
 .storage-current strong { font-size: var(--fs-base); color: var(--fg-0); overflow-wrap: anywhere; }
@@ -22,7 +22,7 @@
 .storage-counts span {
   border: 1px solid var(--line); border-radius: var(--r-sm);
   padding: 4px var(--sp-2); background: var(--bg-1);
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   letter-spacing: .06em; text-transform: none; color: var(--fg-2);
 }
 .storage-counts b { color: var(--fg-0); }
@@ -49,19 +49,19 @@
 .storage-stays { border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-2); }
 .storage-stays summary {
   cursor: pointer; padding: var(--sp-2) var(--sp-3);
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   letter-spacing: .08em; text-transform: uppercase; color: var(--fg-2);
 }
 .storage-stays summary:hover { color: var(--fg-0); }
 .storage-stays ul { list-style: none; margin: 0; padding: 0 var(--sp-3) var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
 .storage-stays li { display: flex; flex-direction: column; gap: 2px; }
 .storage-stays b { font-size: var(--fs-xs); color: var(--fg-0); }
-.storage-stays code { font-family: var(--font-mono); font-size: var(--fs-nano); color: var(--fg-3); overflow-wrap: anywhere; }
+.storage-stays code { font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); color: var(--fg-3); overflow-wrap: anywhere; }
 .storage-stays p { font-size: var(--fs-xs); color: var(--fg-2); line-height: 1.5; }
 
 .storage-move { display: flex; flex-direction: column; gap: var(--sp-3); }
 .storage-move > label {
-  font-family: var(--font-mono); font-size: var(--fs-nano);
+  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
   letter-spacing: .12em; text-transform: uppercase; color: var(--fg-2);
 }
 .storage-move-row { display: flex; gap: var(--sp-2); flex-wrap: wrap; }

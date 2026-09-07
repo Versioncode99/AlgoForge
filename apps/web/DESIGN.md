@@ -7,10 +7,10 @@ untrue of a generic dashboard.
 
 ## The world
 
-**A bench instrument for a machine whose job is to say no.**
+**A research control room for a machine whose job is to say no.**
 
 AlgoForge is not a trading dashboard and must not read as one. A trading
-dashboard's job is to make you feel informed and act. This thing's job is to
+dashboard's job is to make you feel informed and act. This workstation's job is to
 reject thousands of ideas credibly, so the interface has to make a *refusal*
 legible and worth reading — the reason, the evidence behind it, and what would
 change it. The nearest honest relatives are a Strategy Analyzer results window
@@ -39,8 +39,9 @@ No display face. There is no hero here; the largest type on screen is a metric.
 
 ## Colour
 
-The near-black surfaces and the plasma green stay — that green is the product's
-existing mark, not a pick because it "pops". What changes:
+Near-black warm graphite surfaces remain. Restrained copper marks selection,
+focus and live research context; green is reserved for semantic success. This
+separation stops brand colour from being mistaken for a validation verdict.
 
 - **Three verdict states, three colours.** `PASS` green, `FAIL` red, and
   `INCONCLUSIVE` amber. The judge's entire design rests on "not measured" being
@@ -64,18 +65,24 @@ No fade-up on everything.
 
 ## Structural rules
 
-1. **Tables are the primary container, not cards.** Cards are for a single
+1. **Research hierarchy is always visible.** Grouped navigation keeps mission,
+   experiment, run, validation, evidence and deployment context distinct.
+2. **Tables are the primary container, not cards.** Cards are for a single
    object with a picture. This app compares things.
-2. **Every section shaped by its job.** The control bar is a strip. Results are
+3. **Every section shaped by its job.** The control bar is a strip. Results are
    tabs over one dense table. The prop matrix is a grid. The strategy list is a
    rail. None of them share a rhythm.
-3. **No metric without its uncertainty** where one exists. A pass rate ships
+4. **No metric without its uncertainty** where one exists. A pass rate ships
    with its interval; a Sharpe ships with its deflated probability.
-4. **Every empty state names the next action.** "No backtest yet" is useless;
+5. **Every empty state names the next action.** "No backtest yet" is useless;
    "Run a backtest over 3 years — this strategy needs 30 trading days" is not.
-5. **Nothing on screen that the user cannot act on.** The test that killed five
+6. **Nothing on screen that the user cannot act on.** The test that killed five
    tabs. Apply it to every new panel.
-6. `prefers-reduced-motion` removes movement, never information.
+7. **Agents are operations, not theatre.** Show task, state, duration, evidence
+   and controls; never simulate thinking with orbital or particle animation.
+8. **URLs preserve workspace context.** Every primary view has a stable hash
+   route and can be reached from the keyboard palette.
+9. `prefers-reduced-motion` removes movement, never information.
 
 ## Density target
 

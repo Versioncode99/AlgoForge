@@ -53,10 +53,11 @@ export function ValidationLabView() {
   const wf = e?.walk_forward
   const paths = e?.paths
   return <section className="stack validation-lab">
-    <div className="section-title">
-      <p>SELECTION RISK · TEMPORAL STABILITY · PATH RISK</p>
-      <h2>See the validation machinery, not just its verdict.</h2>
-    </div>
+    <p className="view-note">
+      Selection risk, temporal stability and path risk, each shown as the estimate it is.
+      Below eight distinct configurations the deflated Sharpe and the probability of
+      backtest overfitting report nothing rather than a confident number.
+    </p>
     <div className="validation-toolbar panel">
       <label>Strategy<select value={selected} onChange={event => setSelected(event.target.value)}>
         {(strategies.data ?? []).map(item => <option key={item.strategy_id} value={item.strategy_id}>{item.name}</option>)}
