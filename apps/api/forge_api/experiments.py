@@ -54,6 +54,10 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("dataset", "TEXT"),
     ("data_version", "TEXT"),
     ("code_hash", "TEXT"),
+    # Frozen before the candidate is backtested, so the judge can tell a
+    # pre-registered hypothesis from one written after the numbers came in.
+    ("preregistration_id", "TEXT"),
+    ("preregistration_hash", "TEXT"),
     ("seed", "INTEGER"),
     ("strategy_id", "TEXT"),
     ("backtest_id", "TEXT"),
@@ -109,6 +113,8 @@ class Experiments:
         dataset: str | None = None,
         data_version: str | None = None,
         seed: int | None = None,
+        preregistration_id: str | None = None,
+        preregistration_hash: str | None = None,
     ) -> str | None:
         """Claim this parameter set, or decline because it is already claimed.
 
@@ -128,8 +134,9 @@ class Experiments:
             inserted = db.execute(
                 "INSERT OR IGNORE INTO attempts "
                 "(id, scope, template, payload, parent_id, policy, family, hypothesis, "
-                "dataset, data_version, seed, status, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "dataset, data_version, seed, status, created_at, "
+                "preregistration_id, preregistration_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     key,
                     scope,
@@ -144,6 +151,8 @@ class Experiments:
                     seed,
                     "reserved",
                     datetime.now(UTC).isoformat(timespec="seconds"),
+                    preregistration_id,
+                    preregistration_hash,
                 ),
             ).rowcount
         return key if inserted else None

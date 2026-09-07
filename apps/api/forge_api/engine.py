@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from forge.contracts.hashing import content_hash
+from forge.contracts.models import Preregistration
 from forge.data.models import Bar
 from forge.judge import MINIMUM_TRIAL_CONFIGURATIONS, Judge, JudgeInput
 from forge.memory import FailureClass, ResearchMemory, classify_gate
@@ -482,10 +483,17 @@ class AutonomousEngine:
             )
             return
 
+        # Freeze the hypothesis *before* the candidate is backtested. G1 is only
+        # meaningful if the claim cannot be edited once the numbers are in, so
+        # the record is written first and verified against at judge time.
+        prereg = _freeze_preregistration(template, params)
+
         attempt_id = self.experiments.reserve(
             self._scope(),
             template_key,
             params,
+            preregistration_id=prereg.preregistration_id,
+            preregistration_hash=prereg.content_hash,
             parent_id=parent_id,
             policy=policy,
             family=template.family,
@@ -700,7 +708,7 @@ class AutonomousEngine:
                 pnl=pnl,
                 trial_count=max(1, self.experiments.count(self._scope())),
                 data_gate_passed=real_data,
-                preregistered=True,
+                preregistered=self._preregistration_holds(attempt_id, template, params),
                 implementation_tests_passed=True,
                 lookahead_detected=not result.lookahead_clean,
                 **evidence_args,
@@ -766,7 +774,7 @@ class AutonomousEngine:
                     pnl=holdout_pnl,
                     trial_count=max(1, self.state.backtested),
                     data_gate_passed=True,
-                    preregistered=True,
+                    preregistered=self._preregistration_holds(attempt_id, template, params),
                     implementation_tests_passed=True,
                     lookahead_detected=not holdout.lookahead_clean,
                     **evidence_args,
@@ -874,6 +882,30 @@ class AutonomousEngine:
             strategy_id=strategy_id,
         )
 
+    def _preregistration_holds(
+        self, attempt_id: str, template: Any, params: dict[str, float]
+    ) -> bool:
+        """Does the frozen hypothesis still describe what is being judged?
+
+        G1 used to be handed a literal ``True`` at every call site, which made
+        it a gate nothing could fail. It now re-freezes the record from the
+        template and parameters as they stand at judge time and compares the
+        hash with the one stored before the backtest ran. They differ if the
+        hypothesis, mechanism, falsification or parameters changed in between —
+        which is exactly the "find a good result, then rewrite the claim"
+        move that pre-registration exists to prevent.
+
+        A missing record fails closed. An experiment with no frozen hypothesis
+        was not pre-registered, whatever else is true of it.
+        """
+        row = self.experiments.get(attempt_id)
+        if row is None:
+            return False
+        stored = row.get("preregistration_hash")
+        if not stored:
+            return False
+        return str(stored) == _freeze_preregistration(template, params).content_hash
+
     @staticmethod
     def _symbol(bars: list[Bar]) -> str:
         return bars[0].symbol if bars else "UNKNOWN"
@@ -974,3 +1006,27 @@ def _validation_grid(template: Any, params: dict[str, float]) -> dict[str, list[
             if _grid_size(grid) >= MINIMUM_TRIAL_CONFIGURATIONS:
                 break
     return grid
+
+
+def _freeze_preregistration(template: Any, params: dict[str, float]) -> Preregistration:
+    """The claim, fixed before any number exists.
+
+    The parameters are folded into the falsification text on purpose: "this
+    template has an edge" and "this template has an edge at these settings" are
+    different claims, and only the second one is falsifiable by the run that
+    follows. Including them is what makes the hash change if the search quietly
+    moves the goalposts.
+
+    `frozen_at` is deliberately *not* the wall clock. A hypothesis re-derived
+    from the same template and the same parameters must hash identically at
+    judge time, or the check would fail every candidate for the crime of time
+    having passed. Identity here is the content of the claim, not when it was
+    written down; when it was written down is recorded on the experiment row.
+    """
+    settings = ", ".join(f"{name}={params[name]}" for name in sorted(params))
+    return Preregistration.freeze(
+        hypothesis=template.hypothesis,
+        mechanism=f"{template.family} family, {template.key} template",
+        falsification=f"{template.falsifiable_prediction} Evaluated at {settings}.",
+        frozen_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
