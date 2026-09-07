@@ -85,16 +85,60 @@ that it cannot. Every call is validated, logged, and refusable with a reason.
 ## Autonomous engine
 
 Overview has a start/stop control. Once running it draws parameters from each
-template's declared ranges, writes the strategy, backtests it on the selected
-dataset, judges it, and records the outcome. Failures become constraints that
-skip matching candidates before any compute is spent. Expect most candidates to
-be rejected: that is the system working, not failing.
+template's declared ranges, freezes the hypothesis it is about to test, writes
+the strategy, backtests it on the selected dataset, judges it, and records the
+outcome. Expect most candidates to be rejected: that is the system working, not
+failing.
+
+Failures are not discarded. Each one is recorded with a **class**, and the class
+declares how far its evidence reaches — a parameter set that produced no trades
+says something about its neighbours, a consumed holdout says nothing about
+anything. Two gates run before any compute: one refuses a byte-identical repeat,
+the other refuses a candidate sitting inside a region already disproven for a
+reason that generalises. Both survive a restart.
+
+Absent evidence is never learned from. The judge uses `INCONCLUSIVE` to mean
+*never measured*, and pruning a region because nobody looked at it would delete
+candidates on the strength of nothing.
 
 Open `http://127.0.0.1:5173`. The API documentation is at `http://127.0.0.1:8765/docs`.
 
 The **Pipeline** tab draws the whole graph — sources, catalogue, candidates,
 measurement, judgement, survival — with live counts, and lights the stage each
 worker is in.
+
+## Evidence
+
+The **Evidence** tab answers one question for a chosen candidate: why is this
+trusted, or not. It shows the verdict and the full gate ladder with *failed* and
+*never measured* kept apart, the lineage back to the experiment that produced
+it, what research memory already knows about that template, the specialist
+positions with their disagreement intact, and every limitation the judge
+attached to a number.
+
+Sections that have no data say so, with a reason. A candidate that was never
+validated shows "validation has never been run", not a panel of zeroes — a zero
+reads as a measurement.
+
+The same document is available at `GET /api/v1/strategies/{id}/dossier` and as
+the read-only `strategy_dossier` action, so the interface, an agent and MCP all
+read one implementation.
+
+## What the judge will not do
+
+The gate ladder returns three answers, not two. `PASS`, `FAIL`, and
+`INCONCLUSIVE` — the last meaning the evidence was never produced. A strategy
+that was never walk-forwarded is an unanswered question, not a near miss.
+
+Two gates refuse evidence that exists but is too thin to carry the claim. The
+Deflated Sharpe needs the spread of the search to set its hurdle, and the
+probability of backtest overfitting needs rivals to rank the winner against;
+below eight distinct configurations neither is an estimate of anything, and both
+report `INCONCLUSIVE` rather than a confident number resting on two samples.
+
+Pre-registration is checked, not assumed. The claim is frozen before the
+backtest and re-derived at judge time; if the hypothesis or the parameters moved
+in between, G1 fails.
 
 ## Local MCP tools
 
