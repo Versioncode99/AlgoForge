@@ -21,6 +21,7 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
         "list_templates",
         "read_research",
         "research_memory",
+        "strategy_dossier",
     }
     assert all(tool.annotations.read_only_hint for tool in tools.values())
 

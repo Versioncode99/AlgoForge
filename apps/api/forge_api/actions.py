@@ -303,6 +303,14 @@ class Actions:
             self.experiment_lineage,
         )
         self._add(
+            "strategy_dossier",
+            "Everything known about one candidate in a single structured record: "
+            "spec, backtests, verdict and its gates, validation evidence, provenance "
+            "and lineage, related failures, specialist dissent, and stated limitations.",
+            {"strategy_id": {"type": "string"}},
+            self.strategy_dossier,
+        )
+        self._add(
             "research_memory",
             "What the search has already disproven: failure counts by class and the "
             "constraints now pruning candidates before any compute is spent.",
@@ -676,6 +684,25 @@ class Actions:
                 f"No experiment '{key}'. Use list_experiments to see what exists."
             )
         return dict(line)
+
+    def strategy_dossier(self, strategy_id: str) -> dict[str, Any]:
+        from forge_api.dossier import build_dossier
+
+        key = _str(strategy_id, "strategy_id", limit=120)
+        try:
+            return build_dossier(
+                root=self.workspace.repo,
+                library=self.library,
+                store=self.store,
+                experiments=self.engine.experiments,
+                memory=self.engine.memory,
+                scope=self.engine._scope(),
+                strategy_id=key,
+            )
+        except KeyError as exc:
+            raise ActionError(
+                f"No strategy '{key}'. Use list_strategies to see what exists."
+            ) from exc
 
     def research_memory(self, limit: int | None = None) -> dict[str, Any]:
         scope = self.engine._scope()

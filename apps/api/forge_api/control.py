@@ -453,6 +453,38 @@ def build_control_router(
             },
         )
 
+    @router.get(
+        "/strategies/{strategy_id}/dossier", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def strategy_dossier(strategy_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Everything known about one candidate, assembled from existing records."""
+        from forge_api.dossier import build_dossier
+
+        try:
+            data = build_dossier(
+                root=root,
+                library=library,
+                store=store,
+                experiments=engine.experiments,
+                memory=engine.memory,
+                scope=engine._scope(),
+                strategy_id=strategy_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail=f"No strategy '{strategy_id}'."
+            ) from exc
+        return ApiEnvelope(
+            data=data,
+            meta={
+                "sections_available": sorted(
+                    name
+                    for name, value in data.items()
+                    if isinstance(value, dict) and value.get("available")
+                )
+            },
+        )
+
     @router.get("/memory", response_model=ApiEnvelope[dict[str, Any]])
     def research_memory(limit: int = 100) -> ApiEnvelope[dict[str, Any]]:
         """What the search has learned, and how much of each kind."""
