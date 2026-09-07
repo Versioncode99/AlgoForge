@@ -54,6 +54,11 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("dataset", "TEXT"),
     ("data_version", "TEXT"),
     ("code_hash", "TEXT"),
+    # Per-trade Sharpe of the development run. Recorded for every candidate,
+    # winners and losers alike, because the Deflated Sharpe needs the spread
+    # of the whole search and a search remembered only through its successes
+    # has a variance that flatters every one of them.
+    ("development_sharpe", "REAL"),
     # Frozen before the candidate is backtested, so the judge can tell a
     # pre-registered hypothesis from one written after the numbers came in.
     ("preregistration_id", "TEXT"),
@@ -194,6 +199,25 @@ class Experiments:
             db.row_factory = sqlite3.Row
             row = db.execute("SELECT * FROM attempts WHERE id=?", (key,)).fetchone()
         return _merge(dict(row)) if row else None
+
+    def sharpes(self, scope: str, limit: int = 5000) -> tuple[float, ...]:
+        """Every recorded development Sharpe in this scope, newest first.
+
+        This is what ``V[SR]`` should be estimated from. Measuring the spread
+        across a nine-point neighbourhood and then deflating against a
+        thousand-trial count uses two different searches for the two halves of
+        one statistic: neighbouring parameters on one template produce highly
+        correlated Sharpes, so their variance understates the real spread and
+        the best-of-N hurdle comes out too low.
+        """
+        with closing(self.connect()) as db, db:
+            rows = db.execute(
+                "SELECT development_sharpe FROM attempts "
+                "WHERE scope=? AND development_sharpe IS NOT NULL "
+                "ORDER BY rowid DESC LIMIT ?",
+                (scope, limit),
+            ).fetchall()
+        return tuple(float(row[0]) for row in rows)
 
     def count(self, scope: str) -> int:
         with closing(self.connect()) as db, db:

@@ -33,6 +33,7 @@ from forge.contracts.hashing import content_hash
 from forge.contracts.models import Preregistration
 from forge.data.models import Bar
 from forge.judge import MINIMUM_TRIAL_CONFIGURATIONS, Judge, JudgeInput
+from forge.judge.statistics import per_period_sharpe
 from forge.memory import FailureClass, ResearchMemory, classify_gate
 from forge.prop import MIN_TRADING_DAYS, load_rules, simulate_prop_paths
 from forge.provenance import RunSnapshots
@@ -619,7 +620,15 @@ class AutonomousEngine:
         self.store.save(result)
         if self.mirror is not None:
             self.mirror.backtest(result.model_dump(mode="json"), strategy_name=spec.name)
-        self.experiments.finish(attempt_id, status="backtested")
+        trade_pnl = tuple(trade.net_pnl for trade in result.trades)
+        self.experiments.finish(
+            attempt_id,
+            status="backtested",
+            development_net=result.net_pnl,
+            # Recorded whatever the outcome. A search remembered only through
+            # its winners has a Sharpe spread that flatters every one of them.
+            development_sharpe=per_period_sharpe(trade_pnl) if len(trade_pnl) > 1 else 0.0,
+        )
         self._bump("backtested")
         self.log.record(
             "BACKTEST",
@@ -694,7 +703,12 @@ class AutonomousEngine:
                 split_id=partitions.receipt.split_id,
             )
             evidence_args = {
-                "trial_sharpes": evidence.trial_sharpes,
+                # Deliberately NOT evidence.trial_sharpes. Those are the nine
+                # points of this candidate's own neighbourhood, and deflating a
+                # thousand-trial count against a nine-neighbour variance uses
+                # two different searches for the two halves of one statistic.
+                # See Experiments.sharpes.
+                "trial_sharpes": self._search_sharpes(),
                 "overfitting": evidence.overfitting,
                 "walk_forward": evidence.walk_forward,
                 "paths": evidence.paths,
@@ -943,6 +957,17 @@ class AutonomousEngine:
                 f"could not snapshot {verdict.run_id}: {type(error).__name__}: {error}",
                 "warn",
             )
+
+    def _search_sharpes(self) -> tuple[float, ...] | None:
+        """The Sharpe spread of the whole search, or None when too few are recorded.
+
+        Returning None rather than a short tuple is what makes the judge report
+        G5 as INCONCLUSIVE early in a run: at that point the search genuinely
+        has not produced enough trials to estimate the spread it should be
+        deflated against, and inventing one would be worse than saying so.
+        """
+        recorded = self.experiments.sharpes(self._scope())
+        return recorded if len(recorded) >= MINIMUM_TRIAL_CONFIGURATIONS else None
 
     def _preregistration_holds(
         self, attempt_id: str, template: Any, params: dict[str, float]

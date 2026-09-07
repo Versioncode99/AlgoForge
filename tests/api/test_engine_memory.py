@@ -184,3 +184,36 @@ def test_scope_separates_datasets(engine: AutonomousEngine) -> None:
         )
         is None
     )
+
+
+# ── the spread the Deflated Sharpe deflates against ──────────────────────────
+
+
+def test_the_search_spread_is_withheld_until_there_is_enough_of_it(
+    engine: AutonomousEngine,
+) -> None:
+    """Early in a run the search has not produced enough trials to estimate a
+    spread. Saying so makes G5 INCONCLUSIVE, which is the honest outcome."""
+    from forge.judge import MINIMUM_TRIAL_CONFIGURATIONS
+
+    scope = engine._scope()
+    for index in range(MINIMUM_TRIAL_CONFIGURATIONS - 1):
+        key = engine.experiments.reserve(scope, TEMPLATE, {"lookback": float(index)})
+        engine.experiments.finish(str(key), status="backtested", development_sharpe=index * 0.1)
+
+    assert engine._search_sharpes() is None
+
+
+def test_the_search_spread_is_used_once_there_is_enough(
+    engine: AutonomousEngine,
+) -> None:
+    from forge.judge import MINIMUM_TRIAL_CONFIGURATIONS
+
+    scope = engine._scope()
+    for index in range(MINIMUM_TRIAL_CONFIGURATIONS):
+        key = engine.experiments.reserve(scope, TEMPLATE, {"lookback": float(index)})
+        engine.experiments.finish(str(key), status="backtested", development_sharpe=index * 0.1)
+
+    spread = engine._search_sharpes()
+    assert spread is not None
+    assert len(spread) == MINIMUM_TRIAL_CONFIGURATIONS

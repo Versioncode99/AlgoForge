@@ -243,3 +243,39 @@ def test_migration_is_idempotent(tmp_path: Path) -> None:
     key = first.reserve("s", "t", {"a": 1.0})
     reopened = Experiments(path)
     assert reopened.get(str(key)) is not None
+
+
+# ── the Sharpe spread the Deflated Sharpe needs ──────────────────────────────
+
+
+def test_sharpes_are_recorded_for_losers_too(experiments: Experiments) -> None:
+    """A search remembered only through its winners flatters every one of them."""
+    winner = _reserve(experiments, 10.0)
+    loser = _reserve(experiments, 20.0)
+    experiments.finish(winner, status="backtested", development_sharpe=0.42)
+    experiments.finish(loser, status="backtested", development_sharpe=-0.31)
+
+    recorded = experiments.sharpes("mnq-1m")
+    assert sorted(recorded) == [-0.31, 0.42]
+
+
+def test_sharpes_skips_experiments_that_never_ran(experiments: Experiments) -> None:
+    _reserve(experiments, 10.0)  # reserved, never backtested
+    scored = _reserve(experiments, 20.0)
+    experiments.finish(scored, status="backtested", development_sharpe=0.1)
+    assert experiments.sharpes("mnq-1m") == (0.1,)
+
+
+def test_sharpes_are_scoped(experiments: Experiments) -> None:
+    key = _reserve(experiments, 10.0)
+    experiments.finish(key, status="backtested", development_sharpe=0.5)
+    assert experiments.sharpes("another-scope") == ()
+
+
+def test_a_zero_sharpe_is_recorded_not_treated_as_absent(
+    experiments: Experiments,
+) -> None:
+    """0.0 is a measurement. Filtering on truthiness would silently drop it."""
+    key = _reserve(experiments, 10.0)
+    experiments.finish(key, status="backtested", development_sharpe=0.0)
+    assert experiments.sharpes("mnq-1m") == (0.0,)
