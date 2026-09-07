@@ -39,7 +39,7 @@ from forge_api.engine import DETERMINISM_WINDOW_BARS
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.market import DEFAULT_DATASET, MarketService
 from forge_api.mechanism_check import mechanism_for
-from forge_api.preregistration_store import claim_holds, freeze_claim, record_claim
+from forge_api.preregistration_store import claim_holds_for_run, freeze_claim, record_claim
 
 # The mechanism control is a resampling test, so it needs a seed to be
 # reproducible. Fixed rather than per-request: a verdict that changes when it is
@@ -309,16 +309,23 @@ def build_router(
             spec.strategy_id, code_hash=code_hash, backtest=once, bars=window, parameters=None
         ).reproduced
 
-    def _preregister(spec: Any, parameters: dict[str, float] | None) -> None:
-        """Freeze the claim for the parameters this run will actually use."""
+    def _preregister(spec: Any, parameters: dict[str, float] | None) -> str:
+        """Freeze the claim for the parameters this run will actually use.
+
+        Returns the claim's hash so the run can carry it. The store keeps the
+        audit trail; the artifact carries the binding, and only the binding is
+        what G1 reads.
+        """
         params = dict(spec.defaults) | dict(parameters or {})
-        if record_claim(root, spec.strategy_id, freeze_claim(spec, params)):
+        claim = freeze_claim(spec, params)
+        if record_claim(root, spec.strategy_id, claim):
             log.record(
                 "PREREG",
                 f"{spec.strategy_id} claim frozen before the run",
                 "info",
                 spec.strategy_id,
             )
+        return claim.content_hash
 
     def _data_gate_for(artifact: dict[str, Any]) -> bool | None:
         """G0's evidence: did the bars this run executed over pass validation?
@@ -499,7 +506,7 @@ def build_router(
         # G1's evidence, frozen here because this is the run the claim has to
         # precede. Append-only: a second freeze of a moved claim is recorded
         # beside the first, never over it.
-        _preregister(spec, body.parameters)
+        claim_hash = _preregister(spec, body.parameters)
         split_meta: dict[str, Any] = {}
         try:
             if is_real:
@@ -516,6 +523,7 @@ def build_router(
                     code_hash=code_hash,
                     dataset_key=body.dataset,
                     split_receipt=partitions.receipt,
+                    preregistration_hash=claim_hash,
                 )
                 result = run_backtest(
                     module,
@@ -528,6 +536,7 @@ def build_router(
                     code_hash=code_hash,
                     dataset_key=body.dataset,
                     split_receipt=partitions.receipt,
+                    preregistration_hash=claim_hash,
                 )
                 store.save(development)
                 split_meta = {
@@ -546,6 +555,7 @@ def build_router(
                     labels=("SYNTHETIC_DATA", "UNCALIBRATED"),
                     evidence_tier="SYNTHETIC",
                     dataset_key=body.dataset,
+                    preregistration_hash=claim_hash,
                 )
         except ValueError as exc:
             log.record("BACKTEST", f"{strategy_id} failed: {exc}", "fail", strategy_id)
@@ -671,11 +681,11 @@ def build_router(
         # Frozen before the job is queued, not inside the worker: the claim has
         # to precede the run, and "before it was even scheduled" is the earliest
         # honest moment.
-        _preregister(spec, body.parameters)
+        claim_hash = _preregister(spec, body.parameters)
 
         def work(handle: JobHandle) -> dict[str, Any]:
             handle.progress(0, f"loading {requested:,} bars")
-            envelope = _run_backtest_job(strategy_id, spec, body, requested, handle)
+            envelope = _run_backtest_job(strategy_id, spec, body, requested, handle, claim_hash)
             return envelope
 
         job = REGISTRY.submit(
@@ -701,6 +711,7 @@ def build_router(
         body: BacktestRequest,
         requested: int,
         handle: JobHandle,
+        claim_hash: str,
     ) -> dict[str, Any]:
         module = library.load_module(strategy_id)
         if body.dataset == "synthetic":
@@ -745,6 +756,7 @@ def build_router(
                 code_hash=code_hash,
                 dataset_key=body.dataset,
                 split_receipt=partitions.receipt,
+                preregistration_hash=claim_hash,
                 progress=dev_progress,
             )
             result = run_backtest(
@@ -758,6 +770,7 @@ def build_router(
                 code_hash=code_hash,
                 dataset_key=body.dataset,
                 split_receipt=partitions.receipt,
+                preregistration_hash=claim_hash,
                 progress=val_progress,
             )
             store.save(development)
@@ -782,6 +795,7 @@ def build_router(
                 labels=("SYNTHETIC_DATA", "UNCALIBRATED"),
                 evidence_tier="SYNTHETIC",
                 dataset_key=body.dataset,
+                preregistration_hash=claim_hash,
                 progress=plain_progress,
             )
 
@@ -1037,9 +1051,7 @@ def build_router(
                         # a real FAIL, not absent evidence, which is why this
                         # one stays a literal.
                         data_gate_passed=False,
-                        preregistered=claim_holds(
-                            root, strategy_id, spec, latest_any.get("parameters") or {}
-                        ),
+                        preregistered=claim_holds_for_run(spec, latest_any),
                         implementation_tests_passed=conformance,
                         engine_consistent=determinism,
                         mechanism_aligned=None,
@@ -1096,7 +1108,7 @@ def build_router(
                 pnl=pnl,
                 trial_count=trials,
                 data_gate_passed=_data_gate_for(latest),
-                preregistered=claim_holds(root, strategy_id, spec, latest.get("parameters") or {}),
+                preregistered=claim_holds_for_run(spec, latest),
                 implementation_tests_passed=conformance,
                 engine_consistent=determinism,
                 mechanism_aligned=_mechanism_for_artifact(spec, latest),
@@ -1162,6 +1174,9 @@ def build_router(
             dataset_key=dataset_key,
             partition_name="HOLDOUT",
             split_receipt=receipt,
+            # The holdout inherits the validated run's claim. It is the same
+            # hypothesis being tested on sealed data, not a new one.
+            preregistration_hash=latest.get("preregistration_hash"),
         )
         store.save(holdout)
         research_ledger.attach_result(spec.lineage, holdout.backtest_id)
@@ -1183,7 +1198,7 @@ def build_router(
                 data_gate_passed=(
                     holdout.data_quality.accepted if holdout.data_quality is not None else None
                 ),
-                preregistered=claim_holds(root, strategy_id, spec, latest.get("parameters") or {}),
+                preregistered=claim_holds_for_run(spec, holdout.model_dump(mode="json")),
                 implementation_tests_passed=conformance,
                 engine_consistent=determinism,
                 # The holdout's own bars, not the validation partition's: a

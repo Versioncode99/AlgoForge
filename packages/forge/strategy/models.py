@@ -122,6 +122,13 @@ class BacktestResult(FrozenModel):
     # because artifacts written before this field existed do not carry one, and
     # an absent receipt must read as INCONCLUSIVE rather than as a pass.
     data_quality: DataQualityReceipt | None = None
+    # G1's evidence, carried by the run rather than looked up beside it. A
+    # store keyed only by strategy could be laundered: rewrite the hypothesis,
+    # start any throwaway backtest to freeze the new claim, and the new claim
+    # then validated the *old* artifact. Recording the hash on the artifact
+    # binds the claim to the run it actually preceded, and re-deriving it from
+    # the current spec at judge time is what detects a claim that has moved.
+    preregistration_hash: str | None = None
     started_at: datetime
     finished_at: datetime
 

@@ -184,11 +184,27 @@ class DeflatedSharpe:
     observations: int
     skewness: float
     kurtosis: float
+    # Why the spread could not be used, if it could not. Empty when the
+    # deflation rests on a measured spread.
+    spread_problem: str = ""
+
+    @property
+    def spread_is_measured(self) -> bool:
+        """Whether ``benchmark_sharpe`` is a hurdle or a placeholder.
+
+        A search whose configurations all scored the same gives ``V[SR] = 0``,
+        which makes ``expected_max_sharpe`` return 0.0 and silently turns the
+        Deflated Sharpe back into a plain Probabilistic Sharpe — no deflation at
+        all, for a search that may have tried a thousand things. That is the
+        single most dangerous way for this estimator to fail, because it fails
+        *permissively* and looks identical to a well-deflated result.
+        """
+        return not self.spread_problem
 
     @property
     def credible(self) -> bool:
         """The conventional 95% bar for treating a discovery as real."""
-        return self.deflated_sharpe_ratio >= 0.95
+        return self.spread_is_measured and self.deflated_sharpe_ratio >= 0.95
 
 
 def deflated_sharpe_ratio(
@@ -204,11 +220,7 @@ def deflated_sharpe_ratio(
     measurement.
     """
     series = _clean(returns)
-    if trial_sharpes is not None:
-        candidates = np.asarray(trial_sharpes, dtype=np.float64).ravel()
-        variance = float(np.var(candidates, ddof=1)) if candidates.size > 1 else 1.0
-    else:
-        variance = 1.0
+    variance, problem = _trial_spread(trial_sharpes)
     benchmark = expected_max_sharpe(trials, variance)
     return DeflatedSharpe(
         deflated_sharpe_ratio=probabilistic_sharpe_ratio(series, benchmark),
@@ -220,7 +232,47 @@ def deflated_sharpe_ratio(
         observations=int(series.size),
         skewness=skewness(series),
         kurtosis=kurtosis(series),
+        spread_problem=problem,
     )
+
+
+# Below this, the spread across the search is treated as no spread at all. It is
+# relative rather than absolute because Sharpes are scale-free but not
+# magnitude-free: a search clustered around 3.0 and one clustered around 0.001
+# should both count as degenerate when their configurations agree to twelve
+# digits.
+_DEGENERATE_SPREAD = 1e-12
+
+
+def _trial_spread(trial_sharpes: np.ndarray | tuple[float, ...] | None) -> tuple[float, str]:
+    """``V[SR]`` from the search, plus why it is unusable when it is.
+
+    Three failures are distinguished, because they mean different things:
+
+    * **absent** — nobody recorded the search. ``V[SR] = 1`` is then an
+      assumption in per-trade units, not a measurement, and is flagged as one.
+    * **non-finite** — a NaN or infinity got into the trial Sharpes. Previously
+      this propagated straight through ``np.var`` into the DSR, producing a
+      ``nan`` that ``nan >= 0.95`` then quietly turned into a gate failure, and
+      a bare ``NaN`` token in the JSON response that no strict parser accepts.
+    * **degenerate** — every configuration scored the same, so the estimated
+      spread is zero and the best-of-N hurdle collapses to zero with it.
+    """
+    if trial_sharpes is None:
+        return 1.0, "V[SR]_ASSUMED_NOT_MEASURED"
+    candidates = np.asarray(trial_sharpes, dtype=np.float64).ravel()
+    if candidates.size <= 1:
+        return 1.0, "V[SR]_ASSUMED_NOT_MEASURED"
+    if not np.isfinite(candidates).all():
+        return 1.0, "TRIAL_SHARPES_NON_FINITE"
+    spread = float(np.ptp(candidates))
+    scale = max(1.0, float(np.max(np.abs(candidates))))
+    if spread <= _DEGENERATE_SPREAD * scale:
+        return 0.0, "TRIAL_SHARPES_HAVE_NO_SPREAD"
+    variance = float(np.var(candidates, ddof=1))
+    if not math.isfinite(variance) or variance <= 0.0:
+        return 0.0, "TRIAL_SHARPES_HAVE_NO_SPREAD"
+    return variance, ""
 
 
 def minimum_track_record_length(

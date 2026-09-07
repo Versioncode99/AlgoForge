@@ -102,13 +102,37 @@ def record_claim(root: Path, strategy_id: str, claim: Preregistration) -> bool:
     return True
 
 
-def claim_holds(root: Path, strategy_id: str, spec: Any, params: dict[str, float]) -> bool | None:
-    """What G1 should read: ``True``, ``False``, or ``None`` for never frozen.
+def claim_holds_for_run(spec: Any, artifact: dict[str, Any]) -> bool | None:
+    """What G1 should read for a completed run.
 
-    ``False`` means a claim *was* frozen for this strategy and the current one
-    does not match it — the goalposts moved. ``None`` means nothing was ever
-    frozen, which is a different statement and must not be reported as a
-    failure of the strategy.
+    The artifact carries the hash of the claim it was executed under. This
+    re-derives the claim from the *current* spec and the parameters the run
+    actually used, and compares.
+
+    Reading the store instead was launderable, and the store cannot be fixed by
+    checking it harder. A researcher who rewrote a hypothesis after seeing a
+    result only had to start any throwaway backtest — a synthetic one, costing
+    nothing — for the new claim to be frozen, and `claim_holds` returned True
+    for *any* stored claim, so the new one then validated the old artifact.
+    Binding the hash to the run closes that: the old artifact still carries the
+    old hash, and re-deriving from the edited spec no longer matches it.
+
+    ``None`` means the run recorded no claim — every artifact written before
+    this field existed. Absent, not failed.
+    """
+    recorded = artifact.get("preregistration_hash")
+    if not recorded:
+        return None
+    params = dict(artifact.get("parameters") or {})
+    return str(recorded) == freeze_claim(spec, params).content_hash
+
+
+def claim_holds(root: Path, strategy_id: str, spec: Any, params: dict[str, float]) -> bool | None:
+    """Whether a matching claim was ever frozen for this strategy.
+
+    This is the *audit trail* question — "was this claim registered?" — not the
+    gate question. G1 uses :func:`claim_holds_for_run`, because only the
+    artifact can say which claim a given run was executed under.
     """
     rows = _load(root, strategy_id)
     if not rows:

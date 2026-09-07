@@ -196,6 +196,7 @@ def run_backtest(
     dataset_key: str | None = None,
     partition_name: str | None = None,
     split_receipt: ResearchSplitReceipt | None = None,
+    preregistration_hash: str | None = None,
     progress: Callable[[int, int], None] | None = None,
 ) -> BacktestResult:
     """Execute a strategy over bars with a structural no-lookahead guarantee.
@@ -324,6 +325,8 @@ def run_backtest(
         split_receipt=split_receipt,
         # The receipt this run was already gated on, kept rather than discarded.
         data_quality=quality,
+        # The claim this run was executed under, bound to the run itself.
+        preregistration_hash=preregistration_hash,
         started_at=started,
         finished_at=finished,
     )

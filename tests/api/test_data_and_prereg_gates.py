@@ -18,6 +18,7 @@ from forge.strategy import StrategyLibrary, generate_bars, run_backtest
 from forge_api.preregistration_store import (
     FROZEN_AT,
     claim_holds,
+    claim_holds_for_run,
     claims_for,
     freeze_claim,
     record_claim,
@@ -184,6 +185,87 @@ def test_unreadable_claims_read_as_absent(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True)
     path.write_text("{ truncated", encoding="utf-8")
     assert claim_holds(tmp_path, spec.strategy_id, spec, dict(spec.defaults)) is None
+
+
+def test_a_moved_claim_cannot_be_laundered_by_a_throwaway_run(tmp_path: Path) -> None:
+    """The attack this closes.
+
+    G1 read the *store*: "was any matching claim ever frozen for this
+    strategy?". A researcher who rewrote a hypothesis after seeing a result only
+    had to start any backtest at all — a synthetic one, costing nothing — for
+    the new claim to be frozen, and the store then answered True for the OLD
+    artifact. The claim has to travel with the run.
+    """
+    library, spec = library_with_one(tmp_path)
+    module = library.load_module(spec.strategy_id)
+    params = dict(spec.defaults)
+
+    claim = freeze_claim(spec, params)
+    record_claim(tmp_path, spec.strategy_id, claim)
+    artifact = run_backtest(
+        module,
+        spec,
+        generate_bars(count=1_200, seed=5),
+        code_hash=library.code_hash(spec.strategy_id),
+        preregistration_hash=claim.content_hash,
+    ).model_dump(mode="json")
+    assert claim_holds_for_run(spec, artifact) is True
+
+    moved = spec.model_copy(update={"hypothesis": "Actually, it was a liquidity effect."})
+    assert claim_holds_for_run(moved, artifact) is False
+
+    # The laundering move: freeze the rewritten claim with a throwaway run.
+    record_claim(tmp_path, spec.strategy_id, freeze_claim(moved, params))
+    assert claim_holds_for_run(moved, artifact) is False, "the old artifact keeps its own claim"
+    library.unload_module(spec.strategy_id)
+
+
+def test_the_run_carries_the_claim_it_executed_under(tmp_path: Path) -> None:
+    library, spec = library_with_one(tmp_path)
+    module = library.load_module(spec.strategy_id)
+    claim = freeze_claim(spec, dict(spec.defaults))
+    result = run_backtest(
+        module,
+        spec,
+        generate_bars(count=1_200, seed=5),
+        code_hash=library.code_hash(spec.strategy_id),
+        preregistration_hash=claim.content_hash,
+    )
+    assert result.preregistration_hash == claim.content_hash
+    assert result.model_dump(mode="json")["preregistration_hash"] == claim.content_hash
+    library.unload_module(spec.strategy_id)
+
+
+def test_an_artifact_with_no_recorded_claim_is_absent_not_failed(tmp_path: Path) -> None:
+    """Every artifact written before the field existed."""
+    library, spec = library_with_one(tmp_path)
+    module = library.load_module(spec.strategy_id)
+    artifact = run_backtest(
+        module, spec, generate_bars(count=1_200, seed=5), code_hash="abc"
+    ).model_dump(mode="json")
+    assert artifact["preregistration_hash"] is None
+    assert claim_holds_for_run(spec, artifact) is None
+    library.unload_module(spec.strategy_id)
+
+
+def test_moving_the_parameters_is_caught_by_the_binding_too(tmp_path: Path) -> None:
+    library, spec = library_with_one(tmp_path)
+    module = library.load_module(spec.strategy_id)
+    params = dict(spec.defaults)
+    claim = freeze_claim(spec, params)
+    artifact = run_backtest(
+        module,
+        spec,
+        generate_bars(count=1_200, seed=5),
+        code_hash=library.code_hash(spec.strategy_id),
+        preregistration_hash=claim.content_hash,
+    ).model_dump(mode="json")
+
+    # The judge re-derives from the parameters the artifact records, so editing
+    # the artifact's parameters breaks the binding.
+    artifact["parameters"] = {name: float(value) + 1.0 for name, value in params.items()}
+    assert claim_holds_for_run(spec, artifact) is False
+    library.unload_module(spec.strategy_id)
 
 
 def test_a_traversing_strategy_id_is_refused(tmp_path: Path) -> None:

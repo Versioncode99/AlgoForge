@@ -93,6 +93,19 @@ class Judge:
         pnl = np.asarray(item.pnl, dtype=np.float64)
         if pnl.size == 0 or not np.isfinite(pnl).all():
             raise ValueError("judge requires finite non-empty pnl")
+        # Individually finite values can still overflow when accumulated, and
+        # every drawdown-derived metric runs on the cumulative curve. An
+        # infinite equity curve would give a NaN drawdown, a NaN Calmar, and a
+        # `NaN` token in the JSON response that no strict parser accepts.
+        # The overflow this detects is what numpy would warn about, so the
+        # warning is suppressed for the check itself rather than emitted from
+        # the code that is correctly handling it.
+        with np.errstate(over="ignore", invalid="ignore"):
+            summable = bool(np.isfinite(np.cumsum(pnl)).all())
+        if not summable:
+            raise ValueError(
+                "judge requires a finite cumulative pnl curve; this series overflows when summed"
+            )
 
         sharpe = per_period_sharpe(pnl)
         annualised = annualised_sharpe(pnl, item.periods_per_year)
@@ -168,11 +181,16 @@ class Judge:
                 "re-executing the run over the same bars reproduces the same trades exactly; "
                 "this does NOT assert venue calibration, which is unmeasured",
             ),
-            self._gate(
+            self._evidence_gate(
                 "G8",
                 "Risk",
-                calmar >= 0.5,
-                round(calmar, 3),
+                # A series that never drew down has no denominator, and
+                # `calmar_ratio` returns 0.0 for it — the same number a genuinely
+                # terrible strategy gets. Reporting that as a risk FAIL says
+                # "poor return per unit of drawdown" about a run that had no
+                # drawdown to divide by. Risk is unmeasured here, not bad.
+                None if drawdown <= 0.0 else calmar >= 0.5,
+                "NO_DRAWDOWN_TO_MEASURE" if drawdown <= 0.0 else round(calmar, 3),
                 "Calmar >= 0.50 (net pnl at least half the worst drawdown)",
             ),
             self._evidence_gate(
@@ -352,14 +370,27 @@ class Judge:
             return True
         if item.trial_sharpes is None:
             return False
-        return len(item.trial_sharpes) >= MINIMUM_TRIAL_CONFIGURATIONS
+        if len(item.trial_sharpes) < MINIMUM_TRIAL_CONFIGURATIONS:
+            return False
+        # Enough configurations, but all scoring the same. `V[SR] = 0` makes the
+        # best-of-N hurdle zero, so a thousand-trial search would be deflated
+        # against nothing and the DSR would silently collapse into a plain PSR.
+        # Counting the trials is not sufficient; they have to disagree.
+        return deflated_sharpe_ratio(
+            item.pnl, item.trial_count, item.trial_sharpes
+        ).spread_is_measured
 
     @staticmethod
     def _deflation_shortfall(item: JudgeInput) -> str:
-        """Why G5 could not be measured, distinguishing absent from inadequate."""
+        """Why G5 could not be measured, distinguishing the three ways it fails."""
         if item.trial_sharpes is None:
             return "V[SR]_NOT_MEASURED"
-        return f"ONLY_{len(item.trial_sharpes)}_TRIAL_SHARPES"
+        if len(item.trial_sharpes) < MINIMUM_TRIAL_CONFIGURATIONS:
+            return f"ONLY_{len(item.trial_sharpes)}_TRIAL_SHARPES"
+        return (
+            deflated_sharpe_ratio(item.pnl, item.trial_count, item.trial_sharpes).spread_problem
+            or "V[SR]_NOT_MEASURED"
+        )
 
     @staticmethod
     def _overfitting_measurable(item: JudgeInput) -> bool:

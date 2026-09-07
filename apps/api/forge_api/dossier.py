@@ -252,8 +252,8 @@ def build_dossier(
     snapshots: Any = None,
 ) -> dict[str, Any]:
     """Assemble the dossier for one strategy. Raises KeyError if it does not exist."""
-    from forge_api.conformance_store import conformance_verdict
-    from forge_api.preregistration_store import claim_holds
+    from forge_api.conformance_store import conformance_verdict, suite_hash
+    from forge_api.preregistration_store import claim_holds_for_run
     from forge_api.strategies import judge_evidence, load_evidence
 
     spec = library.get_spec(strategy_id)
@@ -289,11 +289,12 @@ def build_dossier(
                         if latest.get("evidence_tier") in {None, "SYNTHETIC"}
                         else (receipt.get("accepted") if isinstance(receipt, dict) else None)
                     ),
-                    preregistered=claim_holds(
-                        root, strategy_id, spec, dict(latest.get("parameters") or {})
-                    ),
+                    preregistered=claim_holds_for_run(spec, latest),
                     implementation_tests_passed=conformance_verdict(
-                        root, strategy_id, code_hash=code_hash
+                        root,
+                        strategy_id,
+                        code_hash=code_hash,
+                        test_hash=suite_hash(library.get_tests(strategy_id)),
                     ),
                     # The dossier assembles; it never computes. Re-running the
                     # determinism and mechanism checks here would make opening a

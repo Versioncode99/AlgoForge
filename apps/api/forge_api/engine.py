@@ -650,6 +650,7 @@ class AutonomousEngine:
                 dataset_key=self.state.config.dataset,
                 partition_name="DEVELOPMENT",
                 split_receipt=partitions.receipt,
+                preregistration_hash=prereg.content_hash,
             )
             self.store.save(development)
             self.experiments.finish(
@@ -685,6 +686,7 @@ class AutonomousEngine:
                 dataset_key=self.state.config.dataset,
                 partition_name="VALIDATION",
                 split_receipt=partitions.receipt,
+                preregistration_hash=prereg.content_hash,
             )
             judged_bars: list[Bar] = list(partitions.validation)
             self._bump("backtested")
@@ -698,6 +700,7 @@ class AutonomousEngine:
                 labels=("SYNTHETIC_DATA", "NON_PROMOTABLE"),
                 evidence_tier="SYNTHETIC",
                 dataset_key=self.state.config.dataset,
+                preregistration_hash=prereg.content_hash,
             )
             judged_bars = list(bars)
         # G9's evidence: would the same directions and holding periods, entered
@@ -865,6 +868,7 @@ class AutonomousEngine:
                 dataset_key=self.state.config.dataset,
                 partition_name="HOLDOUT",
                 split_receipt=partitions.receipt,
+                preregistration_hash=prereg.content_hash,
             )
             self.store.save(holdout)
             self._bump("backtested")

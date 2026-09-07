@@ -17,6 +17,7 @@ from forge_api.conformance_store import (
     ensure_conformance,
     load_conformance,
     refresh_conformance,
+    suite_hash,
 )
 
 
@@ -54,6 +55,54 @@ def test_evidence_for_different_source_reads_as_absent(tmp_path: Path) -> None:
     library.write_source(strategy_id, library.get_source(strategy_id) + "\n# edited\n")
     assert (
         conformance_verdict(tmp_path, strategy_id, code_hash=library.code_hash(strategy_id)) is None
+    )
+    library.unload_module(strategy_id)
+
+
+def test_gutting_the_suite_invalidates_the_evidence(tmp_path: Path) -> None:
+    """The attack this closes: delete the lookahead trap, keep the code.
+
+    Keying on `code_hash` alone meant the suite could be replaced wholesale —
+    the trap removed outright — without changing the strategy's code hash, so
+    the stored PASS stayed valid for a suite that no longer existed. The
+    evidence is about a pair: this code, checked by these tests.
+    """
+    library, strategy_id = library_with_one(tmp_path)
+    module = library.load_module(strategy_id)
+    code_hash = library.code_hash(strategy_id)
+    refresh_conformance(tmp_path, library, strategy_id, module=module, code_hash=code_hash)
+
+    honest = suite_hash(library.get_tests(strategy_id))
+    assert conformance_verdict(
+        tmp_path, strategy_id, code_hash=code_hash, test_hash=honest
+    ) is True
+
+    library.test_path(strategy_id).write_text(
+        "def test_nothing():\n    assert True\n", encoding="utf-8"
+    )
+    assert library.code_hash(strategy_id) == code_hash, "the strategy itself is untouched"
+    gutted = suite_hash(library.get_tests(strategy_id))
+    assert conformance_verdict(
+        tmp_path, strategy_id, code_hash=code_hash, test_hash=gutted
+    ) is None
+    library.unload_module(strategy_id)
+
+
+def test_ensure_re_runs_when_only_the_suite_changed(tmp_path: Path) -> None:
+    """And re-running a gutted suite reports it as not evidence, not as a pass."""
+    library, strategy_id = library_with_one(tmp_path)
+    module = library.load_module(strategy_id)
+    code_hash = library.code_hash(strategy_id)
+    assert ensure_conformance(
+        tmp_path, library, strategy_id, module=module, code_hash=code_hash
+    ) is True
+
+    library.test_path(strategy_id).write_text(
+        "def test_nothing():\n    assert True\n", encoding="utf-8"
+    )
+    assert (
+        ensure_conformance(tmp_path, library, strategy_id, module=module, code_hash=code_hash)
+        is None
     )
     library.unload_module(strategy_id)
 
