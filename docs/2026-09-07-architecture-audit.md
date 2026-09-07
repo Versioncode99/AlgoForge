@@ -240,8 +240,9 @@ change in this branch's audit work. `[DOCUMENTED]`
 
 Diagnosis. The symptom is a step stuck in `running` with `job_id: None` for
 `create_strategy` on an unknown template — an action that refuses immediately
-(`actions.py:477`), and whose refusal `Actions.call` *catches* and returns as
-`ok: False` rather than raising. So the step cannot be blocked on the action.
+(`actions.py:477`). `Actions.call` records the refusal and then re-raises it as
+an `ActionError` (`actions.py:151-152`), so the step should fail within
+milliseconds either way. It cannot be blocked on the action itself.
 
 What it is blocked on is CPU. `forge_api.jobs.REGISTRY` is a module-level global
 with no teardown, and each `submit` starts a daemon thread. Tests that launch
@@ -322,10 +323,10 @@ artifact gate, per the Definition-of-Done rule.
 | §2 constraint learning never prunes | **Done** | `forge/memory/research.py`; engine consults it before `Experiments.reserve`; 22 store tests + 7 engine tests, including restart durability |
 | §1b dead engine state | **Done** | `_constraints`, `_lineage_failures`, `_retired_lineages` removed; `constraints()` served from disk |
 | §3.2 degenerate G5/G11 evidence | **Done** | `MINIMUM_TRIAL_CONFIGURATIONS = 8` in the judge; engine grid widened to 9 configurations; 10 adequacy tests + 55 grid tests over every shipped template |
-| §3.1 experiment record has no lineage | Open | — |
+| §3.1 experiment record has no lineage | **Done** | parent/child edges written by the engine; `ancestors`/`children`/`descendants`/`roots`; 16 tests incl. old-schema migration |
 | §3.3 validation gated on profitability | Open | — |
 | §3.4 fabricated dissent | Open | — |
-| §3.5 13 of 63 verbs have an action | Open | — |
+| §3.5 13 of 63 verbs have an action | **Partly** | +3 read-only actions (`list_experiments`, `experiment_lineage`, `research_memory`) and 4 endpoints; mutating parity still absent |
 | §3.6 no lineage/evidence/experiment views | Open | — |
 | §3.7 orchestrator test flake | Open | diagnosed above, not yet fixed |
 
@@ -334,3 +335,16 @@ artifact gate, per the Definition-of-Done rule.
 258 at `da92bf6` → 352 now. The 1–2 intermittent failures are always the
 orchestrator flake in §3.7; a run is only a regression signal if something
 *other* than `tests/api/test_orchestrator.py` fails.
+
+### A note on test isolation `[DOCUMENTED]`
+
+`create_app()` resolves its workspace with `resolve_workspace(ROOT)`, which
+falls back to the repository's own `data/` directory. Tests that construct an
+app without setting `ALGOFORGE_VAULT` therefore share state with each other and
+with whatever real workspace exists on the machine running them — writes land
+in `data/experiments.db` and `data/research_memory.db` for real.
+
+`tests/api/test_api.py` passes a database path but not a workspace, so it is
+affected. New tests here set `ALGOFORGE_VAULT` to a `tmp_path`, which is the
+documented first step of the resolution order. Worth applying to the older API
+tests too.

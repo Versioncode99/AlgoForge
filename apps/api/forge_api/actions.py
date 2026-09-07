@@ -286,6 +286,30 @@ class Actions:
             self.engine_status,
         )
         self._add(
+            "list_experiments",
+            "Experiments in the current scope, newest first. Each carries the policy "
+            "that produced it, its parent, and how it ended.",
+            {
+                "limit": {"type": "integer", "optional": True},
+                "roots_only": {"type": "boolean", "optional": True},
+            },
+            self.list_experiments,
+        )
+        self._add(
+            "experiment_lineage",
+            "Where one experiment came from and everything derived from it: "
+            "ancestors back to the root, direct children, and all descendants.",
+            {"experiment_id": {"type": "string"}},
+            self.experiment_lineage,
+        )
+        self._add(
+            "research_memory",
+            "What the search has already disproven: failure counts by class and the "
+            "constraints now pruning candidates before any compute is spent.",
+            {"limit": {"type": "integer", "optional": True}},
+            self.research_memory,
+        )
+        self._add(
             "start_engine",
             "Start the autonomous engine: it draws candidates, writes them, backtests "
             "and judges them continuously until stopped.",
@@ -631,6 +655,37 @@ class Actions:
 
     def engine_status(self) -> dict[str, Any]:
         return dict(self.engine.status())
+
+    def list_experiments(
+        self, limit: int | None = None, roots_only: bool | None = None
+    ) -> dict[str, Any]:
+        scope = self.engine._scope()
+        count = max(1, min(int(limit or 80), 500))
+        rows = (
+            self.engine.experiments.roots(scope, count)
+            if roots_only
+            else self.engine.experiments.recent(scope, count)
+        )
+        return {"scope": scope, "total": self.engine.experiments.count(scope), "experiments": rows}
+
+    def experiment_lineage(self, experiment_id: str) -> dict[str, Any]:
+        key = _str(experiment_id, "experiment_id", limit=120)
+        line = self.engine.experiments.lineage(key)
+        if line["experiment"] is None:
+            raise ActionError(
+                f"No experiment '{key}'. Use list_experiments to see what exists."
+            )
+        return dict(line)
+
+    def research_memory(self, limit: int | None = None) -> dict[str, Any]:
+        scope = self.engine._scope()
+        count = max(1, min(int(limit or 100), 500))
+        return {
+            "scope": scope,
+            "counts": self.engine.memory.counts(scope),
+            "total": self.engine.memory.total(scope),
+            "constraints": self.engine.constraints()[:count],
+        }
 
     def start_engine(
         self,

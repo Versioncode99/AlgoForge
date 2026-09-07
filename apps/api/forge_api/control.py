@@ -420,6 +420,52 @@ def build_control_router(
         rows = engine.constraints()
         return ApiEnvelope(data=rows, meta={"total": len(rows)})
 
+    @router.get("/experiments", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def experiments(limit: int = 80, roots_only: bool = False) -> ApiEnvelope[list[dict[str, Any]]]:
+        scope = engine._scope()
+        rows = (
+            engine.experiments.roots(scope, limit)
+            if roots_only
+            else engine.experiments.recent(scope, limit)
+        )
+        return ApiEnvelope(
+            data=rows, meta={"total": engine.experiments.count(scope), "scope": scope}
+        )
+
+    @router.get("/experiments/{experiment_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def experiment(experiment_id: str) -> ApiEnvelope[dict[str, Any]]:
+        row = engine.experiments.get(experiment_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"No experiment '{experiment_id}'.")
+        return ApiEnvelope(data=row)
+
+    @router.get("/experiments/{experiment_id}/lineage", response_model=ApiEnvelope[dict[str, Any]])
+    def experiment_lineage(experiment_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Where this experiment came from, and everything that came from it."""
+        line = engine.experiments.lineage(experiment_id)
+        if line["experiment"] is None:
+            raise HTTPException(status_code=404, detail=f"No experiment '{experiment_id}'.")
+        return ApiEnvelope(
+            data=line,
+            meta={
+                "depth": len(line["ancestors"]),
+                "descendants": len(line["descendants"]),
+            },
+        )
+
+    @router.get("/memory", response_model=ApiEnvelope[dict[str, Any]])
+    def research_memory(limit: int = 100) -> ApiEnvelope[dict[str, Any]]:
+        """What the search has learned, and how much of each kind."""
+        scope = engine._scope()
+        return ApiEnvelope(
+            data={
+                "scope": scope,
+                "counts": engine.memory.counts(scope),
+                "total": engine.memory.total(scope),
+                "constraints": engine.constraints()[:limit],
+            }
+        )
+
     @router.post("/prop/matrix", response_model=ApiEnvelope[dict[str, Any]])
     def prop_matrix(body: PropMatrixRequest) -> ApiEnvelope[dict[str, Any]]:
         """Every strategy against every rule, as one job.
