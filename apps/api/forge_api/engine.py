@@ -419,6 +419,7 @@ class AutonomousEngine:
             ]
         template_key = str(proposal["template"]) if proposal else rng.choice(pool)
         template = TEMPLATES[template_key]
+        parent_id: str | None = None
 
         # Draw parameters from the spec's own declared ranges.
         params: dict[str, float] = {}
@@ -437,6 +438,9 @@ class AutonomousEngine:
             ]
             if history:
                 parent = max(history, key=lambda a: float(a["development_net"]))
+                # The lineage edge these policies always had in control flow and
+                # never had on disk.
+                parent_id = str(parent["id"])
                 template_key = parent["template"]
                 template = TEMPLATES[template_key]
                 params = dict(parent["parameters"])
@@ -478,7 +482,18 @@ class AutonomousEngine:
             )
             return
 
-        attempt_id = self.experiments.reserve(self._scope(), template_key, params)
+        attempt_id = self.experiments.reserve(
+            self._scope(),
+            template_key,
+            params,
+            parent_id=parent_id,
+            policy=policy,
+            family=template.family,
+            hypothesis=template.hypothesis,
+            dataset=self.state.config.dataset,
+            data_version=self._data_version,
+            seed=self.state.config.seed,
+        )
         if attempt_id is None:
             self._bump("skipped_by_memory")
             self.log.record(
@@ -611,6 +626,12 @@ class AutonomousEngine:
                 FailureClass.NO_TRADES,
                 "produced no trades",
                 strategy_id=spec.strategy_id,
+            )
+            self.experiments.finish(
+                attempt_id,
+                status="no_trades",
+                failure_class=str(FailureClass.NO_TRADES),
+                failure_reason="produced no trades",
             )
             self.log.record("JUDGE", f"{spec.strategy_id} → no trades to judge", "warn")
             self.library.delete(spec.strategy_id)
@@ -765,6 +786,13 @@ class AutonomousEngine:
 
         if verdict.decision == "PASS":
             self._bump("passed")
+            self.experiments.finish(
+                attempt_id,
+                status="passed",
+                verdict_id=verdict.verdict_id,
+                backtest_id=result.backtest_id,
+                code_hash=result.code_hash,
+            )
             self.log.record(
                 "JUDGE",
                 f"{spec.strategy_id} → PASS (grade {verdict.grade})",
@@ -781,11 +809,23 @@ class AutonomousEngine:
             # because nobody looked at it would delete candidates on the
             # strength of nothing.
             broken = next((gate for gate in failed if gate.status == "FAIL"), None)
+            self.experiments.finish(
+                attempt_id,
+                # INCONCLUSIVE is not rejection: nothing was disproven, the
+                # evidence was simply never produced.
+                status="rejected" if broken is not None else "inconclusive",
+                verdict_id=verdict.verdict_id,
+                backtest_id=result.backtest_id,
+                code_hash=result.code_hash,
+                failure_gate=broken.gate if broken is not None else None,
+                failure_reason=reason,
+            )
             if broken is not None:
                 failure = classify_gate(
                     broken.gate, broken.status, lookahead=not result.lookahead_clean
                 )
                 if failure is not None:
+                    self.experiments.finish(attempt_id, failure_class=str(failure))
                     self._remember(
                         template_key,
                         params,
