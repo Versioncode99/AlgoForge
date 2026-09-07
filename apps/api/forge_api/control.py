@@ -8,9 +8,9 @@ from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
+from forge.capabilities import nautilus_capability
 from forge.contracts.models import ApiEnvelope
 from forge.data.live import ProviderError
-from forge.oracles import nautilus_capability
 from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
 from forge.prop.engine import MAX_BACKTEST_BARS, MIN_TRADING_DAYS
 from forge.research import ResearchLedger
@@ -348,7 +348,16 @@ def build_control_router(
             data=[status.model_dump(mode="json")],
             meta={
                 "promotion_authority": False,
-                "note": "Oracle availability is not evidence of engine calibration.",
+                # The path keeps its name because the interface and any
+                # configured MCP client call it. The word oversells what is
+                # behind it: this reports whether a package is installed. It
+                # evaluates nothing and produces no finding.
+                "evaluates": False,
+                "note": (
+                    "A capability probe, not an oracle: it reports what is installed. "
+                    "Nothing here independently checks execution realism, and "
+                    "availability is not evidence of engine calibration."
+                ),
             },
         )
 

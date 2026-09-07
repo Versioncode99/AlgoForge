@@ -7,7 +7,14 @@ from forge.contracts.models import FrozenModel
 
 
 class NautilusCapability(FrozenModel):
-    oracle_id: str = "nautilus-trader"
+    """What is installed, not what has been checked.
+
+    A capability probe: it reports whether ``nautilus_trader`` is importable and
+    what data levels it would support. It runs no comparison and produces no
+    finding, so it can neither confirm nor contradict a verdict.
+    """
+
+    capability_id: str = "nautilus-trader"
     installed: bool
     version: str | None
     ready: bool
@@ -32,7 +39,10 @@ def nautilus_capability(configured_data_levels: tuple[str, ...] = ("BARS",)) -> 
         ready=installed and bool(configured_data_levels),
         supported_data_levels=("BARS", "TRADES", "L1", "L2", "L3"),
         configured_data_levels=configured_data_levels if installed else (),
-        role="OPTIONAL_EXECUTION_SEMANTICS_ORACLE",
+        # This reports whether a package is installed. It evaluates nothing,
+        # and the previous name ("oracle") invited the reading that something
+        # independently checks execution realism. Nothing does.
+        role="INSTALLED_PACKAGE_PROBE",
         licence="LGPL-3.0",
         limitations=(
             "Not a judge and cannot promote a strategy.",
