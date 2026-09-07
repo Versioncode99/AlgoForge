@@ -115,3 +115,33 @@
   .evidence-claim-head { flex-wrap: wrap; }
   .evidence-claim-head span { margin-left: 0; }
 }
+
+/* ── experiments ─────────────────────────────────────────────────────────── */
+.experiment-list { display: grid; gap: 1px; background: var(--line); padding: 0; max-height: 620px; overflow-y: auto; }
+.experiment-row {
+  display: grid;
+  gap: 4px;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-1);
+  border: 0;
+  border-left: 2px solid transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.experiment-row:hover { background: var(--bg-2); }
+.experiment-row.is-selected { border-left-color: var(--brand); background: var(--bg-2); }
+.experiment-row-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+.experiment-row-head strong { color: var(--fg-0); font-size: 12px; }
+.experiment-row-head em { font-style: normal; color: var(--fg-3); font-size: 11px; }
+.experiment-row small { color: var(--fg-2); font-size: 11px; }
+
+.experiment-status { margin-left: auto; font-size: 10px; letter-spacing: .06em; color: var(--fg-2); }
+.experiment-status.is-passed { color: var(--pass); }
+.experiment-status.is-rejected, .experiment-status.is-no_trades { color: var(--fail); }
+.experiment-status.is-inconclusive { color: var(--warn); }
+
+.experiment-failure { color: var(--fail) !important; font-size: 10px !important; letter-spacing: .05em; }
+.experiment-toggle { display: flex; align-items: center; gap: var(--sp-2); color: var(--fg-1); font-size: 13px; }
+.experiment-note { color: var(--fg-2); font-size: 12px; margin: 0; }

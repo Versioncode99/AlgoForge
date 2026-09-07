@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { App } from './App'
 
 vi.mock('echarts-for-react/lib/core', () => ({ default: () => <div data-testid="chart" /> }))
-// Ten lazily-loaded sections; the tab walk mounts every one of them in a
+// Eleven lazily-loaded sections; the tab walk mounts every one of them in a
 // single test, and the last chunks land well past the 5s default.
 configure({ asyncUtilTimeout: 12000 })
 
@@ -72,6 +72,7 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     : url.endsWith('/summary') ? summary
     : url.endsWith('/research/overview') ? research
     : url.includes('/activity') ? activity
+    : url.includes('/experiments') ? []
     : url.endsWith('/strategies') ? []
     : url.endsWith('/templates') ? []
     : url.endsWith('/prop/rules') ? []
@@ -112,8 +113,8 @@ test('every remaining tab reaches a section that renders', async () => {
   renderApp()
   await screen.findByText(/autonomous engine/i)
   for (const tab of [
-    'Pipeline', 'Orchestrator', 'Research Lab', 'Strategies', 'Evidence', 'Prop Firm',
-    'Console', 'Settings',
+    'Pipeline', 'Orchestrator', 'Research Lab', 'Strategies', 'Experiments', 'Evidence',
+    'Prop Firm', 'Console', 'Settings',
   ]) {
     fireEvent.click(screen.getByRole('button', { name: tab }))
     expect(await screen.findByRole('heading', { name: tab, level: 1 })).toBeInTheDocument()
@@ -177,4 +178,12 @@ test('evidence says why it has nothing rather than showing an empty frame', asyn
   fireEvent.click(screen.getByRole('button', { name: 'Evidence' }))
   expect(await screen.findByText(/NO STRATEGIES/i)).toBeInTheDocument()
   expect(screen.getByText(/why this candidate is trusted, or is not/i)).toBeInTheDocument()
+})
+
+test('experiments names its empty state instead of showing a blank frame', async () => {
+  renderApp()
+  await screen.findByText(/autonomous engine/i)
+  fireEvent.click(screen.getByRole('button', { name: 'Experiments' }))
+  expect(await screen.findByText(/NO EXPERIMENTS/i)).toBeInTheDocument()
+  expect(screen.getByText(/the search, as a record/i)).toBeInTheDocument()
 })
