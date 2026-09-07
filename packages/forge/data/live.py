@@ -20,11 +20,30 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
-
-import pandas as pd
+from typing import TYPE_CHECKING, Any
 
 from forge.data.models import Bar
+
+if TYPE_CHECKING:  # pragma: no cover - types only
+    import pandas as pd
+
+_pandas_cache: Any = None
+
+
+def _pd() -> Any:
+    """``pandas``, imported the first time a provider is actually used.
+
+    Only the download and parquet-cache paths touch a DataFrame. Importing
+    pandas at module scope cost 0.42 seconds on every application launch,
+    because the API imports this module for :func:`load_keys` — a function that
+    reads two text files and sets environment variables.
+    """
+    global _pandas_cache
+    if _pandas_cache is None:
+        import pandas
+
+        _pandas_cache = pandas
+    return _pandas_cache
 
 BINANCE_SPOT = "https://api.binance.com/api/v3/klines"
 BINANCE_FUTURES = "https://fapi.binance.com/fapi/v1/klines"
@@ -89,7 +108,7 @@ class MarketDataCache:
 
     def read(self, provider: str, request: DataRequest) -> pd.DataFrame | None:
         path = self.path_for(provider, request)
-        return pd.read_parquet(path) if path.exists() else None
+        return _pd().read_parquet(path) if path.exists() else None
 
     def write(self, provider: str, request: DataRequest, frame: pd.DataFrame) -> None:
         frame.to_parquet(self.path_for(provider, request), index=False)
@@ -178,12 +197,13 @@ class BinancePublicProvider:
                 f"binance returned no bars for {symbol} {request.start}..{request.end}"
             )
 
-        frame = pd.DataFrame(rows).iloc[:, :6]
+        frame = _pd().DataFrame(rows).iloc[:, :6]
         frame.columns = ["event_time", "open", "high", "low", "close", "volume"]
-        frame["event_time"] = pd.to_datetime(frame["event_time"], unit="ms", utc=True)
+        frame["event_time"] = _pd().to_datetime(frame["event_time"], unit="ms", utc=True)
         for column in ("open", "high", "low", "close", "volume"):
             frame[column] = frame[column].astype(float)
-        return frame.drop_duplicates(subset="event_time").sort_values("event_time")
+        deduplicated: pd.DataFrame = frame.drop_duplicates(subset="event_time")
+        return deduplicated.sort_values("event_time")
 
 
 class DatabentoProvider:
@@ -254,7 +274,7 @@ class DatabentoProvider:
 
         frame = frame.reset_index().rename(columns={"ts_event": "event_time"})
         frame = frame[["event_time", "open", "high", "low", "close", "volume"]]
-        frame["event_time"] = pd.to_datetime(frame["event_time"], utc=True)
+        frame["event_time"] = _pd().to_datetime(frame["event_time"], utc=True)
         ordered: pd.DataFrame = frame.sort_values("event_time")
         return ordered
 

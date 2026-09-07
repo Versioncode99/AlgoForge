@@ -14,15 +14,35 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd
 from forge.data.dbn_import import cached_batch
 from forge.data.live import DataRequest as LiveRequest
 from forge.data.live import MarketDataCache, ProviderError, _frame_to_bars, get_provider
 from forge.data.models import Bar
 from forge.strategy import generate_bars
 
+if TYPE_CHECKING:  # pragma: no cover - types only
+    import pandas as pd
+
 BATCH_PROVIDER = "databento-batch"
+
+_pandas_cache: Any = None
+
+
+def _pd() -> Any:
+    """``pandas``, imported the first time a dataset is actually read.
+
+    Resolving *which* datasets exist is directory work; only loading their bars
+    needs a DataFrame. Importing pandas at module scope put 0.42 seconds on
+    every launch, including launches that never open a dataset.
+    """
+    global _pandas_cache
+    if _pandas_cache is None:
+        import pandas
+
+        _pandas_cache = pandas
+    return _pandas_cache
 
 
 @dataclass(frozen=True)
@@ -143,7 +163,7 @@ class MarketService:
                     f"'{key}' has not been imported yet. Run: forge data import "
                     f"<archive.zip> --root {dataset.symbol} --dataset {key}"
                 )
-            self._frames[key] = pd.read_parquet(path)
+            self._frames[key] = _pd().read_parquet(path)
         return self._frames[key]
 
     def load(self, key: str, limit: int | None = None) -> tuple[list[Bar], Dataset]:
@@ -179,7 +199,7 @@ class MarketService:
             return 0
         if key in self._frames:
             return len(self._frames[key])
-        return int(pd.read_parquet(path, columns=["event_time"]).shape[0])
+        return int(_pd().read_parquet(path, columns=["event_time"]).shape[0])
 
     def bars_per_year(self, key: str) -> float:
         """Bars per calendar year, measured from the archive rather than assumed.

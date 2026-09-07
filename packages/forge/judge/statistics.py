@@ -28,13 +28,37 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from itertools import combinations
+from typing import Any
 
 import numpy as np
-from scipy.stats import norm
 
 # Euler-Mascheroni constant, from the Gumbel approximation to the expected
 # maximum of N independent draws.
 _EULER_MASCHERONI = 0.5772156649015329
+
+_normal_cache: Any = None
+
+
+def _normal() -> Any:
+    """``scipy.stats.norm``, imported the first time a gate needs it.
+
+    Importing ``scipy.stats`` costs 1.08 seconds and drags ``scipy.optimize``,
+    ``scipy.spatial`` and ``scipy.sparse`` in behind it. Nothing evaluates a
+    gate while the application is starting, so paying that at import time made
+    every launch wait for a distribution object the first backtest would not
+    reach for minutes.
+
+    This defers the import; it reimplements nothing. The CDF and the quantile
+    function are scipy's own, to the last bit. Substituting an approximation
+    here would silently change PSR and DSR, which is exactly the kind of
+    corruption these estimators exist to detect.
+    """
+    global _normal_cache
+    if _normal_cache is None:
+        from scipy.stats import norm
+
+        _normal_cache = norm
+    return _normal_cache
 
 # Trading periods per year for the frequencies the platform actually loads.
 PERIODS_PER_YEAR: dict[str, float] = {
@@ -126,7 +150,7 @@ def probabilistic_sharpe_ratio(
         # Non-normality overwhelms the estimator; refuse to claim significance.
         return 0.0
     statistic = (sharpe - benchmark_sharpe) * math.sqrt(series.size - 1) / math.sqrt(variance)
-    return float(norm.cdf(statistic))
+    return float(_normal().cdf(statistic))
 
 
 def expected_max_sharpe(trials: int, sharpe_variance: float = 1.0) -> float:
@@ -142,8 +166,8 @@ def expected_max_sharpe(trials: int, sharpe_variance: float = 1.0) -> float:
         return 0.0
     gamma = _EULER_MASCHERONI
     # Gumbel approximation to the maximum of N standard normals.
-    first = norm.ppf(1.0 - 1.0 / count)
-    second = norm.ppf(1.0 - 1.0 / (count * math.e))
+    first = _normal().ppf(1.0 - 1.0 / count)
+    second = _normal().ppf(1.0 - 1.0 / (count * math.e))
     return float(deviation * ((1.0 - gamma) * first + gamma * second))
 
 
@@ -217,7 +241,7 @@ def minimum_track_record_length(
     variance = _psr_denominator(sharpe, skewness(series), kurtosis(series))
     if variance <= 0.0:
         return math.inf
-    return float(1.0 + variance * (norm.ppf(confidence) / excess) ** 2)
+    return float(1.0 + variance * (_normal().ppf(confidence) / excess) ** 2)
 
 
 @dataclass(frozen=True)

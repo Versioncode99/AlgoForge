@@ -16,11 +16,29 @@ import json
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd
+if TYPE_CHECKING:  # pragma: no cover - types only
+    import pandas as pd
 
 BATCH_MEMBER_SUFFIX = ".dbn.zst"
+
+_pandas_cache: Any = None
+
+
+def _pd() -> Any:
+    """``pandas``, imported the first time an archive is decoded.
+
+    Listing which archives have already been imported is directory work. Only
+    decoding one needs a DataFrame, and decoding happens when an operator asks
+    for it, not when the process starts.
+    """
+    global _pandas_cache
+    if _pandas_cache is None:
+        import pandas
+
+        _pandas_cache = pandas
+    return _pandas_cache
 
 
 @dataclass(frozen=True)
@@ -149,7 +167,7 @@ def load_batch(
             raise DbnImportError(f"no rows for root '{root}' in {zip_path.name}")
 
     frame = frame[["event_time", "open", "high", "low", "close", "volume"]]
-    frame["event_time"] = pd.to_datetime(frame["event_time"], utc=True)
+    frame["event_time"] = _pd().to_datetime(frame["event_time"], utc=True)
     for column in ("open", "high", "low", "close", "volume"):
         frame[column] = frame[column].astype(float)
 
