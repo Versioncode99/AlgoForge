@@ -8,13 +8,16 @@ without a warm index, or proves the index refuses to serve something stale.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
-from forge_api.activity import BacktestStore
+from forge_api.activity import PARTIAL_WRITE_GRACE_SECONDS, BacktestStore
 from forge_api.artifact_index import PROJECTION_VERSION, ArtifactIndex, project
 
 
@@ -397,6 +400,128 @@ def test_a_strategy_with_no_runs_reports_none(tmp_path: Path, strategy_id: str) 
     assert store.list_summary(strategy_id) == (0, None)
     assert store.projections_for(strategy_id) == []
     assert store.latest_projection(strategy_id) is None
+
+
+def test_a_scan_racing_with_writers_does_not_delete_their_work(tmp_path: Path) -> None:
+    """The scan walks the directory outside the lock, because it is the slow
+    part and the engine's writers must not block on it. That means artifacts
+    saved during the walk are absent from the listing and present in the index,
+    and treating those as vanished deleted just-written runs.
+
+    Measured before the fix: 142 of 150 artifacts survived six concurrent
+    writers, self-healing only on restart, and silently under-reporting a
+    strategy's runs until then.
+    """
+    root = tmp_path / "backtests"
+    root.mkdir()
+    store = BacktestStore(root)
+    failures: list[str] = []
+
+    def writer(worker: int) -> None:
+        try:
+            for index in range(25):
+                store.save(FakeResult(artifact(f"backtest_w{worker}_{index}", "alpha")))
+        except Exception as exc:
+            failures.append(f"{type(exc).__name__}: {exc}")
+
+    def scanner() -> None:
+        try:
+            for _ in range(40):
+                store._scan()
+                store.count()
+        except Exception as exc:
+            failures.append(f"{type(exc).__name__}: {exc}")
+
+    threads = [threading.Thread(target=writer, args=(w,)) for w in range(6)]
+    threads += [threading.Thread(target=scanner) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert failures == []
+    on_disk = len(list(root.glob("*.json")))
+    assert on_disk == 150
+    assert store.count() == on_disk, "the index lost artifacts a concurrent scan raced with"
+    assert BacktestStore(root).count() == on_disk
+
+
+def test_a_genuinely_deleted_artifact_is_still_forgotten(tmp_path: Path) -> None:
+    """The race fix must not stop real deletions being noticed."""
+    root = tmp_path / "backtests"
+    root.mkdir()
+    write(root, artifact("backtest_a", "alpha"))
+    write(root, artifact("backtest_b", "alpha", finished="2026-09-02T00:00:00Z"))
+    store = BacktestStore(root)
+    assert store.count() == 2
+
+    (root / "backtest_b.json").unlink()
+    store._scan()
+    assert store.count() == 1
+
+
+def test_a_stale_temporary_is_swept_and_a_fresh_one_is_left_alone(tmp_path: Path) -> None:
+    """`save` writes to a temporary and renames. A process killed between the
+    two leaves the temporary behind forever, invisible because nothing reads
+    them, accumulating in a directory that already holds thousands of files.
+
+    Deleting a *live* writer's temporary would be far worse, hence the grace.
+    """
+    root = tmp_path / "backtests"
+    root.mkdir()
+    stale = root / "backtest_interrupted.tmp"
+    stale.write_text('{"backtest_id": "x"', encoding="utf-8")
+    aged = time.time() - PARTIAL_WRITE_GRACE_SECONDS - 60
+    os.utime(stale, (aged, aged))
+
+    fresh = root / "backtest_inflight.tmp"
+    fresh.write_text('{"backtest_id": "y"', encoding="utf-8")
+
+    store = BacktestStore(root)
+    store._ready()
+    assert not stale.exists(), "an hour-old temporary is residue and should be swept"
+    assert fresh.exists(), "a temporary written seconds ago may still be in flight"
+
+
+def test_a_temporary_beside_a_completed_artifact_is_kept(tmp_path: Path) -> None:
+    """If the artifact landed, the rename is the writer's business, not ours."""
+    root = tmp_path / "backtests"
+    root.mkdir()
+    write(root, artifact("backtest_a", "alpha"))
+    companion = root / "backtest_a.tmp"
+    companion.write_text("partial", encoding="utf-8")
+    aged = time.time() - PARTIAL_WRITE_GRACE_SECONDS - 60
+    os.utime(companion, (aged, aged))
+
+    BacktestStore(root)._ready()
+    assert companion.exists()
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"nested": "object"},
+        ["a", "list"],
+        42,
+        "",
+        "   ",
+        None,
+    ],
+)
+def test_a_non_string_identity_is_a_schema_error(tmp_path: Path, identity: Any) -> None:
+    """A truthiness check let a nested object through, and `_regroup`
+    stringified it into a grouping key like "{'nested': 'object'}" — an
+    artifact filed under a strategy that cannot exist."""
+    root = tmp_path / "backtests"
+    root.mkdir()
+    payload = artifact("backtest_weird", "alpha")
+    payload["strategy_id"] = identity
+    (root / "backtest_weird.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    store = BacktestStore(root)
+    store._ready()
+    assert store.count() == 0
+    assert store.damaged()[0]["reason"].startswith("SCHEMA_ERROR")
 
 
 def test_finished_at_ordering_uses_the_recorded_timestamp(tmp_path: Path) -> None:

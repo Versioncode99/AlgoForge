@@ -4,6 +4,7 @@ import json
 import os
 import re
 import threading
+import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -89,6 +90,12 @@ BACKFILL_READERS = 8
 # Small enough that an interrupted process keeps most of its progress.
 BACKFILL_BATCH = 200
 
+# How long a `.tmp` file must have sat untouched before it is treated as the
+# residue of an interrupted write rather than one still in progress. Generous:
+# a multi-million-bar artifact takes a while to serialise, and deleting a live
+# writer's temporary would be a far worse bug than leaving a stale one.
+PARTIAL_WRITE_GRACE_SECONDS = 3600.0
+
 
 class BacktestStore:
     """Backtest results are immutable artifacts on disk, keyed by content hash.
@@ -139,6 +146,16 @@ class BacktestStore:
         alike, so the whole reconciliation is one syscall walk: 0.1s over 1,919
         files against the 78.5s a full parse of the same files costs.
         """
+        # Snapshot what the index holds *before* walking the directory. The walk
+        # happens outside the lock because it is the slow part, and the engine's
+        # writers must not block on it — but that means artifacts saved while it
+        # runs are absent from `present` and present in `_known`. Treating those
+        # as vanished deleted just-written runs from the index: measured at 142
+        # of 150 under six concurrent writers, self-healing only on restart, and
+        # silently under-reporting a strategy's runs until then.
+        with self._lock:
+            before = set(self._known)
+
         present: dict[str, int] = {}
         with os.scandir(self.root) as entries:
             for entry in entries:
@@ -149,7 +166,8 @@ class BacktestStore:
                 except OSError:
                     continue
         with self._lock:
-            vanished = [name for name in self._known if name not in present]
+            # Only a name the scan could actually have seen counts as vanished.
+            vanished = [name for name in before if name not in present]
             for name in vanished:
                 self._known.pop(name, None)
             if vanished:
@@ -175,6 +193,30 @@ class BacktestStore:
             if vanished:
                 self._regroup()
             self._scanned = True
+        self._sweep_partial_writes(present)
+
+    def _sweep_partial_writes(self, present: dict[str, int]) -> None:
+        """Delete `.tmp` files left by a write that never completed.
+
+        `save` writes to a temporary and renames, which is atomic — but a
+        process killed between the two leaves the temporary behind forever.
+        Nothing read them, so they were invisible; they simply accumulated in a
+        directory that already holds thousands of files.
+
+        Only temporaries with no surviving artifact are removed, and only ones
+        old enough that no write could still be in flight.
+        """
+        cutoff = time.time() - PARTIAL_WRITE_GRACE_SECONDS
+        for path in self.root.glob("*.tmp"):
+            if path.with_suffix(".json").name in present:
+                continue
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except OSError:
+                # A live writer still holds it, or it went already. Either way
+                # this is housekeeping and must never break a read.
+                continue
 
     def _project_file(self, name: str) -> tuple[str, int, dict[str, Any] | str]:
         """Project one artifact, or report why it could not be read.
@@ -194,8 +236,14 @@ class BacktestStore:
             return name, len(blob), f"DATA_CORRUPTED: {exc}"
         if not isinstance(payload, dict):
             return name, len(blob), "SCHEMA_ERROR: artifact is not a JSON object"
-        if not payload.get("backtest_id") or not payload.get("strategy_id"):
-            return name, len(blob), "SCHEMA_ERROR: artifact has no backtest_id or strategy_id"
+        # Both identities must be non-empty *strings*. A truthiness check alone
+        # let a nested object through, which `_regroup` then stringified into a
+        # grouping key like "{'nested': 'object'}" — an artifact filed under a
+        # strategy that cannot exist.
+        for field in ("backtest_id", "strategy_id"):
+            value = payload.get(field)
+            if not isinstance(value, str) or not value.strip():
+                return name, len(blob), f"SCHEMA_ERROR: {field} is not a non-empty string"
         return name, len(blob), project(payload)
 
     def _absorb(self, rows: list[tuple[str, int, dict[str, Any]]]) -> None:
