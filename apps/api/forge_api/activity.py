@@ -89,6 +89,11 @@ class BacktestStore:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self._meta: dict[str, tuple[str, str]] = {}
+        # Artifacts are immutable, so the handful of fields a list row needs can
+        # be projected once and kept. Without this, listing the library re-read
+        # and re-parsed every trade of every strategy's newest run — 399 full
+        # artifacts per request — purely to take len(trades).
+        self._summaries: dict[str, dict[str, Any]] = {}
         self._index_cache: dict[str, list[tuple[str, str]]] | None = None
         self._index_built: float = -1e9
         # The engine writes from several worker threads.
@@ -183,6 +188,37 @@ class BacktestStore:
 
     def latest(self, strategy_id: str) -> dict[str, Any] | None:
         return self.summary_for(strategy_id)[1]
+
+    def list_summary(self, strategy_id: str) -> tuple[int, dict[str, Any] | None]:
+        """Run count plus a projection of the newest run, for library listings.
+
+        Returns only what a table row displays. The full artifact is still what
+        every judging, validation and dossier path reads; this exists so that
+        drawing a list does not have to pay for the trade ledger behind it.
+        """
+        entries = self._index().get(strategy_id, [])
+        if not entries:
+            return 0, None
+        name = entries[0][0]
+        cached = self._summaries.get(name)
+        if cached is not None:
+            return len(entries), cached
+        payload = self.load(Path(name).stem)
+        if payload is None:
+            return len(entries), None
+        summary = {
+            "backtest_id": payload["backtest_id"],
+            "calculation_version": payload.get("calculation_version", "legacy-price-points"),
+            "net_pnl": payload["net_pnl"],
+            "trade_count": len(payload["trades"]),
+            "win_rate": payload["win_rate"],
+            "max_drawdown": payload["max_drawdown"],
+            "finished_at": payload["finished_at"],
+            "evidence_tier": payload.get("evidence_tier", "LEGACY_IN_SAMPLE"),
+            "split_id": (payload.get("split_receipt") or {}).get("split_id"),
+        }
+        self._summaries[name] = summary
+        return len(entries), summary
 
     def count(self) -> int:
         return sum(len(entries) for entries in self._index().values())

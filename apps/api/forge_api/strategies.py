@@ -291,26 +291,12 @@ def build_router(
     def list_strategies() -> ApiEnvelope[list[dict[str, Any]]]:
         data: list[dict[str, Any]] = []
         for spec in library.list_specs():
-            backtest_count, latest = store.summary_for(spec.strategy_id)
+            backtest_count, latest = store.list_summary(spec.strategy_id)
             data.append(
                 {
                     **spec.model_dump(mode="json"),
                     "backtest_count": backtest_count,
-                    "latest": None
-                    if latest is None
-                    else {
-                        "backtest_id": latest["backtest_id"],
-                        "calculation_version": latest.get(
-                            "calculation_version", "legacy-price-points"
-                        ),
-                        "net_pnl": latest["net_pnl"],
-                        "trade_count": len(latest["trades"]),
-                        "win_rate": latest["win_rate"],
-                        "max_drawdown": latest["max_drawdown"],
-                        "finished_at": latest["finished_at"],
-                        "evidence_tier": latest.get("evidence_tier", "LEGACY_IN_SAMPLE"),
-                        "split_id": (latest.get("split_receipt") or {}).get("split_id"),
-                    },
+                    "latest": latest,
                 }
             )
         return ApiEnvelope(data=data, meta={"total": len(data)})
