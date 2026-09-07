@@ -325,14 +325,14 @@ artifact gate, per the Definition-of-Done rule.
 | §3.2 degenerate G5/G11 evidence | **Done** | `MINIMUM_TRIAL_CONFIGURATIONS = 8` in the judge; engine grid widened to 9 configurations; 10 adequacy tests + 55 grid tests over every shipped template |
 | §3.1 experiment record has no lineage | **Done** | parent/child edges written by the engine; `ancestors`/`children`/`descendants`/`roots`; 16 tests incl. old-schema migration |
 | §3.3 validation gated on profitability | Open | — |
-| §3.4 fabricated dissent | Open | — |
+| §3.4 fabricated dissent | **Done** | `build_debate(verdict)` derives all four positions from real gates/metrics; 17 tests incl. a guard against the old fixed constants |
 | §3.5 13 of 63 verbs have an action | **Partly** | +3 read-only actions (`list_experiments`, `experiment_lineage`, `research_memory`) and 4 endpoints; mutating parity still absent |
 | §3.6 no lineage/evidence/experiment views | Open | — |
 | §3.7 orchestrator test flake | Open | diagnosed above, not yet fixed |
 
 ### Test baseline
 
-258 at `da92bf6` → 352 now. The 1–2 intermittent failures are always the
+258 at `da92bf6` → 394 now. The 1–2 intermittent failures are always the
 orchestrator flake in §3.7; a run is only a regression signal if something
 *other* than `tests/api/test_orchestrator.py` fails.
 
@@ -348,3 +348,17 @@ in `data/experiments.db` and `data/research_memory.db` for real.
 affected. New tests here set `ALGOFORGE_VAULT` to a `tmp_path`, which is the
 documented first step of the resolution order. Worth applying to the older API
 tests too.
+
+### Correction to §3.4, found while replacing it `[DOCUMENTED]`
+
+The endpoint was worse than first recorded. It did not merely serve fixed
+claims: `main.py` judged a **hardcoded P&L series** — `(80, -25, 95, -30, 70,
+-20, 110, -35, 60, 45, -15, 85) * 3` — regardless of which `run_id` was
+requested, and then passed the resulting verdict to `build_demo_debate`, which
+used only its id. Fabricated series, fabricated verdict, fixed claims, served
+under a real run's identifier.
+
+`RunRecord` stores run contracts (hashes, tier, labels), not trade series, so
+there was no real P&L to judge. The sample series is therefore still used for
+the seeded demo run, but the response now says so in its meta, and the
+specialist positions are derived from the verdict rather than scripted.
