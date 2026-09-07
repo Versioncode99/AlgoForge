@@ -31,7 +31,7 @@ from typing import Any
 
 from forge.contracts.hashing import content_hash
 from forge.data.models import Bar
-from forge.judge import Judge, JudgeInput
+from forge.judge import MINIMUM_TRIAL_CONFIGURATIONS, Judge, JudgeInput
 from forge.memory import FailureClass, ResearchMemory, classify_gate
 from forge.prop import MIN_TRADING_DAYS, load_rules, simulate_prop_paths
 from forge.research import ResearchLedger, ResearchPartitions, chronological_split
@@ -618,18 +618,21 @@ class AutonomousEngine:
             return
 
         evidence_args: dict[str, Any] = {}
-        if partitions is not None and result.net_pnl > 0 and len(result.trades) >= 30:
+        grid = _validation_grid(template, params)
+        # One configuration is not a search: PBO has nothing to rank and
+        # run_validation refuses it. Leaving evidence absent makes the judge
+        # report INCONCLUSIVE, which is the truthful outcome.
+        if (
+            partitions is not None
+            and result.net_pnl > 0
+            and len(result.trades) >= 30
+            and _grid_size(grid) >= 2
+        ):
             from forge.research import run_validation
 
             from forge_api.strategies import per_bar_pnl, store_evidence
 
             self._stage(worker, "validating")
-            grid = {name: [value] for name, value in params.items()}
-            axis = template.parameters[0]
-            neighbour = params[axis.name] + axis.step
-            if neighbour > axis.high:
-                neighbour = params[axis.name] - axis.step
-            grid[axis.name] = sorted({params[axis.name], float(neighbour)})
 
             def validation_backtest(slice_bars: Any, parameters: Any) -> tuple[float, ...]:
                 if self._stop.is_set():
@@ -850,3 +853,84 @@ class AutonomousEngine:
             }
             for record in self.memory.recent(self._scope(), limit=100)
         ]
+
+
+# ── validation grid ──────────────────────────────────────────────────────────
+# The judge deflates a result against how many configurations were tried, and
+# ranks the in-sample winner against its rivals. Both need rivals to exist. The
+# engine used to supply exactly two — the chosen value and one neighbour on one
+# axis — which produced a V[SR] from two numbers and a PBO that was close to a
+# coin flip. G5 and G11 now refuse evidence that thin, so the grid has to be
+# wide enough to be worth computing.
+#
+# Cost is linear: run_validation backtests each configuration once over the
+# development slice and reuses that T x N matrix for CSCV, walk-forward and
+# CPCV. Nine configurations is therefore 4.5x the old validation cost, not 4.5x
+# the whole cycle, and only profitable candidates with enough trades get here.
+VALIDATION_AXES = 2
+VALIDATION_POINTS_PER_AXIS = 3
+
+
+def _axis_points(spec: ParameterSpec, current: float, count: int) -> list[float]:
+    """``count`` values around ``current``, stepping outwards and staying in range.
+
+    Takes the closest values first so the neighbourhood stays centred on the
+    candidate actually being judged, then sorts them for a stable trial order.
+    """
+    low, high, step = float(spec.low), float(spec.high), float(spec.step)
+    centre = round(min(high, max(low, current)), 6)
+    if step <= 0.0 or high <= low:
+        return [centre]
+    chosen = [centre]
+    distance = 1
+    while len(chosen) < count and distance <= 64:
+        for value in (current - distance * step, current + distance * step):
+            candidate = round(value, 6)
+            if low <= candidate <= high and candidate not in chosen:
+                chosen.append(candidate)
+                if len(chosen) == count:
+                    break
+        distance += 1
+    return sorted(chosen)
+
+
+def _grid_size(grid: dict[str, list[float]]) -> int:
+    total = 1
+    for values in grid.values():
+        total *= max(1, len(values))
+    return total
+
+
+def _validation_grid(template: Any, params: dict[str, float]) -> dict[str, list[float]]:
+    """A neighbourhood wide enough for G5 and G11 to mean something.
+
+    Widens up to ``VALIDATION_AXES`` axes. If the template has only one axis
+    that can move, that axis is widened on its own until it reaches the judge's
+    minimum. A template whose parameters genuinely cannot produce that many
+    distinct settings yields a smaller grid, and the judge reports INCONCLUSIVE
+    rather than pretending the search was broader than it was.
+    """
+    grid: dict[str, list[float]] = {name: [value] for name, value in params.items()}
+    movable = [
+        spec
+        for spec in template.parameters
+        if spec.name in params and float(spec.high) > float(spec.low) and float(spec.step) > 0.0
+    ]
+    if not movable:
+        return grid
+
+    axes = movable[:VALIDATION_AXES]
+    width = (
+        MINIMUM_TRIAL_CONFIGURATIONS if len(axes) == 1 else VALIDATION_POINTS_PER_AXIS
+    )
+    for spec in axes:
+        grid[spec.name] = _axis_points(spec, params[spec.name], width)
+
+    # A discrete axis may not have offered as many distinct values as asked for.
+    # Widen the remaining axes before giving up on reaching the minimum.
+    if _grid_size(grid) < MINIMUM_TRIAL_CONFIGURATIONS and len(movable) > len(axes):
+        for spec in movable[len(axes) :]:
+            grid[spec.name] = _axis_points(spec, params[spec.name], VALIDATION_POINTS_PER_AXIS)
+            if _grid_size(grid) >= MINIMUM_TRIAL_CONFIGURATIONS:
+                break
+    return grid

@@ -1,4 +1,4 @@
-from forge.judge.engine import Judge, JudgeInput
+from forge.judge.engine import MINIMUM_TRIAL_CONFIGURATIONS, Judge, JudgeInput
 from forge.judge.models import GateResult, Verdict
 from forge.judge.statistics import (
     BacktestOverfitting,
@@ -16,6 +16,7 @@ from forge.judge.statistics import (
 )
 
 __all__ = [
+    "MINIMUM_TRIAL_CONFIGURATIONS",
     "BacktestOverfitting",
     "DeflatedSharpe",
     "GateResult",

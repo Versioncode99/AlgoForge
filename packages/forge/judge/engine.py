@@ -30,6 +30,15 @@ DEFLATED_SHARPE_THRESHOLD = 0.95
 OVERFITTING_THRESHOLD = 0.5
 # Below this many trades the higher moments PSR depends on are not estimable.
 MINIMUM_TRADES = 30
+# Below this many distinct configurations, neither G5 nor G11 has enough to work
+# with. Both depend on the *spread* across the search, not on any one run:
+# DSR needs V[SR] to set the best-of-N hurdle, and PBO ranks the in-sample
+# winner among its rivals. Two configurations give a variance estimate from two
+# numbers and a rank that is very nearly a coin flip, and feeding either into a
+# correct estimator produces a confident-looking number resting on nothing.
+# Reporting INCONCLUSIVE is the honest answer: the search was too narrow to
+# deflate, not that the strategy failed.
+MINIMUM_TRIAL_CONFIGURATIONS = 8
 
 
 @dataclass(frozen=True)
@@ -113,7 +122,7 @@ class Judge:
                 self._deflation_verdict(item, deflated),
                 round(deflated.deflated_sharpe_ratio, 4)
                 if self._deflation_measurable(item)
-                else "V[SR]_NOT_MEASURED",
+                else self._deflation_shortfall(item),
                 f"deflated Sharpe >= {DEFLATED_SHARPE_THRESHOLD} "
                 f"against best-of-{deflated.trials} noise hurdle "
                 f"{deflated.benchmark_sharpe:.4f}",
@@ -147,12 +156,11 @@ class Judge:
                 "G11",
                 "Selection integrity",
                 None
-                if item.overfitting is None
-                else item.overfitting.probability < OVERFITTING_THRESHOLD,
-                "NOT_MEASURED"
-                if item.overfitting is None
-                else round(item.overfitting.probability, 4),
-                f"PBO < {OVERFITTING_THRESHOLD} via CSCV over the full trial matrix",
+                if not self._overfitting_measurable(item)
+                else item.overfitting.probability < OVERFITTING_THRESHOLD,  # type: ignore[union-attr]
+                self._overfitting_observed(item),
+                f"PBO < {OVERFITTING_THRESHOLD} via CSCV over at least "
+                f"{MINIMUM_TRIAL_CONFIGURATIONS} configurations",
             ),
             self._evidence_gate(
                 "G12",
@@ -181,7 +189,9 @@ class Judge:
                 * 100.0
             ),
             "robustness": self._scale(
-                0.0 if item.overfitting is None else (1.0 - item.overfitting.probability) * 100.0
+                (1.0 - item.overfitting.probability) * 100.0  # type: ignore[union-attr]
+                if self._overfitting_measurable(item)
+                else 0.0
             ),
             "risk": self._scale(min(calmar, 3.0) / 3.0 * 100.0),
             "sample_adequacy": self._scale(
@@ -261,8 +271,38 @@ class Judge:
         Sharpes were. Assuming ``V[SR] = 1`` in per-trade units would invent a
         hurdle nothing could clear, so an unrecorded search is reported as
         unmeasurable rather than silently failed for the wrong reason.
+
+        A *recorded but tiny* search is refused for the same reason. A variance
+        taken from two or three Sharpes is not an estimate of the spread of the
+        search; using it to deflate would be arithmetic, not evidence.
         """
-        return item.trial_count <= 1 or item.trial_sharpes is not None
+        if item.trial_count <= 1:
+            return True
+        if item.trial_sharpes is None:
+            return False
+        return len(item.trial_sharpes) >= MINIMUM_TRIAL_CONFIGURATIONS
+
+    @staticmethod
+    def _deflation_shortfall(item: JudgeInput) -> str:
+        """Why G5 could not be measured, distinguishing absent from inadequate."""
+        if item.trial_sharpes is None:
+            return "V[SR]_NOT_MEASURED"
+        return f"ONLY_{len(item.trial_sharpes)}_TRIAL_SHARPES"
+
+    @staticmethod
+    def _overfitting_measurable(item: JudgeInput) -> bool:
+        """PBO needs rivals to rank the winner against, not just a second column."""
+        if item.overfitting is None:
+            return False
+        return item.overfitting.trials >= MINIMUM_TRIAL_CONFIGURATIONS
+
+    @staticmethod
+    def _overfitting_observed(item: JudgeInput) -> float | int | str:
+        if item.overfitting is None:
+            return "NOT_MEASURED"
+        if item.overfitting.trials < MINIMUM_TRIAL_CONFIGURATIONS:
+            return f"ONLY_{item.overfitting.trials}_CONFIGURATIONS"
+        return round(item.overfitting.probability, 4)
 
     @staticmethod
     def _deflation_verdict(item: JudgeInput, deflated: DeflatedSharpe) -> bool | None:
@@ -368,13 +408,26 @@ class Judge:
                 notes.append(
                     "V[SR] assumed to be 1.0; supply per-trial Sharpes to measure it instead."
                 )
+            elif len(item.trial_sharpes) < MINIMUM_TRIAL_CONFIGURATIONS:
+                notes.append(
+                    f"V[SR] taken from only {len(item.trial_sharpes)} trial Sharpes; below "
+                    f"{MINIMUM_TRIAL_CONFIGURATIONS} that is not an estimate of the search's "
+                    "spread, so G5 reports INCONCLUSIVE rather than this number."
+                )
             notes.append(
                 f"Deflated against {deflated.trials} recorded trials. Trials run outside the "
                 "ledger, including configurations discarded by hand, are invisible to this "
                 "correction and make the true hurdle higher."
             )
-        if metric in {"probability_of_overfitting"} and item.overfitting is None:
-            notes.append("Not measured; no CSCV trial matrix was supplied.")
+        if metric in {"probability_of_overfitting"}:
+            if item.overfitting is None:
+                notes.append("Not measured; no CSCV trial matrix was supplied.")
+            elif item.overfitting.trials < MINIMUM_TRIAL_CONFIGURATIONS:
+                notes.append(
+                    f"Computed over only {item.overfitting.trials} configurations; below "
+                    f"{MINIMUM_TRIAL_CONFIGURATIONS} the winner's rank is close to a coin "
+                    "flip, so G11 reports INCONCLUSIVE rather than this number."
+                )
         if metric in {"walk_forward_efficiency"} and item.walk_forward is None:
             notes.append("Not measured; no walk-forward plan was executed.")
         if metric in {"path_sharpe_p05"} and item.paths is None:
