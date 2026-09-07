@@ -1,7 +1,7 @@
 # AlgoForge evolution — report
 
-Branch `feat/industry-standard-validation`, `da92bf6` → `55a729e`, 2026-09-07.
-Tests 258 → 416.
+Branch `feat/industry-standard-validation`, merged to `main`.
+`da92bf6` → `7b3dc5f`, 2026-09-07. Tests 258 → 453.
 
 Companion to `docs/2026-09-07-architecture-audit.md`, which holds the Phase A
 audit and the running status log. This is the honest account of what changed,
@@ -100,37 +100,120 @@ modules.
 
 ---
 
+## Second pass — merged to `main`
+
+The branch was fast-forwarded onto `main` (no divergence, nothing lost) and the
+next-steps list was then worked on `main` itself. Tests 416 → 453.
+
+### 1. Runs are now reproducible — `packages/forge/provenance/`
+
+The top recommendation, adopted from Auto-Quant. Each judged run gets a snapshot
+holding the verdict, an identity record (dataset and version, bar count, split
+receipt, seed, parameters, catalogue version, code and spec hashes, cost model),
+the frozen preregistration, and a manifest with a SHA-256 per file.
+
+Sources are **content-addressed** rather than copied per run. Auto-Quant copies
+its judge sources into every run directory, which is correct but grows without
+bound; addressing by content keeps the same guarantee at one copy per distinct
+version. Ten thousand candidates judged by an unchanged judge store that judge
+once.
+
+`verify()` and `drift()` answer different questions on purpose — is the record
+undamaged, versus have the rules moved since. A verdict from a since-edited
+judge is still an honest record of what that judge decided; it just cannot be
+compared with a fresh one as though they agreed.
+
+### 2. The orchestrator flake is fixed, root cause first
+
+`_save` evaluated `json.dumps(mission)` while building its statement but
+committed at the end of the `with`. Those are different instants, and the
+mission dict is mutated by the worker thread while `launch` still holds a
+reference and saves it again. A thread descheduled between dump and commit could
+commit a snapshot taken *before* another thread's commit; last-writer-wins then
+restored an earlier state permanently.
+
+It looked like a hang. Nothing was hung — the record had been overwritten with
+an earlier version of itself, which is why the job read `DONE` while the API read
+`running`. Holding the write lock across serialise-and-commit fixes it.
+
+Evidence: a reproduction that hung at attempt 9 of 24 now completes 24 of 24, and
+the test file passes six consecutive runs where it previously failed roughly one
+in three. The regression test was verified honestly — it fails against the
+unfixed code with the exact production symptom. **The first version of that test
+did not catch the bug**, because it stalled the writer before the dump rather
+than between dump and commit; the docstring records why, since the distinction is
+easy to get wrong twice.
+
+### 3. The Deflated Sharpe was deflating against the wrong spread
+
+Found while reviewing the profitability gate. `trial_count` was
+`experiments.count(scope)` — every candidate ever attempted — while
+`trial_sharpes` came from the nine-point neighbourhood around the candidate being
+judged. Neighbouring parameters on one template give highly correlated Sharpes,
+so `V[SR]` was far too small, the best-of-N hurdle too low, and the DSR **too
+generous** — biased in the permissive direction.
+
+The engine now records each candidate's development Sharpe as it is backtested,
+winners and losers alike, and deflates against that distribution. Below the
+minimum count the spread is withheld rather than estimated from too few, so G5
+reports INCONCLUSIVE early in a run.
+
+This also settles the profitability gate: skipping validation for unprofitable
+candidates is fine, because they fail G4 regardless and their Sharpes are now
+recorded anyway. The gate is compute economy, not a selection effect.
+
+### 4. Research memory is tamper-evident; two dead modules deleted
+
+`DecisionMemory`'s one real idea — a hash chain — moved to `ResearchMemory`,
+where it matters far more: research memory decides what the engine stops
+exploring, so a silently edited failure changes what gets searched forever. Rows
+now chain, and `verify_chain()` distinguishes a content edit from a deletion.
+Recording is `INSERT OR IGNORE`, because replacing a row would rewrite a link the
+chain depends on.
+
+`forge.sweep` and `forge.memory.store` are deleted: both were imported only by
+their own tests, and `ArraySweepEngine` thresholded a returns array without ever
+touching a real strategy.
+
+### 5. Honest naming, and an Experiments view
+
+`forge.oracles` became `forge.capabilities`: it contained one function reporting
+whether `nautilus_trader` is importable, and the name invited the reading that
+something independently checks execution realism. Nothing does. The
+`/api/v1/oracles` route keeps its path — the interface calls it — but its meta
+now says so plainly.
+
+The **Experiments** tab makes the lineage graph browsable: what was tried, its
+outcome, and the line it came from, with failure first-class rather than styled
+as an error.
+
+---
+
 ## Remaining gaps
 
 Stated plainly, because a report that only lists wins is not useful.
 
-1. **The orchestrator test flake is unresolved.** Diagnosed, not fixed. Thread
-   stacks captured mid-hang show no `job-mission` thread at all while the API
-   still reports the mission `running` with `finished_at: null` — the worker's
-   terminal state is being lost, not blocked on. Pre-existing (fails at
-   `0696ba2`). **A run is only a regression signal if something other than
-   `tests/api/test_orchestrator.py` fails.**
-2. **Validation is still gated on profitability** (`net_pnl > 0 and trades >= 30`).
-   Defensible as compute economy, but it conditions the selection-integrity
-   matrix on in-sample profitability — the very thing PBO exists to detect.
-3. **Mutating agent parity is still absent.** Read-only coverage improved from
-   13 to 17 actions against 63 routes; no agent can run validation, judge, or
-   evaluate prop rules through a bounded verb.
-4. **Runs are not reproducible, only tamper-evident.** See the Auto-Quant
-   comparison below.
-5. **No Experiments or Runs views.** Lineage is visible inside Evidence; there is
-   no browsable experiment graph.
-6. **`DecisionMemory` and `ArraySweepEngine` are still unwired.** Both are still
-   imported only by tests. `ArraySweepEngine` is a toy that thresholds a returns
-   array and never touches a real strategy; it should probably be deleted.
-7. **`oracles` is a capability probe, not an oracle.** It reports whether
-   `nautilus_trader` is installed. Nothing independently evaluates execution
-   realism.
-8. **The seeded demo run still judges a sample P&L series**, because `RunRecord`
-   stores contracts, not trade series. Now labelled in the response meta rather
-   than presented as analysis of real trades.
-
----
+1. **Mutating agent parity is still absent.** Read-only coverage is 17 actions
+   against 63 routes; no agent can run validation, judge, or evaluate prop rules
+   through a bounded verb. This is the right next change and it was deliberately
+   *not* rushed: the validation entry point is a large router closure with
+   HTTP-specific error handling, and extracting it into a shared core is a
+   refactor of the single most important code path in the system.
+2. **Snapshots are not hermetic.** They do not pin the Python version, installed
+   package versions, or the market data itself — data is identified by key,
+   version and bar count rather than copied, because vendor archives are large
+   and paid for. A snapshot makes a run auditable and re-runnable against the
+   same inputs; it is not a reproducible build.
+3. **The validation grid is still fixed at nine configurations.** It clears the
+   adequacy floor but is thin for PBO. Spending more on candidates that survive
+   G4 would beat spending equally on all of them.
+4. **No Runs view.** Snapshots are readable through the dossier, but no screen
+   lists them.
+5. **The seeded demo run still judges a sample P&L series**, because `RunRecord`
+   stores contracts, not trade series. Labelled in the response meta rather than
+   presented as analysis of real trades.
+6. **Nothing is calibrated.** Every P&L here is modelled. No number has been
+   reconciled against NinjaTrader's Strategy Analyzer.
 
 ## Validation confidence
 
@@ -144,7 +227,9 @@ Stated plainly, because a report that only lists wins is not useful.
 | Dossier | **Medium** | 13 tests, but only against strategies with no backtest; the populated path is verified by hand, not by fixture |
 | Evidence view | **Medium** | Renders correctly in the running app; 10 web tests, no populated-dossier fixture |
 | Dissent | **Medium** | 17 tests assert positions track evidence; the wording is not itself validated |
-| Orchestrator/missions | **Low** | Known intermittent failure, root cause open |
+| Run snapshots | **High** | 19 tests incl. tamper, deletion, corrupt manifest, drift, and content-addressing |
+| Memory hash chain | **High** | detects content edits and mid-chain deletion; legacy unchained rows still open |
+| Orchestrator/missions | **High** | root cause found and fixed; regression test verified to fail without the fix |
 
 Nothing here has been calibrated against a live execution venue. Every P&L in
 this system remains modelled.
@@ -262,25 +347,27 @@ Not one of the three reference systems has:
 
 ## Next highest-value work
 
-1. **Snapshot runs into content-addressed directories** (Auto-Quant's idea).
-   Copy the judge source, template source and data identity into the run, and
-   hash a manifest. This turns tamper-evidence into reproducibility and is worth
-   more than any further statistic.
-2. **Fix the orchestrator flake**, root cause first. A suite that fails randomly
-   cannot certify anything else in this list.
-3. **Stop gating validation on profitability**, or record explicitly that the
-   trial matrix is conditioned — otherwise PBO is measuring a filtered
-   population.
-4. **Delete `ArraySweepEngine` and wire or delete `DecisionMemory`.** Dead code
-   that looks like a feature is worse than no code.
-5. **Give the agent mutating parity** for validate/judge/prop through bounded
-   verbs, so a mission can carry a candidate the whole way.
-6. **An Experiments view** — the lineage graph is now on disk and only visible
-   one candidate at a time.
-7. **Make the oracle real** or rename it. A capability probe called an oracle
-   invites the reading that something independently checks execution realism.
-8. **Widen the validation grid adaptively** — 9 configurations clears the bar but
-   is still thin for PBO; spend more on candidates that survive G4.
+Items 1, 2, 3, 4, 6 and 7 of the original list are done; what follows replaces
+them.
+
+1. **Give the agent mutating parity** for validate/judge/prop through bounded
+   verbs, so a mission can carry a candidate the whole way. Requires extracting
+   the validation entry point out of its router closure into a shared core —
+   worth doing carefully, not quickly.
+2. **Widen the validation grid adaptively.** Nine configurations clears the
+   adequacy floor but is thin for PBO. Spend more on candidates that survive G4
+   rather than equally on all of them.
+3. **A Runs view** over the snapshot store, showing intact/drifted status, so
+   the reproducibility record is browsable rather than only reachable per
+   candidate.
+4. **Re-run a snapshot.** The inputs are now captured; an actual
+   `replay(run_id)` that re-executes against them would convert "auditable" into
+   "verified reproducible".
+5. **Calibrate against NinjaTrader's Strategy Analyzer.** Everything above is
+   internal consistency. This is the only step that makes any number real, and
+   nothing should be trusted until it happens.
+6. **Prune the snapshot store.** It grows with every judged run; content
+   addressing bounds the source copies but not the per-run directories.
 
 ---
 

@@ -345,15 +345,15 @@ artifact gate, per the Definition-of-Done rule.
 | §1b dead engine state | **Done** | `_constraints`, `_lineage_failures`, `_retired_lineages` removed; `constraints()` served from disk |
 | §3.2 degenerate G5/G11 evidence | **Done** | `MINIMUM_TRIAL_CONFIGURATIONS = 8` in the judge; engine grid widened to 9 configurations; 10 adequacy tests + 55 grid tests over every shipped template |
 | §3.1 experiment record has no lineage | **Done** | parent/child edges written by the engine; `ancestors`/`children`/`descendants`/`roots`; 16 tests incl. old-schema migration |
-| §3.3 validation gated on profitability | Open | deliberate: compute economy, recorded in the report |
+| §3.3 validation gated on profitability | **Resolved** | the real defect was the DSR spread, now taken search-wide; the gate is compute economy, not a selection effect |
 | §3.4 fabricated dissent | **Done** | `build_debate(verdict)` derives all four positions from real gates/metrics; 17 tests incl. a guard against the old fixed constants |
 | §3.5 13 of 63 verbs have an action | **Partly** | +3 read-only actions (`list_experiments`, `experiment_lineage`, `research_memory`) and 4 endpoints; mutating parity still absent |
 | §3.6 no lineage/evidence/experiment views | **Partly** | Evidence view ships with lineage inside it; no Experiments/Runs view |
-| §3.7 orchestrator test flake | Open | diagnosed above, not yet fixed |
+| §3.7 orchestrator test flake | **Done** | root cause was a non-atomic serialise-and-commit in `_save`; regression test verified to fail without the fix |
 
 ### Test baseline
 
-258 at `da92bf6` → 416 now. The 1–2 intermittent failures are always the
+258 at `da92bf6` → 453 now, on `main`. The 1–2 intermittent failures are always the
 orchestrator flake in §3.7; a run is only a regression signal if something
 *other* than `tests/api/test_orchestrator.py` fails.
 
@@ -393,3 +393,15 @@ nine `JudgeInput` call sites, so G1 could never fail, while
 test. Fixed: see `docs/2026-09-07-evolution-report.md`.
 
 | §11 preregistration is a rubber stamp | **Done** | claim frozen before backtest, re-derived and hash-compared at judge time; 11 tests, fails closed |
+
+### Second pass, on `main` `[DOCUMENTED]`
+
+Run snapshots (content-addressed, verify + drift), the orchestrator race fixed at
+root, the Deflated Sharpe deflating against the search-wide Sharpe spread rather
+than a nine-point neighbourhood, a hash chain on research memory, two dead
+modules deleted, honest capability naming, and an Experiments view.
+
+Full account: `docs/2026-09-07-evolution-report.md`.
+
+| §3.6 no lineage/evidence/experiment views | **Done** | Evidence and Experiments views both ship |
+| §3.5 mutating agent parity | Open | deliberately not rushed; see the report's remaining gaps |
