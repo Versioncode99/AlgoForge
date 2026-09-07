@@ -107,6 +107,21 @@ The **Pipeline** tab draws the whole graph — sources, catalogue, candidates,
 measurement, judgement, survival — with live counts, and lights the stage each
 worker is in.
 
+## Experiments
+
+The **Experiments** tab is the search as a record rather than a feed: what was
+tried, what came of it, and the line each candidate came from. Failure is
+first-class — most candidates are rejected, and `INCONCLUSIVE` is counted
+separately because nothing was disproven, the evidence was simply never
+produced.
+
+Every judged run is also snapshotted. The snapshot holds the verdict, the data
+identity, the frozen hypothesis, and content-addressed copies of the judge and
+statistics source that produced it — so a result can be re-examined later rather
+than only detected as having changed. `verify` asks whether the record is
+undamaged; `drift` asks whether the rules have moved since. A verdict from a
+judge that has been edited is still an honest record of what that judge decided.
+
 ## Evidence
 
 The **Evidence** tab answers one question for a chosen candidate: why is this
