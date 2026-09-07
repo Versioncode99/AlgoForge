@@ -43,6 +43,7 @@ from forge.vault import VaultMirror, Workspace
 
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
+from forge_api.conformance_store import refresh_conformance
 from forge_api.experiments import POLICIES, Experiments
 from forge_api.market import DEFAULT_DATASET, MarketService
 
@@ -552,6 +553,24 @@ class AutonomousEngine:
 
         self._stage(worker, "backtesting")
         module = self.library.load_module(spec.strategy_id)
+        # G2's evidence. The suite ships with every strategy and used to be
+        # written, displayed and never run, while the gate reported that it
+        # passed. Run once here against the module that is about to be
+        # backtested, so the gate reads a measurement rather than a literal.
+        conformance = refresh_conformance(
+            self.root,
+            self.library,
+            spec.strategy_id,
+            module=module,
+            code_hash=self.library.code_hash(spec.strategy_id),
+        )
+        if conformance.passed is not True:
+            self.log.record(
+                "CONFORMANCE",
+                f"{spec.strategy_id} conformance {conformance.reason}",
+                "fail" if conformance.passed is False else "warn",
+                spec.strategy_id,
+            )
         started = time.time()
         partitions: ResearchPartitions | None = None
         if real_data:
@@ -728,7 +747,7 @@ class AutonomousEngine:
                 trial_count=max(1, self.experiments.count(self._scope())),
                 data_gate_passed=real_data,
                 preregistered=self._preregistration_holds(attempt_id, template, params),
-                implementation_tests_passed=True,
+                implementation_tests_passed=conformance.passed,
                 lookahead_detected=not result.lookahead_clean,
                 **evidence_args,
             )
@@ -794,7 +813,7 @@ class AutonomousEngine:
                     trial_count=max(1, self.state.backtested),
                     data_gate_passed=True,
                     preregistered=self._preregistration_holds(attempt_id, template, params),
-                    implementation_tests_passed=True,
+                    implementation_tests_passed=conformance.passed,
                     lookahead_detected=not holdout.lookahead_clean,
                     **evidence_args,
                 )

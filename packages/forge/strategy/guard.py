@@ -42,12 +42,23 @@ BANNED_ATTRIBUTES = frozenset(
 
 REQUIRED_FUNCTIONS = frozenset({"entry_signal", "exit_signal"})
 
+# A strategy's conformance suite is executed too, so it passes the same static
+# check. It needs three things a strategy module does not: `datetime` to build
+# fixture bars, `strategy` to import the module under test, and no obligation to
+# define `entry_signal` itself.
+TEST_ALLOWED_IMPORTS = ALLOWED_IMPORTS | frozenset({"datetime", "strategy"})
+
 
 class GuardViolation(Exception):
     """Static analysis rejected the module. It is never executed."""
 
 
-def check_source(source: str) -> list[str]:
+def check_source(
+    source: str,
+    *,
+    allowed_imports: frozenset[str] = ALLOWED_IMPORTS,
+    required_functions: frozenset[str] = REQUIRED_FUNCTIONS,
+) -> list[str]:
     """Return a list of violations. An empty list means the module may be executed."""
     problems: list[str] = []
     try:
@@ -60,10 +71,10 @@ def check_source(source: str) -> list[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name not in ALLOWED_IMPORTS:
+                if alias.name not in allowed_imports:
                     problems.append(f"line {node.lineno}: import of '{alias.name}' is not allowed")
         elif isinstance(node, ast.ImportFrom):
-            if node.module not in ALLOWED_IMPORTS or node.level:
+            if node.module not in allowed_imports or node.level:
                 problems.append(f"line {node.lineno}: import from '{node.module}' is not allowed")
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id in BANNED_CALLS:
@@ -75,11 +86,22 @@ def check_source(source: str) -> list[str]:
         elif isinstance(node, ast.FunctionDef):
             defined.add(node.name)
 
-    missing = REQUIRED_FUNCTIONS - defined
+    missing = required_functions - defined
     if missing:
         problems.append(f"missing required function(s): {', '.join(sorted(missing))}")
 
     return problems
+
+
+def check_test_source(source: str) -> list[str]:
+    """The same guard, for a conformance suite rather than a strategy.
+
+    A suite that would be refused is never run, and a suite that is never run is
+    absent evidence — which G2 reports as INCONCLUSIVE, not as a pass.
+    """
+    return check_source(
+        source, allowed_imports=TEST_ALLOWED_IMPORTS, required_functions=frozenset()
+    )
 
 
 def assert_safe(source: str) -> None:

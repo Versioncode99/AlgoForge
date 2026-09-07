@@ -32,6 +32,7 @@ from forge.strategy import (
 from pydantic import BaseModel, Field
 
 from forge_api.activity import ActivityLog, BacktestStore, Level
+from forge_api.conformance_store import ensure_conformance
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.market import DEFAULT_DATASET, MarketService
 
@@ -886,6 +887,24 @@ def build_router(
         all_runs = store.for_strategy(strategy_id)
         if not all_runs:
             raise HTTPException(422, {"code": "no_backtest", "detail": "run a backtest first"})
+
+        # G2's evidence, on the operator's own path. The engine runs the
+        # conformance suite as it creates a candidate; a strategy judged from
+        # the interface has to have it run here, or the gate reads nothing and
+        # reports INCONCLUSIVE. Absent or stale evidence stays None.
+        conformance: bool | None = None
+        try:
+            conformance = ensure_conformance(
+                root,
+                library,
+                strategy_id,
+                module=library.load_module(strategy_id),
+                code_hash=library.code_hash(strategy_id),
+            )
+        except GuardViolation as exc:
+            # The module will not load, so the tests cannot have been run
+            # against it. That is a refusal, not a pass.
+            log.record("GUARD", f"blocked {strategy_id}: {exc}", "fail", strategy_id)
         all_runs = [r for r in all_runs if r.get("calculation_version") == "contract-units-v2"]
         if not all_runs:
             raise HTTPException(
@@ -914,7 +933,7 @@ def build_router(
                         trial_count=max(1, len(all_runs)),
                         data_gate_passed=False,
                         preregistered=True,
-                        implementation_tests_passed=True,
+                        implementation_tests_passed=conformance,
                         lookahead_detected=not latest_any["lookahead_clean"],
                     )
                 )
@@ -969,7 +988,7 @@ def build_router(
                 trial_count=trials,
                 data_gate_passed=True,
                 preregistered=True,
-                implementation_tests_passed=True,
+                implementation_tests_passed=conformance,
                 lookahead_detected=not latest["lookahead_clean"],
                 **evidence,
             )
@@ -1050,7 +1069,7 @@ def build_router(
                 trial_count=trials,
                 data_gate_passed=True,
                 preregistered=True,
-                implementation_tests_passed=True,
+                implementation_tests_passed=conformance,
                 lookahead_detected=not holdout.lookahead_clean,
                 **holdout_evidence,
             )

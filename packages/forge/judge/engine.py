@@ -57,7 +57,12 @@ class JudgeInput:
     trial_count: int
     data_gate_passed: bool
     preregistered: bool
-    implementation_tests_passed: bool
+    # Three-valued on purpose. A ``bool`` cannot express "nobody ran the suite",
+    # so while this was a ``bool`` every call site passed ``True`` and G2 could
+    # not fail — it reported that a strategy's implementation tests passed
+    # without any of them ever having been executed. ``None`` is what absence
+    # looks like, and the judge reports absence as INCONCLUSIVE.
+    implementation_tests_passed: bool | None = None
     lookahead_detected: bool = False
     engine_consistent: bool = True
     mechanism_aligned: bool = True
@@ -95,12 +100,13 @@ class Judge:
         gates = (
             self._gate("G0", "Data integrity", item.data_gate_passed, 1, "G0 receipt passes"),
             self._gate("G1", "Preregistration", item.preregistered, 1, "frozen before run"),
-            self._gate(
+            self._evidence_gate(
                 "G2",
                 "Implementation",
-                item.implementation_tests_passed and not item.lookahead_detected,
-                "LOOKAHEAD" if item.lookahead_detected else 1,
-                "tests pass and no lookahead",
+                self._implementation_verdict(item),
+                self._implementation_observed(item),
+                "the strategy's own conformance suite passes, including its "
+                "lookahead trap, and no lookahead was detected in the run",
             ),
             self._gate(
                 "G3",
@@ -262,6 +268,29 @@ class Judge:
             metrics=metrics,
             traces=traces,
         )
+
+    @staticmethod
+    def _implementation_verdict(item: JudgeInput) -> bool | None:
+        """G2, three-valued.
+
+        Detected lookahead is *positive evidence of failure* and outranks
+        everything else: it fails the gate whether or not a conformance suite
+        was ever run. An absent suite is the different case — nothing was
+        measured, so nothing can be concluded, and INCONCLUSIVE is the answer.
+        """
+        if item.lookahead_detected:
+            return False
+        if item.implementation_tests_passed is None:
+            return None
+        return item.implementation_tests_passed
+
+    @staticmethod
+    def _implementation_observed(item: JudgeInput) -> float | int | str:
+        if item.lookahead_detected:
+            return "LOOKAHEAD"
+        if item.implementation_tests_passed is None:
+            return "CONFORMANCE_NOT_RUN"
+        return "CONFORMANCE_PASSED" if item.implementation_tests_passed else "CONFORMANCE_FAILED"
 
     @staticmethod
     def _deflation_measurable(item: JudgeInput) -> bool:

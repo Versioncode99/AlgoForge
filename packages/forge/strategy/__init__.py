@@ -1,7 +1,8 @@
 from forge.strategy.authoring import TemplateRejected, TemplateStore
 from forge.strategy.catalog import StrategyCapability, strategy_capability_catalog
+from forge.strategy.conformance import ConformanceCase, ConformanceReport, run_conformance
 from forge.strategy.families import BUILTIN_FAMILIES, Family, FamilyRegistry
-from forge.strategy.guard import GuardViolation, assert_safe, check_source
+from forge.strategy.guard import GuardViolation, assert_safe, check_source, check_test_source
 from forge.strategy.library import StrategyLibrary, slugify
 from forge.strategy.models import BacktestResult, ParameterSpec, StrategySpec, Trade
 from forge.strategy.runtime import LookaheadError, Position, Window, run_backtest
@@ -18,6 +19,8 @@ __all__ = [
     "BUILTIN_FAMILIES",
     "TEMPLATES",
     "BacktestResult",
+    "ConformanceCase",
+    "ConformanceReport",
     "Family",
     "FamilyRegistry",
     "GuardViolation",
@@ -34,8 +37,10 @@ __all__ = [
     "Window",
     "assert_safe",
     "check_source",
+    "check_test_source",
     "generate_bars",
     "run_backtest",
+    "run_conformance",
     "slugify",
     "strategy_capability_catalog",
 ]
