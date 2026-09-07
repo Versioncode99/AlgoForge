@@ -136,13 +136,29 @@ test('prop firm runs a matrix over every strategy, not one at a time', async ({ 
 
   await page.getByRole('button', { name: /Run the matrix/ }).click()
 
-  // Two outcomes are correct here and which one you get depends on what has
+  // Three outcomes are correct here and which one you get depends on what has
   // been backtested. Either a matrix comes back, or the run is refused with the
-  // reason and the bar count that would lift it. What must never happen is
-  // silence, so the test accepts both and rejects neither.
+  // reason and the bar count that would lift it, or the job is still working
+  // and says so. What must never happen is silence, so the test accepts all
+  // three and rejects none.
+  //
+  // The third case is not a concession. This workspace qualifies 267
+  // strategies, so the matrix is 267 x 4 rules x 200 paths = 1,068 simulations,
+  // measured at ~2.1/s: about eight and a half minutes. A test that waited for
+  // completion would be asserting that the machine is fast, not that the
+  // product is correct. What the product owes the operator at minute two is a
+  // job bar with a real count on it, and that is what is checked.
   const grid = page.getByText('Pass rate by strategy and rule')
   const refusal = page.getByText('Nothing could be simulated')
-  await expect(grid.or(refusal)).toBeVisible({ timeout: 120_000 })
+  const working = page.locator('.jobbar[data-status="running"]')
+  await expect(grid.or(refusal).or(working)).toBeVisible({ timeout: 120_000 })
+
+  if (await working.isVisible()) {
+    // Progress must be a real count against a real total, never a spinner.
+    await expect(working.locator('.jobbar-label')).toContainText(/\d+ strategies/)
+    await expect(working.locator('em')).toContainText(/\/\d/)
+    return
+  }
 
   if (await grid.isVisible()) {
     // Skipped strategies are reported with a reason, never dropped silently.

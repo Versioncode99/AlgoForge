@@ -530,6 +530,45 @@ def build_control_router(
         for spec in library.list_specs():
             if body.strategy_ids and spec.strategy_id not in body.strategy_ids:
                 continue
+            # Two phases. The projection answers "could this possibly qualify?"
+            # without touching a trade ledger, and only survivors are read in
+            # full. Reading all 399 ledgers to discover that most carry legacy
+            # units or too few trades cost 8.7 seconds before the job could even
+            # be queued.
+            projected = store.latest_projection(spec.strategy_id)
+            if projected is None:
+                skipped.append(
+                    {"strategy_id": spec.strategy_id, "name": spec.name, "reason": "no_backtest"}
+                )
+                continue
+            if projected.get("calculation_version") != "contract-units-v2":
+                skipped.append(
+                    {
+                        "strategy_id": spec.strategy_id,
+                        "name": spec.name,
+                        "reason": "legacy_units",
+                        "detail": "Rerun: old results used price points as dollar P&L.",
+                    }
+                )
+                continue
+            # A prop evaluation needs a month of sessions. A run with fewer
+            # trades than trading days cannot supply them, and that is knowable
+            # from the projection.
+            if int(projected.get("trade_count") or 0) < MIN_TRADING_DAYS:
+                skipped.append(
+                    {
+                        "strategy_id": spec.strategy_id,
+                        "name": spec.name,
+                        "reason": "insufficient_days",
+                        "days_observed": 0,
+                        "days_required": MIN_TRADING_DAYS,
+                        "detail": (
+                            f"{projected.get('trade_count')} trades cannot span "
+                            f"{MIN_TRADING_DAYS} trading days."
+                        ),
+                    }
+                )
+                continue
             latest = store.latest(spec.strategy_id)
             if latest is None:
                 skipped.append(
