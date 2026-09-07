@@ -26,6 +26,7 @@ import re
 import sqlite3
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -150,7 +151,7 @@ class Orchestrator:
         self.mirror = mirror
         self._lock = threading.RLock()
         self._current: str | None = None
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS missions "
                 "(id TEXT PRIMARY KEY, started REAL, payload TEXT)"
@@ -170,19 +171,19 @@ class Orchestrator:
 
     # ── storage ──────────────────────────────────────────────────────────────
     def _save(self, mission: dict[str, Any]) -> None:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute(
                 "INSERT OR REPLACE INTO missions VALUES (?, ?, ?)",
                 (mission["id"], mission["started_at"], json.dumps(mission)),
             )
 
     def get(self, mission_id: str) -> dict[str, Any] | None:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             row = db.execute("SELECT payload FROM missions WHERE id=?", (mission_id,)).fetchone()
         return json.loads(row[0]) if row else None
 
     def recent(self, limit: int = 25) -> list[dict[str, Any]]:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             rows = db.execute(
                 "SELECT payload FROM missions ORDER BY started DESC LIMIT ?", (limit,)
             ).fetchall()

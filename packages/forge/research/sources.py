@@ -6,6 +6,7 @@ import builtins
 import json
 import re
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -117,7 +118,7 @@ class ResearchLibrary:
     def __init__(self, path: Path) -> None:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute("CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, payload TEXT)")
         for key, title, authors, year, url, summary, gap, templates, topic in SEEDS:
             self.put(
@@ -141,13 +142,13 @@ class ResearchLibrary:
         return sqlite3.connect(self.path, timeout=15)
 
     def put(self, item: dict[str, Any]) -> None:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute(
                 "INSERT OR IGNORE INTO sources VALUES (?, ?)", (item["id"], json.dumps(item))
             )
 
     def list(self) -> list[dict[str, Any]]:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             return [
                 json.loads(row[0])
                 for row in db.execute("SELECT payload FROM sources ORDER BY rowid DESC LIMIT 500")

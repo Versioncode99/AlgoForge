@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterator
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -75,7 +76,7 @@ class Experiments:
     def __init__(self, path: Path) -> None:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS attempts "
                 "(id TEXT PRIMARY KEY, scope TEXT, template TEXT, payload TEXT)"
@@ -123,7 +124,7 @@ class Experiments:
             "parameters": parameters,
             "status": "reserved",
         }
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             inserted = db.execute(
                 "INSERT OR IGNORE INTO attempts "
                 "(id, scope, template, payload, parent_id, policy, family, hypothesis, "
@@ -158,7 +159,7 @@ class Experiments:
         promoted = {name: value for name, value in fields.items() if name in columns}
         if fields.get("status") is not None and "finished_at" not in promoted:
             promoted["finished_at"] = datetime.now(UTC).isoformat(timespec="seconds")
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             row = db.execute("SELECT payload FROM attempts WHERE id=?", (key,)).fetchone()
             if row is None:
                 return
@@ -171,7 +172,7 @@ class Experiments:
 
     # ── reads ────────────────────────────────────────────────────────────────
     def recent(self, scope: str, limit: int = 80) -> list[dict[str, Any]]:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 "SELECT * FROM attempts WHERE scope=? ORDER BY rowid DESC LIMIT ?",
@@ -180,13 +181,13 @@ class Experiments:
         return [_merge(dict(row)) for row in rows]
 
     def get(self, key: str) -> dict[str, Any] | None:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.row_factory = sqlite3.Row
             row = db.execute("SELECT * FROM attempts WHERE id=?", (key,)).fetchone()
         return _merge(dict(row)) if row else None
 
     def count(self, scope: str) -> int:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             return int(
                 db.execute("SELECT COUNT(*) FROM attempts WHERE scope=?", (scope,)).fetchone()[0]
             )
@@ -212,7 +213,7 @@ class Experiments:
         return chain
 
     def children(self, key: str) -> list[dict[str, Any]]:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 "SELECT * FROM attempts WHERE parent_id=? ORDER BY rowid", (key,)
@@ -251,7 +252,7 @@ class Experiments:
 
     def roots(self, scope: str, limit: int = 200) -> list[dict[str, Any]]:
         """Experiments with no parent — where each line of enquiry started."""
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 "SELECT * FROM attempts WHERE scope=? AND (parent_id IS NULL OR parent_id='') "
@@ -261,7 +262,7 @@ class Experiments:
         return [_merge(dict(row)) for row in rows]
 
     def iter_scope(self, scope: str) -> Iterator[dict[str, Any]]:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.row_factory = sqlite3.Row
             for row in db.execute(
                 "SELECT * FROM attempts WHERE scope=? ORDER BY rowid", (scope,)

@@ -9,6 +9,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -70,7 +71,7 @@ class AgentService:
             }
             for key, skill in SKILLS.items()
         }
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute("CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, payload TEXT)")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS proposals "
@@ -88,7 +89,7 @@ class AgentService:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             roles = [dict(value) for value in self._states.values()]
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             tasks = [
                 json.loads(row[0])
                 for row in db.execute("SELECT payload FROM tasks ORDER BY rowid DESC LIMIT 30")
@@ -320,7 +321,7 @@ class AgentService:
             )
         result["finished_at"] = time.time()
         result["id"] = handle.job_id
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute(
                 "INSERT OR REPLACE INTO tasks VALUES (?, ?)", (handle.job_id, json.dumps(result))
             )
@@ -428,7 +429,7 @@ class AgentService:
             "source_ids": source_ids[:8],
         }
         proposal["id"] = stable_id("proposal", proposal)
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute(
                 "INSERT OR IGNORE INTO proposals VALUES (?, 'queued', ?)",
                 (proposal["id"], json.dumps(proposal)),
@@ -436,7 +437,7 @@ class AgentService:
         return proposal
 
     def take_proposal(self) -> dict[str, Any] | None:
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT id, payload FROM proposals WHERE status='queued' ORDER BY rowid LIMIT 1"

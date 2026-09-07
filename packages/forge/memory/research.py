@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -185,7 +186,7 @@ class ResearchMemory:
     def __init__(self, path: Path) -> None:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS failures ("
                 "id TEXT PRIMARY KEY, scope TEXT NOT NULL, template TEXT NOT NULL, "
@@ -237,7 +238,7 @@ class ResearchMemory:
             strategy_id=strategy_id,
             created_at=timestamp,
         )
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             db.execute(
                 "INSERT OR REPLACE INTO failures VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -301,7 +302,7 @@ class ResearchMemory:
         return best
 
     def _rows(self, scope: str, template: str) -> list[dict[str, Any]]:
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 "SELECT * FROM failures WHERE scope=? AND template=?", (scope, template)
@@ -310,7 +311,7 @@ class ResearchMemory:
 
     def recent(self, scope: str, limit: int = 100) -> list[FailureRecord]:
         """Most recently recorded failures, newest first."""
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 "SELECT * FROM failures WHERE scope=? ORDER BY rowid DESC LIMIT ?",
@@ -320,7 +321,7 @@ class ResearchMemory:
 
     def counts(self, scope: str) -> dict[str, int]:
         """How many failures of each class, for observability (prompt §22)."""
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             rows = db.execute(
                 "SELECT failure_class, COUNT(*) FROM failures WHERE scope=? GROUP BY failure_class",
                 (scope,),
@@ -328,7 +329,7 @@ class ResearchMemory:
         return {str(name): int(count) for name, count in rows}
 
     def total(self, scope: str | None = None) -> int:
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             if scope is None:
                 return int(db.execute("SELECT COUNT(*) FROM failures").fetchone()[0])
             return int(

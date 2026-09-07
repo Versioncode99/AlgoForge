@@ -250,6 +250,27 @@ backtest jobs leave those threads running into subsequent tests; on a 2-core
 machine they starve the mission thread past the 60s wait in the test's `wait()`
 helper. It passes in isolation and fails under load, which is the signature.
 
+**Revised after capturing thread stacks** (`pytest -o faulthandler_timeout=35`).
+The starvation theory is wrong. At the moment of the hang the dump contains the
+anyio workers, the research loop, and the blocked test thread — and **no
+`job-mission` thread at all**. The mission worker has already exited, yet
+`GET /missions/{id}` still reports `status: running` with `finished_at: null`.
+
+`Orchestrator._run` sets the terminal status inside a `finally`, so a thread
+that exits should always leave a terminal row. The mission's *last* state is
+therefore being lost rather than never written. That is a persistence or
+ordering problem between the worker's writes and `start()`'s own
+`_save(mission)` after `REGISTRY.submit` has already begun mutating the same
+dict — not a deadlock, and not slowness: on a passing run these tests complete
+in under a second each.
+
+One contributing defect is fixed: `connect()` returned a connection that was
+never closed, because `with conn:` ends the transaction but does not close the
+handle. Every mission save leaked one. Corrected in `orchestrator.py`,
+`experiments.py`, `agent_service.py`, `research/sources.py` and
+`memory/research.py`. It did not resolve the flake, so the root cause is still
+open.
+
 This matters beyond tidiness: nothing cancels orphaned jobs in production
 either. A suite that fails randomly also cannot be used to detect regressions,
 which is the standard prompt §28 sets.
