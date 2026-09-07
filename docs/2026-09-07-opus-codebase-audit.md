@@ -256,6 +256,22 @@ to it yet.
 
 ---
 
+## 6a. Status at close
+
+| # | Risk | State |
+|---|---|---|
+| 1 | G2 stamps PASS on a suite that is never run | **Done** — `forge.strategy.conformance`; 40/40 real strategies verified |
+| 2 | G7 asserts a reference-engine comparison that never happens | **Done** — determinism check; the rule string no longer implies calibration |
+| 3 | G9 asserts a falsification that never happens | **Done** — entry-timing control; fails 3 of 5 real candidates |
+| 4 | G1 real in the engine, a literal on the operator's route | **Done** — `preregistration_store`, frozen at backtest, re-derived at judge |
+| 5 | G0 reads a literal rather than the receipt | **Done** — `BacktestResult.data_quality` |
+| 6 | Research artifact corrupted on disk | **Done** — recorded, reported, no longer retried forever |
+| 7 | Mutating agent parity | Open |
+| 8 | 1.84 GB of orphaned artifacts | Open — operator's call |
+| 9 | Seeded demo run judges a hardcoded series | Open — labelled in meta |
+
+Full account: `docs/2026-09-07-opus-evolution-report.md`.
+
 ## 7. Recommended order
 
 P0, in dependency order — evidence producers before strictness:
