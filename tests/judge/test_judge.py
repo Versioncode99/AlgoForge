@@ -52,7 +52,12 @@ def judge_input(**overrides: object) -> JudgeInput:
         "trial_count": 24,
         "data_gate_passed": True,
         "preregistered": True,
+        # Complete evidence now includes the three gates that used to be
+        # literals. G2, G7 and G9 are evidence gates like G5 and G11-G13, so a
+        # PASS requires each to have actually been measured.
         "implementation_tests_passed": True,
+        "engine_consistent": True,
+        "mechanism_aligned": True,
     }
     values.update(full_evidence())
     values.update(overrides)

@@ -64,8 +64,12 @@ class JudgeInput:
     # looks like, and the judge reports absence as INCONCLUSIVE.
     implementation_tests_passed: bool | None = None
     lookahead_detected: bool = False
-    engine_consistent: bool = True
-    mechanism_aligned: bool = True
+    # Three-valued for the same reason as the field above. Both defaulted to
+    # ``True`` and were overridden by no call site anywhere in the codebase, so
+    # G7 and G9 could not fail: they asserted a reference-engine comparison and
+    # a mechanism falsification that were never attempted.
+    engine_consistent: bool | None = None
+    mechanism_aligned: bool | None = None
     periods_per_year: float = 252.0
     # Per-period Sharpe of every configuration in the search. Their spread is
     # the honest estimate of V[SR] the Deflated Sharpe Ratio needs. Without it,
@@ -140,8 +144,13 @@ class Judge:
                 round(factor, 3),
                 "profit factor > 1.10 and sign-permutation p < 0.05",
             ),
-            self._gate(
-                "G7", "Engine consistency", item.engine_consistent, 1, "oracle tolerance passes"
+            self._evidence_gate(
+                "G7",
+                "Engine consistency",
+                item.engine_consistent,
+                self._absent_or(item.engine_consistent, "REPRODUCED", "DIVERGED"),
+                "re-executing the run over the same bars reproduces the same trades exactly; "
+                "this does NOT assert venue calibration, which is unmeasured",
             ),
             self._gate(
                 "G8",
@@ -150,7 +159,13 @@ class Judge:
                 round(calmar, 3),
                 "Calmar >= 0.50 (net pnl at least half the worst drawdown)",
             ),
-            self._gate("G9", "Mechanism", item.mechanism_aligned, 1, "mechanism not falsified"),
+            self._evidence_gate(
+                "G9",
+                "Mechanism",
+                item.mechanism_aligned,
+                self._absent_or(item.mechanism_aligned, "ALIGNED", "FALSIFIED"),
+                "the declared mechanism was tested and not falsified",
+            ),
             self._gate(
                 "G10",
                 "Evidence tier",
@@ -268,6 +283,18 @@ class Judge:
             metrics=metrics,
             traces=traces,
         )
+
+    @staticmethod
+    def _absent_or(value: bool | None, yes: str, no: str) -> str:
+        """Observed value for a plain tri-state gate.
+
+        ``NOT_MEASURED`` rather than a number, so the difference between "we
+        looked and it held" and "nobody looked" survives into the verdict, the
+        dossier and the snapshot.
+        """
+        if value is None:
+            return "NOT_MEASURED"
+        return yes if value else no
 
     @staticmethod
     def _implementation_verdict(item: JudgeInput) -> bool | None:

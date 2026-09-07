@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from statistics import median
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -24,6 +25,7 @@ from forge.strategy import (
     TEMPLATES,
     GuardViolation,
     StrategyLibrary,
+    check_determinism,
     check_source,
     generate_bars,
     run_backtest,
@@ -33,8 +35,15 @@ from pydantic import BaseModel, Field
 
 from forge_api.activity import ActivityLog, BacktestStore, Level
 from forge_api.conformance_store import ensure_conformance
+from forge_api.engine import DETERMINISM_WINDOW_BARS
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.market import DEFAULT_DATASET, MarketService
+from forge_api.mechanism_check import mechanism_for
+
+# The mechanism control is a resampling test, so it needs a seed to be
+# reproducible. Fixed rather than per-request: a verdict that changes when it is
+# recomputed is not a verdict.
+DEFAULT_MECHANISM_SEED = 20260901
 
 
 class CreateStrategyRequest(BaseModel):
@@ -272,6 +281,62 @@ def build_router(
     research_ledger: ResearchLedger,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["strategies"])
+
+    def _determinism_for(spec: Any, module: Any, code_hash: str) -> bool | None:
+        """G7's evidence: does re-running the strategy reproduce its trades?
+
+        Over synthetic bars, deliberately. The question is whether the *engine
+        and the strategy code* repeat themselves, which is a property of the
+        code and not of any particular dataset — and generating a window costs
+        nothing, where re-reading a market archive twice does not.
+        """
+        window = generate_bars(count=max(spec.warmup_bars + 5, DETERMINISM_WINDOW_BARS), seed=7)
+
+        def once(slice_bars: Any, parameters: Any) -> Any:
+            return run_backtest(
+                module,
+                spec,
+                list(slice_bars),
+                parameters=dict(parameters or {}),
+                code_hash=code_hash,
+                labels=("DETERMINISM_CHECK", "NON_PROMOTABLE"),
+                evidence_tier="SYNTHETIC",
+                dataset_key="synthetic",
+            )
+
+        return check_determinism(
+            spec.strategy_id, code_hash=code_hash, backtest=once, bars=window, parameters=None
+        ).reproduced
+
+    def _mechanism_for_artifact(spec: Any, artifact: dict[str, Any]) -> bool | None:
+        """G9's evidence for a stored run, or None when it cannot be produced.
+
+        The control has to be placed on the same bars the run filled against, so
+        the artifact's split receipt is what makes this answerable at all. A
+        synthetic or legacy run has no receipt, and reports unmeasured rather
+        than being compared against a series it never saw.
+        """
+        raw_receipt = artifact.get("split_receipt")
+        dataset_key = artifact.get("dataset_key")
+        partition = artifact.get("partition_name")
+        if not raw_receipt or not dataset_key or partition not in {"VALIDATION", "HOLDOUT"}:
+            return None
+        try:
+            receipt = ResearchSplitReceipt.model_validate(raw_receipt)
+            source, dataset = market.load(dataset_key, limit=receipt.source_bar_count)
+        except Exception:
+            return None
+        if not dataset.is_real:
+            return None
+        window = receipt.validation if partition == "VALIDATION" else receipt.holdout
+        bars = source[window.start_index : window.end_index]
+        if not bars:
+            return None
+        # Trades come off the artifact as dicts, and the control only reads
+        # direction, bars_held and net_pnl.
+        trades = [SimpleNamespace(**trade) for trade in artifact["trades"]]
+        replayed = SimpleNamespace(trades=trades)
+        return mechanism_for(spec, replayed, bars, seed=DEFAULT_MECHANISM_SEED).aligned
 
     def _bars(request: BacktestRequest) -> tuple[list[Bar], bool, str]:
         """Resolve a request to bars. Real datasets fail closed rather than
@@ -888,21 +953,21 @@ def build_router(
         if not all_runs:
             raise HTTPException(422, {"code": "no_backtest", "detail": "run a backtest first"})
 
-        # G2's evidence, on the operator's own path. The engine runs the
-        # conformance suite as it creates a candidate; a strategy judged from
-        # the interface has to have it run here, or the gate reads nothing and
-        # reports INCONCLUSIVE. Absent or stale evidence stays None.
+        # G2 and G7's evidence, on the operator's own path. The engine produces
+        # both as it creates a candidate; a strategy judged from the interface
+        # has to have them produced here, or the gates read nothing and report
+        # INCONCLUSIVE. Absent or stale evidence stays None.
         conformance: bool | None = None
+        determinism: bool | None = None
         try:
+            module = library.load_module(strategy_id)
+            code_hash = library.code_hash(strategy_id)
             conformance = ensure_conformance(
-                root,
-                library,
-                strategy_id,
-                module=library.load_module(strategy_id),
-                code_hash=library.code_hash(strategy_id),
+                root, library, strategy_id, module=module, code_hash=code_hash
             )
+            determinism = _determinism_for(spec, module, code_hash)
         except GuardViolation as exc:
-            # The module will not load, so the tests cannot have been run
+            # The module will not load, so neither check can have been run
             # against it. That is a refusal, not a pass.
             log.record("GUARD", f"blocked {strategy_id}: {exc}", "fail", strategy_id)
         all_runs = [r for r in all_runs if r.get("calculation_version") == "contract-units-v2"]
@@ -934,6 +999,7 @@ def build_router(
                         data_gate_passed=False,
                         preregistered=True,
                         implementation_tests_passed=conformance,
+                        engine_consistent=determinism,
                         lookahead_detected=not latest_any["lookahead_clean"],
                     )
                 )
@@ -989,6 +1055,8 @@ def build_router(
                 data_gate_passed=True,
                 preregistered=True,
                 implementation_tests_passed=conformance,
+                engine_consistent=determinism,
+                mechanism_aligned=_mechanism_for_artifact(spec, latest),
                 lookahead_detected=not latest["lookahead_clean"],
                 **evidence,
             )
@@ -1070,6 +1138,13 @@ def build_router(
                 data_gate_passed=True,
                 preregistered=True,
                 implementation_tests_passed=conformance,
+                engine_consistent=determinism,
+                # The holdout's own bars, not the validation partition's: a
+                # holdout verdict must not carry a number computed on data it is
+                # not supposed to have read.
+                mechanism_aligned=mechanism_for(
+                    spec, holdout, holdout_bars, seed=DEFAULT_MECHANISM_SEED
+                ).aligned,
                 lookahead_detected=not holdout.lookahead_clean,
                 **holdout_evidence,
             )

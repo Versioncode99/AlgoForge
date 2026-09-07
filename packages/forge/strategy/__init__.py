@@ -1,6 +1,7 @@
 from forge.strategy.authoring import TemplateRejected, TemplateStore
 from forge.strategy.catalog import StrategyCapability, strategy_capability_catalog
 from forge.strategy.conformance import ConformanceCase, ConformanceReport, run_conformance
+from forge.strategy.determinism import DeterminismReport, check_determinism, run_digest
 from forge.strategy.families import BUILTIN_FAMILIES, Family, FamilyRegistry
 from forge.strategy.guard import GuardViolation, assert_safe, check_source, check_test_source
 from forge.strategy.library import StrategyLibrary, slugify
@@ -21,6 +22,7 @@ __all__ = [
     "BacktestResult",
     "ConformanceCase",
     "ConformanceReport",
+    "DeterminismReport",
     "Family",
     "FamilyRegistry",
     "GuardViolation",
@@ -36,11 +38,13 @@ __all__ = [
     "Trade",
     "Window",
     "assert_safe",
+    "check_determinism",
     "check_source",
     "check_test_source",
     "generate_bars",
     "run_backtest",
     "run_conformance",
+    "run_digest",
     "slugify",
     "strategy_capability_catalog",
 ]

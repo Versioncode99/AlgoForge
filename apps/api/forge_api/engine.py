@@ -38,7 +38,14 @@ from forge.memory import FailureClass, ResearchMemory, classify_gate
 from forge.prop import MIN_TRADING_DAYS, load_rules, simulate_prop_paths
 from forge.provenance import RunSnapshots
 from forge.research import ResearchLedger, ResearchPartitions, chronological_split
-from forge.strategy import TEMPLATES, ParameterSpec, StrategyLibrary, run_backtest
+from forge.strategy import (
+    TEMPLATES,
+    DeterminismReport,
+    ParameterSpec,
+    StrategyLibrary,
+    check_determinism,
+    run_backtest,
+)
 from forge.vault import VaultMirror, Workspace
 
 from forge_api.activity import ActivityLog, BacktestStore
@@ -46,6 +53,14 @@ from forge_api.agent_service import AgentService
 from forge_api.conformance_store import refresh_conformance
 from forge_api.experiments import POLICIES, Experiments
 from forge_api.market import DEFAULT_DATASET, MarketService
+from forge_api.mechanism_check import mechanism_for
+
+# How many bars G7's determinism check re-runs. Non-determinism is a property of
+# the code — mutable module state, an unseeded RNG, iteration over a set — and
+# shows up within a few thousand bars as reliably as within a few million. Two
+# extra full-series runs per candidate would more than double the cost of the
+# most expensive operation in the system to learn the same fact.
+DETERMINISM_WINDOW_BARS = 6_000
 
 
 @dataclass
@@ -346,6 +361,42 @@ class AutonomousEngine:
         self._bump("pruned")
         self.log.record("ENGINE", f"population at {cap}; retired {worst[1]} to make room", "info")
 
+    def _check_determinism(
+        self,
+        spec: Any,
+        module: Any,
+        bars: list[Bar],
+        params: dict[str, float],
+    ) -> DeterminismReport:
+        """Re-run the candidate over a short window and compare exactly.
+
+        The window is the front of the same series the candidate is about to be
+        backtested on, capped at `DETERMINISM_WINDOW_BARS`. Two extra runs over
+        the *full* series would more than double the engine's cost to establish
+        a property of the code that a few thousand bars already establishes.
+        """
+        window = bars[: max(spec.warmup_bars + 5, DETERMINISM_WINDOW_BARS)]
+
+        def once(slice_bars: Any, parameters: Any) -> Any:
+            return run_backtest(
+                module,
+                spec,
+                list(slice_bars),
+                parameters=dict(parameters or {}),
+                code_hash=self.library.code_hash(spec.strategy_id),
+                labels=("DETERMINISM_CHECK", "NON_PROMOTABLE"),
+                evidence_tier="SYNTHETIC",
+                dataset_key=self.state.config.dataset,
+            )
+
+        return check_determinism(
+            spec.strategy_id,
+            code_hash=self.library.code_hash(spec.strategy_id),
+            backtest=once,
+            bars=window,
+            parameters=params,
+        )
+
     def _bump(self, field_name: str, amount: int = 1) -> None:
         with self._state_lock:
             setattr(self.state, field_name, getattr(self.state, field_name) + amount)
@@ -571,6 +622,17 @@ class AutonomousEngine:
                 "fail" if conformance.passed is False else "warn",
                 spec.strategy_id,
             )
+        # G7's evidence. Two runs over a bounded window, compared exactly. A
+        # strategy whose result does not reproduce is not evidence about
+        # anything, and until now that stamped PASS along with everything else.
+        determinism = self._check_determinism(spec, module, bars, params)
+        if determinism.reproduced is not True:
+            self.log.record(
+                "DETERMINISM",
+                f"{spec.strategy_id} {determinism.reason}",
+                "fail" if determinism.reproduced is False else "warn",
+                spec.strategy_id,
+            )
         started = time.time()
         partitions: ResearchPartitions | None = None
         if real_data:
@@ -624,6 +686,7 @@ class AutonomousEngine:
                 partition_name="VALIDATION",
                 split_receipt=partitions.receipt,
             )
+            judged_bars: list[Bar] = list(partitions.validation)
             self._bump("backtested")
         else:
             result = run_backtest(
@@ -636,6 +699,11 @@ class AutonomousEngine:
                 evidence_tier="SYNTHETIC",
                 dataset_key=self.state.config.dataset,
             )
+            judged_bars = list(bars)
+        # G9's evidence: would the same directions and holding periods, entered
+        # at random times, have done as well? Seeded from the run so the answer
+        # is reproducible along with the verdict that carries it.
+        mechanism = mechanism_for(spec, result, judged_bars, seed=self.state.config.seed)
         self.store.save(result)
         if self.mirror is not None:
             self.mirror.backtest(result.model_dump(mode="json"), strategy_name=spec.name)
@@ -748,6 +816,8 @@ class AutonomousEngine:
                 data_gate_passed=real_data,
                 preregistered=self._preregistration_holds(attempt_id, template, params),
                 implementation_tests_passed=conformance.passed,
+                engine_consistent=determinism.reproduced,
+                mechanism_aligned=mechanism.aligned,
                 lookahead_detected=not result.lookahead_clean,
                 **evidence_args,
             )
@@ -805,6 +875,12 @@ class AutonomousEngine:
                 )
                 self.log.record("HOLDOUT", f"{spec.strategy_id} -> {reason}", "fail")
                 return
+            # The holdout gets its own mechanism test, over its own bars. Reusing
+            # the validation partition's answer here would carry a result from
+            # data the holdout verdict is not supposed to be reading.
+            holdout_mechanism = mechanism_for(
+                spec, holdout, list(partitions.holdout), seed=self.state.config.seed
+            )
             verdict = Judge().evaluate(
                 JudgeInput(
                     run_id=holdout.backtest_id,
@@ -814,6 +890,8 @@ class AutonomousEngine:
                     data_gate_passed=True,
                     preregistered=self._preregistration_holds(attempt_id, template, params),
                     implementation_tests_passed=conformance.passed,
+                    engine_consistent=determinism.reproduced,
+                    mechanism_aligned=holdout_mechanism.aligned,
                     lookahead_detected=not holdout.lookahead_clean,
                     **evidence_args,
                 )
