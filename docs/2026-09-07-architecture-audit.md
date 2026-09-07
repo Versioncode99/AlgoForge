@@ -345,15 +345,15 @@ artifact gate, per the Definition-of-Done rule.
 | §1b dead engine state | **Done** | `_constraints`, `_lineage_failures`, `_retired_lineages` removed; `constraints()` served from disk |
 | §3.2 degenerate G5/G11 evidence | **Done** | `MINIMUM_TRIAL_CONFIGURATIONS = 8` in the judge; engine grid widened to 9 configurations; 10 adequacy tests + 55 grid tests over every shipped template |
 | §3.1 experiment record has no lineage | **Done** | parent/child edges written by the engine; `ancestors`/`children`/`descendants`/`roots`; 16 tests incl. old-schema migration |
-| §3.3 validation gated on profitability | Open | — |
+| §3.3 validation gated on profitability | Open | deliberate: compute economy, recorded in the report |
 | §3.4 fabricated dissent | **Done** | `build_debate(verdict)` derives all four positions from real gates/metrics; 17 tests incl. a guard against the old fixed constants |
 | §3.5 13 of 63 verbs have an action | **Partly** | +3 read-only actions (`list_experiments`, `experiment_lineage`, `research_memory`) and 4 endpoints; mutating parity still absent |
-| §3.6 no lineage/evidence/experiment views | Open | — |
+| §3.6 no lineage/evidence/experiment views | **Partly** | Evidence view ships with lineage inside it; no Experiments/Runs view |
 | §3.7 orchestrator test flake | Open | diagnosed above, not yet fixed |
 
 ### Test baseline
 
-258 at `da92bf6` → 394 now. The 1–2 intermittent failures are always the
+258 at `da92bf6` → 416 now. The 1–2 intermittent failures are always the
 orchestrator flake in §3.7; a run is only a regression signal if something
 *other* than `tests/api/test_orchestrator.py` fails.
 
@@ -383,3 +383,13 @@ under a real run's identifier.
 there was no real P&L to judge. The sample series is therefore still used for
 the seeded demo run, but the response now says so in its meta, and the
 specialist positions are derived from the verdict rather than scripted.
+
+### G1 was a rubber stamp `[DOCUMENTED]`
+
+Found while reading WSB-Alpha-System. `preregistered=True` was a literal at all
+nine `JudgeInput` call sites, so G1 could never fail, while
+`forge.contracts.models.Preregistration` — a frozen, content-hashed claim with a
+`freeze()` classmethod — was constructed nowhere in the codebase, not even in a
+test. Fixed: see `docs/2026-09-07-evolution-report.md`.
+
+| §11 preregistration is a rubber stamp | **Done** | claim frozen before backtest, re-derived and hash-compared at judge time; 11 tests, fails closed |
