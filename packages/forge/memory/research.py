@@ -44,7 +44,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
-from forge.contracts.hashing import stable_id
+from forge.contracts.hashing import content_hash, stable_id
 
 # Reaches every parameter set for the template, not a neighbourhood of one.
 TEMPLATE_WIDE = float("inf")
@@ -194,9 +194,18 @@ class ResearchMemory:
                 "parameters TEXT NOT NULL, normalised TEXT NOT NULL, "
                 "gate TEXT, strategy_id TEXT, created_at TEXT NOT NULL)"
             )
+            self._migrate(db)
             db.execute(
                 "CREATE INDEX IF NOT EXISTS failures_scope_template ON failures (scope, template)"
             )
+
+    @staticmethod
+    def _migrate(db: sqlite3.Connection) -> None:
+        """Add the chain columns to a database written before they existed."""
+        existing = {str(row[1]) for row in db.execute("PRAGMA table_info(failures)")}
+        for name in ("previous_hash", "entry_hash"):
+            if name not in existing:
+                db.execute(f"ALTER TABLE failures ADD COLUMN {name} TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=15)
@@ -239,8 +248,15 @@ class ResearchMemory:
             created_at=timestamp,
         )
         with closing(self._connect()) as db, db:
+            previous = db.execute(
+                "SELECT entry_hash FROM failures ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            previous_hash = str(previous[0]) if previous and previous[0] else None
+            # INSERT OR IGNORE, not REPLACE: this is append-only evidence, and
+            # replacing a row would rewrite a link the chain depends on.
+            # Recording the same finding twice is a no-op, not an update.
             db.execute(
-                "INSERT OR REPLACE INTO failures VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO failures VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.record_id,
                     record.scope,
@@ -252,6 +268,8 @@ class ResearchMemory:
                     record.gate,
                     record.strategy_id,
                     record.created_at,
+                    previous_hash,
+                    _chain_hash(record, previous_hash),
                 ),
             )
         return record
@@ -328,6 +346,47 @@ class ResearchMemory:
             ).fetchall()
         return {str(name): int(count) for name, count in rows}
 
+    def verify_chain(self) -> dict[str, Any]:
+        """Walk the hash chain and report the first link that does not hold.
+
+        Research memory decides what the engine stops exploring, so a silently
+        edited or deleted failure changes what gets searched. Each row commits
+        to the one before it, which makes a deletion in the middle or an edit to
+        any field detectable — the chain no longer recomputes from that point.
+
+        This detects tampering. It does not prevent it: anyone who can write the
+        file can rewrite the whole chain. It is an integrity check, not a lock.
+        """
+        with closing(self._connect()) as db, db:
+            db.row_factory = sqlite3.Row
+            rows = [dict(row) for row in db.execute("SELECT * FROM failures ORDER BY rowid")]
+
+        previous: str | None = None
+        for index, row in enumerate(rows):
+            if row.get("entry_hash") is None:
+                # Written before the chain existed; not a break, just unchained.
+                previous = None
+                continue
+            if row.get("previous_hash") != previous:
+                return {
+                    "intact": False,
+                    "entries": len(rows),
+                    "broken_at": index,
+                    "record_id": row["id"],
+                    "problem": "previous_hash does not match the entry before it",
+                }
+            expected = _chain_hash(_to_record(dict(row)), previous)
+            if row["entry_hash"] != expected:
+                return {
+                    "intact": False,
+                    "entries": len(rows),
+                    "broken_at": index,
+                    "record_id": row["id"],
+                    "problem": "entry content does not match its recorded hash",
+                }
+            previous = str(row["entry_hash"])
+        return {"intact": True, "entries": len(rows), "broken_at": None}
+
     def total(self, scope: str | None = None) -> int:
         with closing(self._connect()) as db, db:
             if scope is None:
@@ -385,6 +444,24 @@ def classify_reason(reason: str) -> FailureClass:
     if "lookahead" in text:
         return FailureClass.LOOKAHEAD
     return FailureClass.INFRASTRUCTURE
+
+
+def _chain_hash(record: FailureRecord, previous_hash: str | None) -> str:
+    """This entry's content, committed to the one before it."""
+    return content_hash(
+        {
+            "record_id": record.record_id,
+            "scope": record.scope,
+            "template": record.template,
+            "failure_class": str(record.failure_class),
+            "reason": record.reason,
+            "parameters": record.parameters,
+            "gate": record.gate,
+            "strategy_id": record.strategy_id,
+            "created_at": record.created_at,
+            "previous_hash": previous_hash,
+        }
+    )
 
 
 def _numeric(value: Any) -> bool:

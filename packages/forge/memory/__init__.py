@@ -9,14 +9,11 @@ from forge.memory.research import (
     normalise,
     reach_of,
 )
-from forge.memory.store import DecisionMemory, MemoryEntry
 
 __all__ = [
     "TEMPLATE_WIDE",
-    "DecisionMemory",
     "FailureClass",
     "FailureRecord",
-    "MemoryEntry",
     "PruneDecision",
     "ResearchMemory",
     "classify_gate",

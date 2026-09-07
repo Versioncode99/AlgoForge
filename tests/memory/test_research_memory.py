@@ -280,3 +280,105 @@ def test_reason_fallback_classifies_engine_level_stops() -> None:
     assert classify_reason("burn-once holdout produced no trades") is FailureClass.NO_TRADES
     assert classify_reason("holdout already consumed for lineage") is FailureClass.BOOKKEEPING
     assert classify_reason("disk exploded") is FailureClass.INFRASTRUCTURE
+
+
+# ── tamper evidence ──────────────────────────────────────────────────────────
+
+
+def test_an_untouched_chain_verifies(memory: ResearchMemory) -> None:
+    for value in (20.0, 40.0, 60.0):
+        _record(memory, FailureClass.NO_TRADES, {"lookback": value, "threshold": 0.5})
+    report = memory.verify_chain()
+    assert report["intact"] is True
+    assert report["entries"] == 3
+    assert report["broken_at"] is None
+
+
+def test_an_empty_chain_verifies(memory: ResearchMemory) -> None:
+    assert memory.verify_chain() == {"intact": True, "entries": 0, "broken_at": None}
+
+
+def test_editing_a_recorded_reason_is_detected(memory: ResearchMemory) -> None:
+    """Research memory decides what is never searched again. Edits must show."""
+    import sqlite3
+
+    for value in (20.0, 40.0, 60.0):
+        _record(memory, FailureClass.NO_TRADES, {"lookback": value, "threshold": 0.5})
+    with sqlite3.connect(memory.path) as db:
+        db.execute("UPDATE failures SET reason='rewritten' WHERE rowid=2")
+
+    report = memory.verify_chain()
+    assert report["intact"] is False
+    assert report["broken_at"] == 1
+    assert "does not match its recorded hash" in report["problem"]
+
+
+def test_deleting_an_entry_from_the_middle_is_detected(memory: ResearchMemory) -> None:
+    import sqlite3
+
+    for value in (20.0, 40.0, 60.0):
+        _record(memory, FailureClass.NO_TRADES, {"lookback": value, "threshold": 0.5})
+    with sqlite3.connect(memory.path) as db:
+        db.execute("DELETE FROM failures WHERE rowid=2")
+
+    report = memory.verify_chain()
+    assert report["intact"] is False
+    assert "previous_hash does not match" in report["problem"]
+
+
+def test_changing_a_failure_class_is_detected(memory: ResearchMemory) -> None:
+    """The field that decides how far a failure prunes."""
+    import sqlite3
+
+    _record(memory, FailureClass.BOOKKEEPING, {"lookback": 20.0, "threshold": 0.5})
+    with sqlite3.connect(memory.path) as db:
+        db.execute("UPDATE failures SET failure_class='NO_TRADES' WHERE rowid=1")
+
+    assert memory.verify_chain()["intact"] is False
+
+
+def test_recording_the_same_finding_twice_leaves_the_chain_intact(
+    memory: ResearchMemory,
+) -> None:
+    """Append-only: a repeat is a no-op, never a rewritten link."""
+    for _ in range(3):
+        _record(memory, FailureClass.NO_TRADES, {"lookback": 20.0, "threshold": 0.5})
+    _record(memory, FailureClass.RISK, {"lookback": 90.0, "threshold": 0.1})
+    report = memory.verify_chain()
+    assert report["intact"] is True
+    assert report["entries"] == 2
+
+
+def test_a_database_written_before_the_chain_existed_still_opens(tmp_path: Path) -> None:
+    """Unchained rows are not a broken chain; the workspace holds real research."""
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE failures ("
+            "id TEXT PRIMARY KEY, scope TEXT NOT NULL, template TEXT NOT NULL, "
+            "failure_class TEXT NOT NULL, reason TEXT NOT NULL, "
+            "parameters TEXT NOT NULL, normalised TEXT NOT NULL, "
+            "gate TEXT, strategy_id TEXT, created_at TEXT NOT NULL)"
+        )
+        db.execute(
+            "INSERT INTO failures VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("old_1", "mnq-1m", "momentum_breakout", "NO_TRADES", "legacy",
+             '{"lookback": 60.0}', '{"lookback": 0.5}', None, None, "2026-09-01T00:00:00+00:00"),
+        )
+
+    memory = ResearchMemory(path)
+    assert memory.total() == 1
+    assert memory.verify_chain()["intact"] is True
+
+    # And new rows chain from there without complaint.
+    memory.record(
+        scope="mnq-1m",
+        template="momentum_breakout",
+        failure_class=FailureClass.RISK,
+        reason="new",
+        parameters={"lookback": 20.0},
+        ranges=RANGES,
+    )
+    assert memory.verify_chain()["intact"] is True

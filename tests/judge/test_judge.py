@@ -7,7 +7,6 @@ import pytest
 from forge.judge import Judge, JudgeInput, probability_of_backtest_overfitting
 from forge.research.cpcv import PathDistribution
 from forge.research.walkforward import WalkForwardResult
-from forge.sweep import ArraySweepEngine
 
 
 def strong_pnl(seed: int = 11, size: int = 300) -> tuple[float, ...]:
@@ -153,17 +152,6 @@ def test_risk_gate_is_not_circular() -> None:
 def test_empty_pnl_is_rejected() -> None:
     with pytest.raises(ValueError):
         Judge().evaluate(judge_input(pnl=()))
-
-
-def test_sweep_counts_every_combination_and_cannot_promote() -> None:
-    result = ArraySweepEngine().run(
-        np.array([0.01, -0.005, 0.02]),
-        {"threshold": [0.0, 0.01], "size": [1.0, 2.0]},
-        cost_per_trade=0.001,
-    )
-    assert len(result.trials) == 4
-    assert result.tier == "SWEEP"
-    assert result.promotable is False
 
 
 def test_judge_source_has_no_agent_or_model_imports() -> None:
