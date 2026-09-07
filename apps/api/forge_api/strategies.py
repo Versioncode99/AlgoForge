@@ -39,6 +39,7 @@ from forge_api.engine import DETERMINISM_WINDOW_BARS
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.market import DEFAULT_DATASET, MarketService
 from forge_api.mechanism_check import mechanism_for
+from forge_api.preregistration_store import claim_holds, freeze_claim, record_claim
 
 # The mechanism control is a resampling test, so it needs a seed to be
 # reproducible. Fixed rather than per-request: a verdict that changes when it is
@@ -308,6 +309,33 @@ def build_router(
             spec.strategy_id, code_hash=code_hash, backtest=once, bars=window, parameters=None
         ).reproduced
 
+    def _preregister(spec: Any, parameters: dict[str, float] | None) -> None:
+        """Freeze the claim for the parameters this run will actually use."""
+        params = dict(spec.defaults) | dict(parameters or {})
+        if record_claim(root, spec.strategy_id, freeze_claim(spec, params)):
+            log.record(
+                "PREREG",
+                f"{spec.strategy_id} claim frozen before the run",
+                "info",
+                spec.strategy_id,
+            )
+
+    def _data_gate_for(artifact: dict[str, Any]) -> bool | None:
+        """G0's evidence: did the bars this run executed over pass validation?
+
+        `run_backtest` has always validated its bars and refused to run on bad
+        ones, so the check was real; the receipt was simply thrown away and the
+        gate handed a literal instead. New artifacts carry the receipt. Older
+        ones do not, and report unmeasured rather than borrowing the fact that
+        the run completed — which is an inference about the code path, not a
+        measurement of the data.
+        """
+        receipt = artifact.get("data_quality")
+        if not isinstance(receipt, dict):
+            return None
+        accepted = receipt.get("accepted")
+        return accepted if isinstance(accepted, bool) else None
+
     def _mechanism_for_artifact(spec: Any, artifact: dict[str, Any]) -> bool | None:
         """G9's evidence for a stored run, or None when it cannot be produced.
 
@@ -468,6 +496,10 @@ def build_router(
             "info",
             strategy_id,
         )
+        # G1's evidence, frozen here because this is the run the claim has to
+        # precede. Append-only: a second freeze of a moved claim is recorded
+        # beside the first, never over it.
+        _preregister(spec, body.parameters)
         split_meta: dict[str, Any] = {}
         try:
             if is_real:
@@ -635,6 +667,11 @@ def build_router(
         available = market.available_rows(body.dataset)
         if available and requested > available:
             requested = available
+
+        # Frozen before the job is queued, not inside the worker: the claim has
+        # to precede the run, and "before it was even scheduled" is the earliest
+        # honest moment.
+        _preregister(spec, body.parameters)
 
         def work(handle: JobHandle) -> dict[str, Any]:
             handle.progress(0, f"loading {requested:,} bars")
@@ -996,10 +1033,16 @@ def build_router(
                         tier="SWEEP_SYNTHETIC",
                         pnl=synthetic_pnl,
                         trial_count=max(1, len(all_runs)),
+                        # Synthetic bars fail the data gate by construction —
+                        # a real FAIL, not absent evidence, which is why this
+                        # one stays a literal.
                         data_gate_passed=False,
-                        preregistered=True,
+                        preregistered=claim_holds(
+                            root, strategy_id, spec, latest_any.get("parameters") or {}
+                        ),
                         implementation_tests_passed=conformance,
                         engine_consistent=determinism,
+                        mechanism_aligned=None,
                         lookahead_detected=not latest_any["lookahead_clean"],
                     )
                 )
@@ -1052,8 +1095,8 @@ def build_router(
                 tier="TRUTH_OOS",
                 pnl=pnl,
                 trial_count=trials,
-                data_gate_passed=True,
-                preregistered=True,
+                data_gate_passed=_data_gate_for(latest),
+                preregistered=claim_holds(root, strategy_id, spec, latest.get("parameters") or {}),
                 implementation_tests_passed=conformance,
                 engine_consistent=determinism,
                 mechanism_aligned=_mechanism_for_artifact(spec, latest),
@@ -1135,8 +1178,12 @@ def build_router(
                 tier="HOLDOUT",
                 pnl=holdout_pnl,
                 trial_count=trials,
-                data_gate_passed=True,
-                preregistered=True,
+                # The holdout ran just now, so its receipt is on the result in
+                # hand rather than read back off disk.
+                data_gate_passed=(
+                    holdout.data_quality.accepted if holdout.data_quality is not None else None
+                ),
+                preregistered=claim_holds(root, strategy_id, spec, latest.get("parameters") or {}),
                 implementation_tests_passed=conformance,
                 engine_consistent=determinism,
                 # The holdout's own bars, not the validation partition's: a

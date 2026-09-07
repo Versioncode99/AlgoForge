@@ -322,6 +322,8 @@ def run_backtest(
         dataset_key=dataset_key,
         partition_name=partition_name,  # type: ignore[arg-type]
         split_receipt=split_receipt,
+        # The receipt this run was already gated on, kept rather than discarded.
+        data_quality=quality,
         started_at=started,
         finished_at=finished,
     )

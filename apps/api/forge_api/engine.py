@@ -813,7 +813,15 @@ class AutonomousEngine:
                 tier="TRUTH_OOS" if real_data else "SWEEP_SYNTHETIC",
                 pnl=pnl,
                 trial_count=max(1, self.experiments.count(self._scope())),
-                data_gate_passed=real_data,
+                # The receipt the run was already gated on, not the fact that it
+                # is a real-data code path. Synthetic bars still fail G0, which
+                # is a FAIL rather than absent evidence, so `real_data` remains
+                # the deciding term for that case.
+                data_gate_passed=(
+                    (result.data_quality.accepted if result.data_quality is not None else None)
+                    if real_data
+                    else False
+                ),
                 preregistered=self._preregistration_holds(attempt_id, template, params),
                 implementation_tests_passed=conformance.passed,
                 engine_consistent=determinism.reproduced,
@@ -887,7 +895,11 @@ class AutonomousEngine:
                     tier="HOLDOUT",
                     pnl=holdout_pnl,
                     trial_count=max(1, self.state.backtested),
-                    data_gate_passed=True,
+                    data_gate_passed=(
+                        holdout.data_quality.accepted
+                        if holdout.data_quality is not None
+                        else None
+                    ),
                     preregistered=self._preregistration_holds(attempt_id, template, params),
                     implementation_tests_passed=conformance.passed,
                     engine_consistent=determinism.reproduced,

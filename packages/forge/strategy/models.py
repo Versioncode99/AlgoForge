@@ -7,6 +7,7 @@ from pydantic import Field
 
 from forge.contracts.hashing import content_hash, stable_id
 from forge.contracts.models import FrozenModel
+from forge.data.models import DataQualityReceipt
 from forge.research.models import EvidenceTier, ResearchSplitReceipt
 
 ParamValue = float | int
@@ -115,6 +116,12 @@ class BacktestResult(FrozenModel):
     dataset_key: str | None = None
     partition_name: Literal["DEVELOPMENT", "VALIDATION", "HOLDOUT"] | None = None
     split_receipt: ResearchSplitReceipt | None = None
+    # G0's evidence. `run_backtest` has always validated its bars and refused to
+    # run on bad ones, but the receipt was discarded, so the gate read a literal
+    # `True` instead of the measurement that had just been taken. Optional
+    # because artifacts written before this field existed do not carry one, and
+    # an absent receipt must read as INCONCLUSIVE rather than as a pass.
+    data_quality: DataQualityReceipt | None = None
     started_at: datetime
     finished_at: datetime
 

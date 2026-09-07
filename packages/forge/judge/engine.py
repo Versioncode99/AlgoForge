@@ -55,8 +55,12 @@ class JudgeInput:
     tier: str
     pnl: tuple[float, ...]
     trial_count: int
-    data_gate_passed: bool
-    preregistered: bool
+    # G0 and G1, three-valued for the same reason as the fields below. Both were
+    # passed as literal `True` on the operator's own judge route while the
+    # engine supplied real values, so the same gate was a measurement in one
+    # path and a rubber stamp in the other.
+    data_gate_passed: bool | None
+    preregistered: bool | None
     # Three-valued on purpose. A ``bool`` cannot express "nobody ran the suite",
     # so while this was a ``bool`` every call site passed ``True`` and G2 could
     # not fail — it reported that a strategy's implementation tests passed
@@ -102,8 +106,20 @@ class Judge:
         track_record = minimum_track_record_length(pnl)
 
         gates = (
-            self._gate("G0", "Data integrity", item.data_gate_passed, 1, "G0 receipt passes"),
-            self._gate("G1", "Preregistration", item.preregistered, 1, "frozen before run"),
+            self._evidence_gate(
+                "G0",
+                "Data integrity",
+                item.data_gate_passed,
+                self._absent_or(item.data_gate_passed, "RECEIPT_ACCEPTED", "RECEIPT_REJECTED"),
+                "the bars this run executed over carry a data-quality receipt with no findings",
+            ),
+            self._evidence_gate(
+                "G1",
+                "Preregistration",
+                item.preregistered,
+                self._absent_or(item.preregistered, "CLAIM_HELD", "CLAIM_MOVED"),
+                "a claim was frozen before the run and re-derives to the same hash now",
+            ),
             self._evidence_gate(
                 "G2",
                 "Implementation",
