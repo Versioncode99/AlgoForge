@@ -12,7 +12,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from forge.agents import DebateReport, build_demo_debate
+from forge.agents import DebateReport, build_debate
 from forge.analytics import NormalAnalysis, build_normal_analysis
 from forge.contracts.hashing import content_hash
 from forge.contracts.models import ApiEnvelope, Preregistration, RunRecord
@@ -206,8 +206,15 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             )
         )
         return ApiEnvelope(
-            data=build_demo_debate(item.run_id, judged.verdict_id),
-            meta={"narrative_can_change_verdict": False},
+            data=build_debate(judged),
+            meta={
+                "narrative_can_change_verdict": False,
+                # The ledger stores run contracts, not trade series, so the
+                # seeded sample run is judged on the sample P&L above. The
+                # specialist positions below are derived from that verdict.
+                "verdict_source": "sample_series",
+                "labels": list(item.labels),
+            },
         )
 
     @app.get("/api/v1/evolution/overview", response_model=ApiEnvelope[dict[str, object]])

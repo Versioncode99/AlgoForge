@@ -1,16 +1,9 @@
 from datetime import UTC, datetime
 
-from forge.agents import build_demo_debate
 from forge.memory import DecisionMemory
 
-
-def test_debate_contains_cited_dissent_and_cannot_change_numbers() -> None:
-    report = build_demo_debate("run_1", "verdict_1")
-    assert report.dissent_present
-    assert report.numeric_verdict_locked
-    assert all(claim.evidence_ids for claim in report.claims)
-    assert all(not role.can_change_numeric_verdict for role in report.roles)
-    assert all(not role.can_execute_orders for role in report.roles)
+# The debate moved to tests/agents/test_debate.py when it stopped being a
+# fixture and started being derived from the verdict.
 
 
 def test_memory_partitions_and_hash_chain_are_enforced() -> None:
