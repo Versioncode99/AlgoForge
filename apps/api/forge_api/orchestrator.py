@@ -150,6 +150,8 @@ class Orchestrator:
         self.log = log
         self.mirror = mirror
         self._lock = threading.RLock()
+        # Guards serialise-and-commit; see _save on why the pair must be atomic.
+        self._write_lock = threading.Lock()
         self._current: str | None = None
         with closing(self.connect()) as db, db:
             db.execute(
@@ -171,11 +173,26 @@ class Orchestrator:
 
     # ── storage ──────────────────────────────────────────────────────────────
     def _save(self, mission: dict[str, Any]) -> None:
-        with closing(self.connect()) as db, db:
-            db.execute(
-                "INSERT OR REPLACE INTO missions VALUES (?, ?, ?)",
-                (mission["id"], mission["started_at"], json.dumps(mission)),
-            )
+        """Serialise and commit as one atomic step.
+
+        The mission dict is mutated by the worker thread while `launch` still
+        holds a reference to it, and `json.dumps` was being evaluated to build
+        the statement while the commit happened later, at the end of the `with`.
+        Those two moments are not the same instant. A thread descheduled between
+        them could commit a snapshot taken *before* another thread's commit, and
+        last-writer-wins then restored an earlier state — leaving a finished
+        mission reading as `running` forever, with its job already DONE.
+
+        Holding the lock across both makes the pair atomic with respect to other
+        writers, so whichever commit lands last also carries the latest content.
+        """
+        with self._write_lock:
+            payload = json.dumps(mission)
+            with closing(self.connect()) as db, db:
+                db.execute(
+                    "INSERT OR REPLACE INTO missions VALUES (?, ?, ?)",
+                    (mission["id"], mission["started_at"], payload),
+                )
 
     def get(self, mission_id: str) -> dict[str, Any] | None:
         with closing(self.connect()) as db, db:
