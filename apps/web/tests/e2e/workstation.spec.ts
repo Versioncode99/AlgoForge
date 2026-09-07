@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test'
  * neither — run both before this suite or every test fails on connection
  * refused rather than on anything about the application. */
 
-const TABS = ['Research Lab', 'Strategies', 'Prop Firm', 'Console', 'Settings']
+const TABS = ['Pipeline', 'Orchestrator', 'Agent Command', 'Research Lab', 'Strategies', 'Validation Lab', 'Prop Firm', 'Console', 'Settings']
 const REMOVED = ['Verdict', 'Regimes', 'Risk & Monte Carlo', 'Agents', 'Evolution']
 
 test('every section is reachable and the truth label persists', async ({ page }) => {
@@ -139,6 +139,14 @@ test('updates live in settings, not on a tab of their own', async ({ page }) => 
   await expect(page.getByText('Automatic live changes')).toBeVisible()
 })
 
+test('validation lab distinguishes selection paths from Monte Carlo', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Validation Lab', exact: true }).click()
+  await expect(page.getByRole('heading', { name: /See the validation machinery/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Run WF \+ CSCV \+ CPCV/ })).toBeVisible()
+  await expect(page.getByText(/it is not a Monte Carlo account simulation/)).toBeVisible()
+})
+
 test('capture desktop evidence', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop-chromium', 'desktop evidence only')
   await page.goto('/')
@@ -150,4 +158,8 @@ test('capture desktop evidence', async ({ page }, testInfo) => {
   await page.getByRole('button', { name: 'Prop Firm', exact: true }).click()
   await expect(page.getByRole('button', { name: /Run the matrix/ })).toBeVisible()
   await page.screenshot({ path: '../../artifacts/qa/propfirm-desktop.png', fullPage: true })
+  await page.getByRole('button', { name: 'Validation Lab', exact: true }).click()
+  await expect(page.getByRole('button', { name: /Run WF \+ CSCV \+ CPCV/ })).toBeVisible()
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: '../../artifacts/qa/validation-lab-desktop.png', fullPage: true })
 })

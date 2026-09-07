@@ -8,6 +8,7 @@ dependencies = [
   "databento>=0.85.0",
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
+  "mcp>=2,<3",
   "numpy>=2.2,<3",
   "pydantic>=2.11,<3",
   "pyyaml>=6.0,<7",
@@ -28,6 +29,7 @@ dev = [
 
 [project.scripts]
 algoforge-api = "forge_api.main:run"
+algoforge-mcp = "forge_api.mcp_server:run"
 
 [build-system]
 requires = ["hatchling>=1.27"]

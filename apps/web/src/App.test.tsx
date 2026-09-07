@@ -5,7 +5,9 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { App } from './App'
 
 vi.mock('echarts-for-react/lib/core', () => ({ default: () => <div data-testid="chart" /> }))
-configure({ asyncUtilTimeout: 5000 })
+// Nine lazily-loaded sections; the tab walk mounts every one of them in a
+// single test, and the last chunks land well past the 5s default.
+configure({ asyncUtilTimeout: 12000 })
 
 const summary = {
   strategy_count: 2, backtest_count: 3, template_count: 3,
@@ -43,6 +45,25 @@ const research = {
     missing_capability: null, template_key: 'orb' }],
 }
 
+const missions = {
+  missions: [], current: null, running: false,
+  actions: [], recent_actions: [], roles: ['research'], max_steps: 12,
+}
+const storage = {
+  root: 'F:/Obsidian Vaults/AlgoForge-Vault', repo: 'F:/AlgoForge',
+  pointer: 'F:/AlgoForge/config/storage.json',
+  vault_mode: true, is_obsidian_vault: true,
+  notes: 'F:/Obsidian Vaults/AlgoForge-Vault/10 AlgoForge',
+  store: 'F:/Obsidian Vaults/AlgoForge-Vault/10 AlgoForge/.store',
+  exists: true, writable: true, note_bytes: 4096,
+  counts: {
+    strategies: 2, strategy_notes: 2, paper_notes: 1, backtest_notes: 1,
+    verdict_notes: 0, family_notes: 12, mission_notes: 0, custom_templates: 0,
+  },
+  mirror: { enabled: true, notes_written: 4, notes_skipped: 0, last_error: null, notes_root: 'x' },
+  folders: [], stays_in_repo: [],
+}
+
 globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
   const url = String(input)
   const data = url.endsWith('/health') ? { status: 'ok', data_gate: 'REAL', engine_running: false }
@@ -54,6 +75,10 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     : url.endsWith('/strategies') ? []
     : url.endsWith('/templates') ? []
     : url.endsWith('/prop/rules') ? []
+    : url.endsWith('/families') ? []
+    : url.endsWith('/research/sources') ? []
+    : url.endsWith('/missions') ? missions
+    : url.endsWith('/storage') ? storage
     : {}
   return { ok: true, text: async () => JSON.stringify({ data }) } as unknown as Response
 })
@@ -86,7 +111,9 @@ test('the fixture-driven sections are gone', async () => {
 test('every remaining tab reaches a section that renders', async () => {
   renderApp()
   await screen.findByText(/autonomous engine/i)
-  for (const tab of ['Research Lab', 'Strategies', 'Prop Firm', 'Console', 'Settings']) {
+  for (const tab of [
+    'Pipeline', 'Orchestrator', 'Research Lab', 'Strategies', 'Prop Firm', 'Console', 'Settings',
+  ]) {
     fireEvent.click(screen.getByRole('button', { name: tab }))
     expect(await screen.findByRole('heading', { name: tab, level: 1 })).toBeInTheDocument()
     expect(screen.getByText(/paper only · fills are modelled/i)).toBeInTheDocument()
@@ -120,4 +147,23 @@ test('research lab distinguishes untested cells from zero performance', async ()
 test('orchestrator log renders real recorded events', async () => {
   renderApp()
   expect(await screen.findByText(/finished — 63 trades/)).toBeInTheDocument()
+})
+
+test('the pipeline names every stage a candidate has to pass', async () => {
+  renderApp()
+  await screen.findByText(/autonomous engine/i)
+  fireEvent.click(screen.getByRole('button', { name: 'Pipeline' }))
+  expect(await screen.findByText(/where a number comes from/i)).toBeInTheDocument()
+  for (const stage of ['Sources', 'Catalogue', 'Candidates', 'Measurement', 'Judgement', 'Survival']) {
+    expect(screen.getByRole('heading', { name: stage, level: 3 })).toBeInTheDocument()
+  }
+})
+
+test('the orchestrator will not launch a mission from an empty objective', async () => {
+  renderApp()
+  await screen.findByText(/autonomous engine/i)
+  fireEvent.click(screen.getByRole('button', { name: 'Orchestrator' }))
+  expect(await screen.findByLabelText(/what should the team do/i)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /plan and run/i })).toBeDisabled()
+  expect(screen.getByRole('button', { name: /plan it/i })).toBeDisabled()
 })

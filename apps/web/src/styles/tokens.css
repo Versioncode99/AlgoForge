@@ -4,32 +4,32 @@
    "a human must act", per the one-earned-accent rule. */
 :root {
   /* Surfaces. Never pure black — it crushes chart antialiasing. */
-  --bg-0: #0a0b0d;
-  --bg-1: #0e1013;
-  --bg-2: #131619;
-  --bg-3: #191d21;
-  --bg-raised: #1d2228;
+  --bg-0: #0a0a0a;
+  --bg-1: #100f0e;
+  --bg-2: #161513;
+  --bg-3: #1d1b19;
+  --bg-raised: #232220;
 
-  --line: #21262c;
-  --line-strong: #303740;
-  --line-glow: #2c3a35;
+  --line: #292724;
+  --line-strong: #3a3732;
+  --line-glow: #424b35;
 
   /* Text */
-  --fg-0: #e6eaee;
-  --fg-1: #949da6;
-  --fg-2: #616a73;
-  --fg-3: #444c54;
+  --fg-0: #f4f2ed;
+  --fg-1: #cbc6bc;
+  --fg-2: #8b857a;
+  --fg-3: #625d55;
 
   /* Brand + semantic */
-  --brand: #3ddc97;
-  --brand-dim: #1f6a4c;
-  --brand-wash: rgba(61, 220, 151, 0.08);
+  --brand: #a2e65d;
+  --brand-dim: #587c36;
+  --brand-wash: rgba(162, 230, 93, 0.08);
 
-  --pass: #3ddc97;
-  --fail: #f2615c;
-  --warn: #e0a942;
-  --info: #58a6ff;
-  --neutral: #6e7681;
+  --pass: #8fce6a;
+  --fail: #c1503f;
+  --warn: #e8c069;
+  --info: #7fc4b4;
+  --neutral: #8b857a;
 
   /* The single accent — reserved for "needs your attention now" */
   --accent: #ff7b39;

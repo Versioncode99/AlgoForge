@@ -1,0 +1,207 @@
+/* The pipeline graph.
+
+   Columns are stages, boxes are things that accumulate, and the label under a
+   box names the step that fills it. The layout scrolls horizontally on purpose:
+   compressing six stages into a phone width would turn a graph into a list, and
+   the left-to-right reading is the information. */
+
+.pipeline { display: flex; flex-direction: column; gap: var(--sp-5); }
+
+.pipe-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--sp-6); flex-wrap: wrap;
+}
+.pipe-head h2 { font-size: var(--fs-2xl); letter-spacing: -.02em; line-height: 1.1; }
+.pipe-sub { max-width: 62ch; color: var(--fg-1); margin-top: var(--sp-2); }
+
+.pipe-vitals { display: flex; gap: var(--sp-5); flex: none; }
+.pipe-vitals div { display: flex; flex-direction: column; gap: 3px; }
+.pipe-vitals span {
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .11em; text-transform: uppercase; color: var(--fg-3);
+}
+.pipe-vitals strong { font-family: var(--font-mono); font-size: var(--fs-lg); color: var(--fg-0); }
+.pipe-vitals strong.good { color: var(--brand); }
+
+/* ── graph ───────────────────────────────────────────────────────────────── */
+.pipe-graph {
+  display: flex; align-items: stretch; gap: var(--sp-2);
+  overflow-x: auto; padding-bottom: var(--sp-3);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background:
+    linear-gradient(180deg, rgba(61, 220, 151, .03), transparent 40%),
+    var(--bg-1);
+  padding: var(--sp-4);
+}
+
+.pipe-stage {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  min-width: 178px; flex: 1 1 178px;
+  animation: af-rise var(--t) var(--ease-out) both;
+}
+/* The connector between stages: a hairline that reads as flow direction. */
+.pipe-stage + .pipe-stage { position: relative; padding-left: var(--sp-4); }
+.pipe-stage + .pipe-stage::before {
+  content: ""; position: absolute; left: 0; top: 46px; bottom: 12px;
+  width: 1px; background: linear-gradient(180deg, var(--line-strong), transparent);
+}
+/* A packet running the connector while the engine is working. It exists only
+   under [data-flowing], so a stopped engine draws a static hairline. */
+.pipe-stage[data-flowing="yes"] + .pipe-stage::after,
+.pipe-stage[data-flowing="yes"]::after {
+  content: ""; position: absolute; left: -1px; top: 46px;
+  width: 3px; height: 3px; border-radius: 50%; background: var(--brand);
+  --travel: 96px;
+  animation: af-travel 1.9s var(--ease-soft) infinite;
+}
+
+.pipe-stage-head { display: flex; flex-direction: column; gap: 2px; min-height: 54px; }
+.pipe-stage-head span {
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .14em; color: var(--brand-dim);
+}
+.pipe-stage-head h3 { font-size: var(--fs-base); color: var(--fg-0); }
+.pipe-stage-head p { font-size: var(--fs-nano); color: var(--fg-3); line-height: 1.4; }
+
+.pipe-nodes { display: flex; flex-direction: column; gap: var(--sp-3); }
+
+.pipe-node {
+  position: relative; display: flex; flex-direction: column; gap: 2px;
+  text-align: left; padding: var(--sp-3); padding-bottom: var(--sp-5);
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--bg-2); color: var(--fg-1); overflow: hidden;
+}
+.pipe-node:hover { border-color: var(--line-strong); background: var(--bg-3); }
+.pipe-node[data-selected="yes"] { border-color: var(--brand-dim); background: var(--brand-wash); }
+.pipe-node-top {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--fg-2);
+}
+.pipe-node b { font-family: var(--font-mono); font-size: var(--fs-xl); color: var(--fg-0); }
+.pipe-node small { font-size: var(--fs-nano); color: var(--fg-3); }
+.pipe-node[data-tone="good"] b { color: var(--brand); }
+.pipe-node[data-tone="bad"] b { color: var(--fail); }
+.pipe-node[data-tone="warn"] b { color: var(--warn); }
+
+/* The arrow label sits at the foot of the box it feeds, so the name of the step
+   and the thing it produces are read together. */
+.pipe-edge-label {
+  position: absolute; left: var(--sp-3); right: var(--sp-3); bottom: 6px;
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .06em; color: var(--fg-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pipe-edge-label::before { content: "↳ "; color: var(--line-strong); }
+
+/* A stage the engine is working in right now. The bar travels once per cycle;
+   nothing moves when the engine is stopped. */
+.pipe-node[data-live="yes"] { border-color: var(--brand-dim); animation: af-halo 2.4s var(--ease-soft) infinite; }
+.pipe-node[data-live="yes"]::after {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 34%;
+  background: linear-gradient(90deg, transparent, rgba(61, 220, 151, .1), transparent);
+  animation: af-sweep 1.7s var(--ease-soft) infinite;
+  pointer-events: none;
+}
+.pipe-node[data-live="yes"] .pipe-edge-label { color: var(--brand); }
+
+/* ── detail ──────────────────────────────────────────────────────────────── */
+.pipe-detail {
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--bg-1); overflow: hidden;
+}
+.pipe-detail > header {
+  padding: var(--sp-4); border-bottom: 1px solid var(--line); background: var(--bg-2);
+}
+.pipe-detail > header h3 { font-size: var(--fs-lg); color: var(--fg-0); }
+.pipe-detail > header p { color: var(--fg-2); margin-top: 3px; }
+
+.pane { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
+.pane-actions { display: flex; align-items: center; gap: var(--sp-3); }
+.pane-figures {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-3);
+}
+.pane-figures div {
+  display: flex; flex-direction: column; gap: 3px;
+  border: 1px solid var(--line); border-radius: var(--r); padding: var(--sp-3);
+  background: var(--bg-2);
+}
+.pane-figures span {
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .1em; text-transform: uppercase; color: var(--fg-3);
+}
+.pane-figures strong { font-size: var(--fs-lg); color: var(--fg-0); overflow-wrap: anywhere; }
+
+/* ── create form ─────────────────────────────────────────────────────────── */
+.pane-form {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3);
+  border: 1px solid var(--line-strong); border-radius: var(--r);
+  background: var(--bg-2); padding: var(--sp-4);
+}
+.pane-form label { display: flex; flex-direction: column; gap: 5px; font-size: var(--fs-xs); color: var(--fg-1); }
+.pane-form label.wide { grid-column: 1 / -1; }
+.pane-form input, .pane-form textarea {
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  background: var(--bg-1); color: var(--fg-0); padding: 7px var(--sp-2);
+  font-family: var(--font-mono); font-size: var(--fs-xs); resize: vertical;
+}
+.pane-form input:focus, .pane-form textarea:focus { outline: none; border-color: var(--brand-dim); }
+.pane-form > button { grid-column: 1 / -1; justify-self: start; }
+
+/* ── families ────────────────────────────────────────────────────────────── */
+.family-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: var(--sp-3);
+}
+.family-card {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--bg-2); padding: var(--sp-3);
+}
+.family-card[data-blocked="yes"] { border-left: 2px solid var(--warn); }
+.family-card header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.family-card h4 { font-size: var(--fs-base); color: var(--fg-0); }
+.family-card > code { font-family: var(--font-mono); font-size: var(--fs-nano); color: var(--fg-3); }
+.family-card p { font-size: var(--fs-xs); color: var(--fg-1); line-height: 1.5; }
+.family-block { color: var(--warn); font-size: var(--fs-nano); line-height: 1.5; }
+.family-card footer {
+  display: flex; align-items: center; gap: var(--sp-2); margin-top: auto; padding-top: var(--sp-2);
+  border-top: 1px solid var(--line);
+  font-family: var(--font-mono); font-size: var(--fs-nano); color: var(--fg-2);
+}
+.family-card footer .muted { margin-left: auto; }
+
+.chip.good { color: var(--brand); border-color: var(--line-glow); background: var(--brand-wash); }
+.chip.warn { color: var(--warn); border-color: #3d3524; background: #16130d; }
+
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm); background: var(--bg-1); color: var(--fg-2);
+}
+.icon-btn:hover { color: var(--fail); border-color: var(--fail); }
+
+/* ── templates ───────────────────────────────────────────────────────────── */
+.template-table code { font-size: var(--fs-nano); color: var(--fg-3); }
+.template-table td { vertical-align: top; }
+.template-table .chip { margin-left: var(--sp-2); }
+
+.source-view { border: 1px solid var(--line-strong); border-radius: var(--r); overflow: hidden; }
+.source-view header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--sp-2) var(--sp-3); background: var(--bg-3); border-bottom: 1px solid var(--line);
+}
+.source-view pre {
+  margin: 0; padding: var(--sp-3); overflow-x: auto; max-height: 420px;
+  font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.6;
+  color: var(--fg-1); background: var(--bg-0);
+}
+
+/* ── small lists ─────────────────────────────────────────────────────────── */
+.mini-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.mini-list li {
+  display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--sp-3);
+  align-items: baseline; padding: var(--sp-2); border-radius: var(--r-sm);
+}
+.mini-list li:nth-child(odd) { background: var(--bg-2); }
+.mini-list b { font-weight: 500; color: var(--fg-0); grid-column: 2; }
+.mini-list small { grid-column: 2; color: var(--fg-3); font-size: var(--fs-nano); }

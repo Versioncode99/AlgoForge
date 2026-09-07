@@ -286,26 +286,6 @@ def build_router(
         return bars, dataset.is_real, dataset.provider
 
     # ── templates ────────────────────────────────────────────────────────────
-    @router.get("/templates", response_model=ApiEnvelope[list[dict[str, Any]]])
-    def templates() -> ApiEnvelope[list[dict[str, Any]]]:
-        data = [
-            {
-                "key": t.key,
-                "name": t.name,
-                "family": t.family,
-                "hypothesis": t.hypothesis,
-                "falsifiable_prediction": t.falsifiable_prediction,
-                "parameters": [p.model_dump() for p in t.parameters],
-                "warmup_bars": t.warmup_bars,
-                "line_count": len(t.source.splitlines()),
-                "data_requirement": t.data_requirement,
-                "minimum_timeframe": t.minimum_timeframe,
-                "research_status": t.research_status,
-            }
-            for t in TEMPLATES.values()
-        ]
-        return ApiEnvelope(data=data, meta={"total": len(data)})
-
     # ── strategies ───────────────────────────────────────────────────────────
     @router.get("/strategies", response_model=ApiEnvelope[list[dict[str, Any]]])
     def list_strategies() -> ApiEnvelope[list[dict[str, Any]]]:
@@ -878,6 +858,32 @@ def build_router(
                     "Validation evidence, not a verdict. Run the judge to combine it "
                     "with the remaining gates."
                 ),
+            },
+        )
+
+    @router.get(
+        "/strategies/{strategy_id}/validation", response_model=ApiEnvelope[dict[str, Any] | None]
+    )
+    def validation_evidence(strategy_id: str) -> ApiEnvelope[dict[str, Any] | None]:
+        """Return the last stored validation receipt without re-running it."""
+        try:
+            library.get_spec(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(404, {"code": "strategy_not_found"}) from exc
+        payload = load_evidence(root, strategy_id)
+        if payload is None:
+            return ApiEnvelope(data=None, meta={"status": "NOT_TESTED"})
+        overfitting = payload.get("overfitting") or {}
+        return ApiEnvelope(
+            data={
+                **payload,
+                "probability_of_overfitting": overfitting.get("probability"),
+                "cscv_splits": overfitting.get("splits"),
+                "cscv_logits": overfitting.get("logits", []),
+            },
+            meta={
+                "status": "VALIDATION_RECORDED",
+                "note": "Stored development-validation evidence; holdout data is not exposed.",
             },
         )
 

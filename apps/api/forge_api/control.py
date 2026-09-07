@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -14,9 +14,11 @@ from forge.oracles import nautilus_capability
 from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
 from forge.prop.engine import MAX_BACKTEST_BARS, MIN_TRADING_DAYS
 from forge.research import ResearchLedger
-from forge.strategy import StrategyLibrary
+from forge.strategy import FamilyRegistry, StrategyLibrary, TemplateStore
+from forge.vault import VaultMirror, Workspace
 from pydantic import BaseModel, Field
 
+from forge_api.actions import Actions
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
 from forge_api.assistant import Assistant
@@ -24,6 +26,7 @@ from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
 from forge_api.opencode import OPENCODE_GO_DEFAULT_URL
+from forge_api.orchestrator import Orchestrator
 from forge_api.providers import (
     PROVIDER_OPENCODE,
     PROVIDERS,
@@ -35,6 +38,7 @@ from forge_api.settings_store import (
     ROLES,
     AISettings,
     BudgetSettings,
+    ResearchLoopSettings,
     Settings,
     SettingsStore,
 )
@@ -74,6 +78,9 @@ class SettingsPatch(BaseModel):
     engine_cycle_seconds: float | None = Field(default=None, ge=1.0, le=300.0)
     engine_max_strategies: int | None = Field(default=None, ge=1, le=500)
     databento_max_cost_usd: float | None = Field(default=None, ge=0.0, le=100.0)
+    research_loop_enabled: bool | None = None
+    research_interval_minutes: int | None = Field(default=None, ge=5, le=1440)
+    research_topics: list[str] | None = Field(default=None, min_length=1, max_length=12)
 
 
 class AskRequest(BaseModel):
@@ -139,20 +146,58 @@ def _partition_fraction(artifact: dict[str, Any]) -> float:
     return bars / source if source > 0 else 1.0
 
 
+@dataclass
+class ControlSurface:
+    """Everything the app factory needs back from one wiring pass.
+
+    Returning a tuple of seven was how the previous signature would have grown.
+    These objects are mutually dependent — the actions registry needs the engine,
+    the orchestrator needs the actions, the assistant needs both — so they are
+    built together and handed back named.
+    """
+
+    router: APIRouter
+    engine: AutonomousEngine
+    market: MarketService
+    agents: AgentService
+    actions: Actions
+    orchestrator: Orchestrator
+
+
 def build_control_router(
-    root: Path,
+    workspace: Workspace,
     library: StrategyLibrary,
     store: BacktestStore,
     log: ActivityLog,
     research_ledger: ResearchLedger,
-) -> tuple[APIRouter, AutonomousEngine, MarketService]:
+    mirror: VaultMirror,
+    families: FamilyRegistry,
+    templates: TemplateStore,
+) -> ControlSurface:
     router = APIRouter(prefix="/api/v1", tags=["control"])
+    root = workspace.repo
+    # Vendor archives stay with the checkout; see forge.vault.location.
     market = MarketService(root)
-    engine = AutonomousEngine(library, store, log, market, root, research_ledger)
+    engine = AutonomousEngine(library, store, log, market, workspace, research_ledger, mirror)
     settings_store = SettingsStore(root / "config" / "settings.json")
-    assistant = Assistant(root, library, store, log, settings_store)
-    agents = AgentService(root, log, settings_store)
+    agents = AgentService(workspace.store, log, settings_store, mirror)
     engine.agents = agents
+    actions = Actions(
+        workspace=workspace,
+        library=library,
+        store=store,
+        log=log,
+        market=market,
+        engine=engine,
+        agents=agents,
+        families=families,
+        templates=templates,
+        mirror=mirror,
+    )
+    orchestrator = Orchestrator(
+        workspace.data / "missions.db", actions, agents, settings_store, log, mirror
+    )
+    assistant = Assistant(root, library, store, log, settings_store, actions)
     agents.context = lambda: {
         "running": engine.state.running,
         "dataset": engine.state.config.dataset,
@@ -213,6 +258,7 @@ def build_control_router(
                 "engine_cycle_seconds": current.engine_cycle_seconds,
                 "engine_max_strategies": current.engine_max_strategies,
                 "databento_max_cost_usd": current.databento_max_cost_usd,
+                "research_loop": vars(current.research_loop),
                 "models": catalog_for(current.ai.provider),
                 "providers": list(PROVIDERS),
                 "roles": ROLES,
@@ -254,6 +300,18 @@ def build_control_router(
                 base_url=proposed_url,
                 routing=routing,
                 budget=budget,
+            ),
+            research_loop=ResearchLoopSettings(
+                enabled=current.research_loop.enabled
+                if body.research_loop_enabled is None
+                else body.research_loop_enabled,
+                interval_minutes=body.research_interval_minutes
+                or current.research_loop.interval_minutes,
+                topics=(
+                    [topic.strip()[:240] for topic in body.research_topics if topic.strip()]
+                    or current.research_loop.topics
+                )
+                if body.research_topics is not None else current.research_loop.topics,
             ),
             default_dataset=body.default_dataset or current.default_dataset,
             engine_cycle_seconds=body.engine_cycle_seconds or current.engine_cycle_seconds,
@@ -617,4 +675,11 @@ def build_control_router(
             },
         )
 
-    return router, engine, market
+    return ControlSurface(
+        router=router,
+        engine=engine,
+        market=market,
+        agents=agents,
+        actions=actions,
+        orchestrator=orchestrator,
+    )

@@ -1,0 +1,149 @@
+/* Orchestration.
+
+   The plan is the centre of this screen, not the result. Everything below the
+   launch box is history; everything in the plan box is a decision the operator
+   has not made yet, so it gets the contrast. */
+
+.orch { display: flex; flex-direction: column; gap: var(--sp-6); }
+
+.orch-hero {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--sp-6); flex-wrap: wrap;
+}
+.orch-hero h2 { font-size: var(--fs-hero); line-height: 1.02; letter-spacing: -.03em; color: var(--fg-0); }
+.orch-hero h2 span { color: var(--brand); }
+.orch-hero > div > p { max-width: 60ch; color: var(--fg-1); margin-top: var(--sp-3); line-height: 1.6; }
+
+.orch-vitals { display: flex; gap: var(--sp-4); flex: none; }
+.orch-vitals div {
+  display: flex; flex-direction: column; gap: 4px; min-width: 108px;
+  border: 1px solid var(--line); border-radius: var(--r); padding: var(--sp-3);
+  background: var(--bg-1);
+}
+.orch-vitals svg { width: 15px; height: 15px; color: var(--brand); }
+.orch-vitals strong { font-family: var(--font-mono); font-size: var(--fs-2xl); color: var(--fg-0); line-height: 1; }
+.orch-vitals p { font-size: var(--fs-nano); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
+
+.orch-running {
+  display: flex; align-items: center; gap: var(--sp-2);
+  border: 1px solid var(--brand-dim); border-radius: var(--r);
+  background: var(--brand-wash); color: var(--fg-0);
+  padding: var(--sp-2) var(--sp-3);
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+}
+
+/* ── launch ──────────────────────────────────────────────────────────────── */
+.orch-launch {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--bg-1); padding: var(--sp-4);
+}
+.orch-launch label {
+  font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .12em; text-transform: uppercase; color: var(--fg-2);
+}
+.orch-launch textarea {
+  border: 1px solid var(--line-strong); border-radius: var(--r);
+  background: var(--bg-0); color: var(--fg-0); padding: var(--sp-3);
+  font-family: var(--font-ui); font-size: var(--fs-base); line-height: 1.6; resize: vertical;
+  transition: border-color var(--t-fast) var(--ease);
+}
+.orch-launch textarea:focus { outline: none; border-color: var(--brand-dim); }
+.orch-launch-row { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.orch-examples { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.orch-examples .btn { text-align: left; max-width: 100%; white-space: normal; }
+
+/* ── plan ────────────────────────────────────────────────────────────────── */
+.orch-plan {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  border: 1px solid var(--brand-dim); border-radius: var(--r-lg);
+  background: linear-gradient(180deg, rgba(61, 220, 151, .05), transparent 30%), var(--bg-1);
+  padding: var(--sp-4);
+}
+.orch-plan > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); }
+.orch-plan h3 { font-size: var(--fs-lg); color: var(--fg-0); }
+.orch-rationale { color: var(--fg-1); line-height: 1.6; max-width: 84ch; }
+
+.plan-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.plan-steps li {
+  display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: var(--sp-3);
+  padding: var(--sp-3); border-radius: var(--r-sm); background: var(--bg-2);
+  border-left: 2px solid var(--line-strong);
+}
+.plan-steps li[data-status="completed"] { border-left-color: var(--pass); }
+.plan-steps li[data-status="failed"] { border-left-color: var(--fail); }
+.plan-steps li[data-status="running"] { border-left-color: var(--brand); animation: af-blink 1.6s var(--ease-soft) infinite; }
+.plan-index { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3); }
+.plan-steps strong {
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-0);
+}
+.plan-steps p { font-size: var(--fs-xs); color: var(--fg-2); margin-top: 3px; line-height: 1.5; }
+.plan-steps code {
+  display: block; margin-top: 5px; font-size: var(--fs-nano); color: var(--fg-3);
+  overflow-wrap: anywhere; line-height: 1.5;
+}
+.plan-steps code.bad { color: var(--fail); }
+
+/* ── history ─────────────────────────────────────────────────────────────── */
+.orch-history { display: flex; flex-direction: column; gap: var(--sp-2); }
+
+.mission-card { border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-1); overflow: hidden; }
+.mission-head {
+  display: flex; align-items: center; gap: var(--sp-3); width: 100%;
+  border: 0; background: transparent; color: var(--fg-1);
+  padding: var(--sp-3); text-align: left;
+}
+.mission-head:hover { background: var(--bg-2); }
+.mission-head b { font-weight: 500; color: var(--fg-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mission-caret { flex: none; color: var(--fg-3); transition: transform var(--t) var(--ease); }
+.mission-card[data-open="yes"] .mission-caret { transform: rotate(90deg); }
+.mission-status {
+  flex: none; font-family: var(--font-mono); font-size: var(--fs-nano);
+  letter-spacing: .1em; text-transform: uppercase;
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 3px var(--sp-2);
+}
+.mission-status.tone-good { color: var(--pass); border-color: var(--line-glow); background: var(--verdict-pass-wash); }
+.mission-status.tone-bad { color: var(--fail); border-color: #3a2523; background: var(--verdict-fail-wash); }
+.mission-status.tone-warn { color: var(--warn); border-color: #3d3524; background: var(--verdict-unknown-wash); }
+.mission-status.tone-live { color: var(--brand); border-color: var(--brand-dim); background: var(--brand-wash); animation: af-blink 1.6s var(--ease-soft) infinite; }
+
+.mission-body {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  padding: 0 var(--sp-3) var(--sp-3); border-top: 1px solid var(--line);
+  animation: af-expand var(--t) var(--ease-out) both; transform-origin: top;
+}
+.mission-body .orch-rationale { padding-top: var(--sp-3); }
+.mission-outcome { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-2); }
+
+/* ── action registry ─────────────────────────────────────────────────────── */
+.action-registry { display: flex; flex-direction: column; gap: var(--sp-3); }
+.action-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(258px, 1fr)); gap: var(--sp-3); }
+.action-card {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-2); padding: var(--sp-3);
+}
+.action-card header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.action-card code { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--brand); }
+.action-card p { font-size: var(--fs-xs); color: var(--fg-1); line-height: 1.5; }
+.action-card footer { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: auto; }
+.action-card footer small {
+  font-family: var(--font-mono); font-size: var(--fs-nano); color: var(--fg-3);
+  border: 1px solid var(--line); border-radius: var(--r-sm); padding: 2px 5px;
+}
+.action-card footer small.req { color: var(--fg-1); border-color: var(--line-strong); }
+
+.action-log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.action-log li {
+  display: grid; grid-template-columns: 14px 152px minmax(0, 1fr) 54px;
+  gap: var(--sp-2); align-items: baseline;
+  padding: 5px var(--sp-2); border-radius: var(--r-sm);
+  font-size: var(--fs-nano); color: var(--fg-2);
+}
+.action-log li:nth-child(odd) { background: var(--bg-2); }
+.action-log li svg { width: 11px; height: 11px; }
+.action-log li[data-ok="yes"] svg { color: var(--pass); }
+.action-log li[data-ok="no"] svg { color: var(--fail); }
+.action-log code { font-family: var(--font-mono); color: var(--fg-1); }
+.action-log span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action-log small { text-align: right; color: var(--fg-3); }

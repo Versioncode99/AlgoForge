@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, ArrowUpRight, BookOpen, BrainCircuit, Check, Clock3, Cpu, FlaskConical, Network, Pause, Play, Search, Send, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { getJson, patchJson, postJson } from '../api'
-import type { EngineStatus } from '../types'
+import type { EngineStatus, ResearchLoopStatus } from '../types'
 
 type Agent = {
   id: string; label: string; mission: string; skills: string[]; tool: string
@@ -12,7 +12,8 @@ type Agent = {
 type Worker = { id: number; policy: string; stage: string; paused: boolean; strategy_id: string | null }
 type Task = { id: string; role: string; task: string; summary: string; status: string; mode: string; finished_at: number }
 type Command = {
-  roles: Agent[]; engine: EngineStatus & { workers: Worker[]; stopping: boolean }
+  roles: Agent[]; orchestrator: Agent | null; specialists: Agent[]
+  engine: EngineStatus & { workers: Worker[]; stopping: boolean }
   source_count: number; model_calls_today: number; model_call_limit: number; tasks: Task[]
   proposals: { id: string; template: string; status: string; hypothesis: string }[]
 }
@@ -21,15 +22,17 @@ export type ResearchSource = {
   summary: string; replication_gap: string; templates: string[]; topic: string
   origin: string; evidence: string; content_level: string
 }
-const POSITIONS = [
-  [23, 13], [77, 13], [13, 38], [87, 38],
-  [13, 65], [87, 65], [28, 89], [72, 89],
-]
 const SHORT: Record<string, string> = {
   research: 'Research scout', hypothesis: 'Hypothesis', strategy_code: 'Strategy engineer',
   validation: 'Validation', risk: 'Risk officer', post_mortem: 'Post-mortem', bulk: 'Bulk worker', chat: 'Console chat',
 }
 const isBusy = (agent: Agent) => ['running', 'queued'].includes(agent.status)
+
+/** Roles are a registry, so their geometry must be derived from the response. */
+const specialistPosition = (index: number, count: number) => {
+  const angle = -Math.PI / 2 + (Math.PI * 2 * index) / Math.max(count, 1)
+  return { x: 50 + Math.cos(angle) * 38, y: 50 + Math.sin(angle) * 39 }
+}
 
 export function AgentCommandView() {
   const qc = useQueryClient()
@@ -37,14 +40,18 @@ export function AgentCommandView() {
   const [task, setTask] = useState('')
   const [pane, setPane] = useState<'network' | 'research' | 'experiments'>('network')
   const command = useQuery({ queryKey: ['agent-command'], queryFn: () => getJson<Command>('/agent-command'), refetchInterval: 2000 })
+  const researchLoop = useQuery({ queryKey: ['research-loop'], queryFn: () => getJson<ResearchLoopStatus>('/research-loop'), refetchInterval: 5000 })
   const sources = useQuery({ queryKey: ['research-sources'], queryFn: () => getJson<ResearchSource[]>('/research/sources'), refetchInterval: 8000 })
   const refresh = () => { qc.invalidateQueries({ queryKey: ['agent-command'] }); qc.invalidateQueries({ queryKey: ['research-sources'] }) }
   const run = useMutation({ mutationFn: () => postJson(`/agent-command/${selected}/run`, { task }), onSuccess: () => { setTask(''); refresh() } })
   const control = useMutation({ mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => patchJson(`/agent-command/${id}`, { enabled }), onSuccess: refresh })
   const workerControl = useMutation({ mutationFn: (worker: Worker) => patchJson(`/engine/workers/${worker.id}`, { paused: !worker.paused }), onSuccess: refresh })
+  const runResearch = useMutation({ mutationFn: () => postJson<ResearchLoopStatus>('/research-loop/run'), onSuccess: () => qc.invalidateQueries({ queryKey: ['research-loop'] }) })
   const data = command.data
-  const agent = data?.roles.find((r) => r.id === selected)
-  const active = data?.roles.filter(isBusy).length ?? 0
+  const specialists = data?.specialists ?? data?.roles.filter((r) => r.id !== 'orchestrator') ?? []
+  const coordinator = data?.orchestrator ?? data?.roles.find((r) => r.id === 'orchestrator') ?? null
+  const agent = specialists.find((r) => r.id === selected)
+  const active = specialists.filter(isBusy).length
   const error = run.error || control.error || workerControl.error
   if (!data) return <div className="command-loading" role="status">{command.isError ? 'Agent connection unavailable. Retrying…' : 'Connecting to the research team…'}<div className="skeleton" /></div>
 
@@ -67,6 +74,13 @@ export function AgentCommandView() {
       <button className={pane === 'experiments' ? 'active' : ''} onClick={() => setPane('experiments')}><FlaskConical size={15} /> Experiment queue <small>{data.proposals.length}</small></button>
       <span className="command-nav-note">{data.model_calls_today} / {data.model_call_limit} model calls today</span>
     </div>
+    {researchLoop.data && <div className="research-loop-strip" data-active={researchLoop.data.in_flight}>
+      <span><i /> CONTINUOUS RESEARCH</span>
+      <strong>{researchLoop.data.enabled ? researchLoop.data.in_flight ? 'SCANNING' : 'ARMED' : 'PAUSED'}</strong>
+      <small>{researchLoop.data.cycles} cycles · {researchLoop.data.sources_found} references · {researchLoop.data.downstream_tasks} hand-offs</small>
+      <small>{researchLoop.data.scope}</small>
+      <button className="btn tiny" disabled={!researchLoop.data.enabled || researchLoop.data.in_flight || runResearch.isPending} onClick={() => runResearch.mutate()}>{runResearch.isPending ? 'Queued…' : 'Run now'}</button>
+    </div>}
     {error && <p className="command-error" role="alert">{error.message}</p>}
     {command.isError && <p className="command-error" role="status">Connection lost. Showing the last received state.</p>}
 
@@ -79,32 +93,34 @@ export function AgentCommandView() {
               <defs><radialGradient id="core-glow"><stop offset="0" stopColor="#71dfb5" stopOpacity=".16" /><stop offset="1" stopColor="#71dfb5" stopOpacity="0" /></radialGradient></defs>
               <ellipse cx="500" cy="325" rx="240" ry="230" fill="url(#core-glow)" />
               {[130, 200, 275].map((r) => <circle key={r} cx="500" cy="325" r={r} className="neural-orbit" />)}
-              {data.roles.map((role, i) => {
-                const [x, y] = POSITIONS[i]
+              {specialists.map((role, i) => {
+                const { x, y } = specialistPosition(i, specialists.length)
                 const path = `M 500 325 Q ${x < 50 ? 400 : 600} ${y * 6.5} ${x * 10} ${y * 6.5}`
                 return <g key={role.id} data-flow={isBusy(role) ? 'active' : 'idle'} className={selected === role.id ? 'selected-link' : ''}>
                   <path d={path} className="neural-wire" /><path d={path} className="neural-packet" />
                 </g>
               })}
             </svg>
-            <div className={`neural-core ${active ? 'is-processing' : ''}`}>
+            <div className={`neural-core ${active || (coordinator && isBusy(coordinator)) ? 'is-processing' : ''}`}>
               <div className="core-ring" /><BrainCircuit size={34} /><strong>FORGE</strong><span>RESEARCH CORE</span>
-              <small>{active ? `${active} active connections` : 'Ready to explore'}</small>
+              <small>{coordinator && isBusy(coordinator) ? 'Orchestrating mission' : active ? `${active} active connections` : 'Ready to explore'}</small>
             </div>
-            {data.roles.map((role, i) => <button key={role.id} aria-pressed={selected === role.id}
+            {specialists.map((role, i) => {
+              const position = specialistPosition(i, specialists.length)
+              return <button key={role.id} aria-pressed={selected === role.id}
               className={`neural-node ${selected === role.id ? 'selected' : ''} ${isBusy(role) ? 'is-working' : ''}`}
-              style={{ left: `${POSITIONS[i][0]}%`, top: `${POSITIONS[i][1]}%`, animationDelay: `${i * 50}ms` }}
+              style={{ left: `${position.x}%`, top: `${position.y}%`, animationDelay: `${i * 50}ms` }}
               onClick={() => { setSelected(role.id); setTask('') }}>
               <span className="node-number">0{i + 1}<i data-status={!role.enabled ? 'paused' : role.status} /></span>
               <strong>{SHORT[role.id]}</strong><small>{!role.enabled ? 'Paused' : role.status}</small>
-            </button>)}
+            </button>})}
           </div>
           <div className="neural-caption"><span><i className="legend-active" /> Live task</span><span><i /> Available</span><p>Select a specialist to inspect and direct its work</p></div>
         </div>
 
         {agent && <aside className="agent-inspector" key={agent.id}>
           <div className="inspector-top"><span className="inspector-icon"><Cpu size={21} /></span><span className={`agent-status status-${agent.status}`}>{!agent.enabled ? 'Paused' : agent.status}</span></div>
-          <p className="command-kicker">SPECIALIST / {String(data.roles.indexOf(agent) + 1).padStart(2, '0')}</p>
+          <p className="command-kicker">SPECIALIST / {String(specialists.indexOf(agent) + 1).padStart(2, '0')}</p>
           <h3>{agent.label}</h3><p className="agent-mission">{agent.mission}</p>
           <div className="agent-skills">{agent.skills.map((skill) => <span key={skill}><Check size={10} />{skill}</span>)}</div>
           <div className="agent-current"><span>Current assignment</span><p>{agent.task}</p><div><Clock3 size={12} />{agent.elapsed_seconds.toFixed(1)}s <span>·</span> {agent.tool}</div></div>

@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import {
   ChartNoAxesCombined, Layers, LockKeyhole, MessageSquare, Microscope,
-  ScrollText, ShieldCheck, SlidersHorizontal, TriangleAlert, Network,
+  ScrollText, ShieldCheck, SlidersHorizontal, TriangleAlert, Network, Workflow, Rocket, Grid3X3,
 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { getJson } from './api'
 import { Wordmark } from './components/Logo'
+import { ViewErrorBoundary } from './components/ViewErrorBoundary'
 import type { ActivityEvent, StrategyListItem, Summary } from './types'
 import { OverviewView } from './views/Overview'
 const PropFirmView = lazy(() => import('./views/PropFirm').then(m => ({ default: m.PropFirmView })))
@@ -14,6 +15,9 @@ const ConsoleView = lazy(() => import('./views/Settings').then(m => ({ default: 
 const SettingsView = lazy(() => import('./views/Settings').then(m => ({ default: m.SettingsView })))
 const StrategiesView = lazy(() => import('./views/Strategies').then(m => ({ default: m.StrategiesView })))
 const AgentCommandView = lazy(() => import('./views/AgentCommand').then(m => ({ default: m.AgentCommandView })))
+const PipelineView = lazy(() => import('./views/Pipeline').then(m => ({ default: m.PipelineView })))
+const OrchestratorView = lazy(() => import('./views/Orchestrator').then(m => ({ default: m.OrchestratorView })))
+const ValidationLabView = lazy(() => import('./views/ValidationLab').then(m => ({ default: m.ValidationLabView })))
 
 /* Five working sections and a console.
  *
@@ -22,14 +26,20 @@ const AgentCommandView = lazy(() => import('./views/AgentCommand').then(m => ({ 
  * whatever was selected — nothing on them could be acted on. The judge's gates
  * now live inside Strategies, against the real strategy they judge. Evolution
  * moved into Settings, where an update check belongs. */
-const tabs = ['Overview', 'Agent Command', 'Research Lab', 'Strategies', 'Prop Firm', 'Console', 'Settings'] as const
+const tabs = [
+  'Overview', 'Pipeline', 'Orchestrator', 'Agent Command', 'Research Lab',
+  'Strategies', 'Validation Lab', 'Prop Firm', 'Console', 'Settings',
+] as const
 type Tab = (typeof tabs)[number]
 
 const ICONS: Record<Tab, typeof Layers> = {
   Overview: ChartNoAxesCombined,
+  Pipeline: Workflow,
+  Orchestrator: Rocket,
   'Agent Command': Network,
   'Research Lab': Microscope,
   Strategies: Layers,
+  'Validation Lab': Grid3X3,
   'Prop Firm': ShieldCheck,
   Console: MessageSquare,
   Settings: SlidersHorizontal,
@@ -37,9 +47,12 @@ const ICONS: Record<Tab, typeof Layers> = {
 
 const EYEBROW: Record<Tab, string> = {
   Overview: 'AUTONOMOUS ENGINE',
+  Pipeline: 'SOURCES · CATALOGUE · EVIDENCE',
+  Orchestrator: 'ONE OBJECTIVE, THE WHOLE TEAM',
   'Agent Command': 'YOUR QUANT RESEARCH TEAM',
   'Research Lab': 'EVIDENCE INVENTORY',
   Strategies: 'BUILD · RUN · JUDGE',
+  'Validation Lab': 'WALK-FORWARD · CSCV · CPCV',
   'Prop Firm': 'ACCOUNT SURVIVAL',
   Console: 'ASK THE LEDGER',
   Settings: 'PROVIDERS · DATA · UPDATES',
@@ -132,17 +145,22 @@ export function App() {
             </div>
           )}
 
+          <ViewErrorBoundary view={tab} onOverview={() => setTab('Overview')}>
           <Suspense fallback={<div className="state" role="status">Opening workspace…</div>}>
           <div className="view-content" key={tab}>
           {online && tab === 'Overview' && <OverviewView onAgents={() => setTab('Agent Command')} />}
+          {online && tab === 'Pipeline' && <PipelineView />}
+          {online && tab === 'Orchestrator' && <OrchestratorView />}
           {online && tab === 'Agent Command' && <AgentCommandView />}
           {online && tab === 'Research Lab' && <ResearchLabView />}
           {online && tab === 'Strategies' && <StrategiesView />}
+          {online && tab === 'Validation Lab' && <ValidationLabView />}
           {online && tab === 'Prop Firm' && <PropFirmView />}
           {online && tab === 'Console' && <ConsoleView />}
           {online && tab === 'Settings' && <SettingsView />}
           </div>
           </Suspense>
+          </ViewErrorBoundary>
         </main>
       </div>
 

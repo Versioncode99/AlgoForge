@@ -34,7 +34,13 @@ class StrategySpec(FrozenModel):
     strategy_id: str
     name: str
     lineage: str
-    family: Literal["momentum", "mean_reversion", "volatility", "breakout"]
+    # A registry key, not a closed enum. Families are research classifications
+    # that the operator and the agents extend at run time; see
+    # forge.strategy.families. The pattern is the only structural constraint,
+    # and membership is checked where a family is *chosen*, not where a spec is
+    # read back, so an old spec never becomes unloadable because a family was
+    # renamed.
+    family: str = Field(pattern=r"^[a-z][a-z0-9_]{2,39}$")
     market: Literal["futures", "crypto"]
     symbol: str
     bar_spec: str = "1m"

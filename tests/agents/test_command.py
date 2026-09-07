@@ -13,6 +13,7 @@ import pytest
 from forge.research import ResearchLedger
 from forge.research.sources import ResearchLibrary
 from forge.strategy import StrategyLibrary, generate_bars, run_backtest
+from forge.vault import Workspace
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
 from forge_api.engine import AutonomousEngine, EngineConfig
@@ -75,8 +76,19 @@ def test_proposals_reject_bad_parameters_and_fabricated_sources(service):
         service.propose({**raw, "source_ids": ["invented"]}, {"tsmom"})
 
 
-def test_eight_roles_work_and_pause_without_a_model(service):
-    assert len(service.snapshot()["roles"]) == 8
+def test_roles_work_and_pause_without_a_model(service):
+    # Nine registered roles; eight of them take a direct assignment. The
+    # orchestrator is the ninth and is deliberately not one of them — it is given
+    # an objective and runs a mission, so submitting a task to it is refused.
+    snapshot = service.snapshot()
+    assert len(snapshot["roles"]) == 9
+    assert snapshot["orchestrator"]["id"] == "orchestrator"
+    assert len(snapshot["specialists"]) == 8
+    assert "orchestrator" not in {role["id"] for role in snapshot["specialists"]}
+    assert len(service.roles()) == 8
+    assert "orchestrator" not in service.roles()
+    with pytest.raises(ValueError, match="mission"):
+        service.submit("orchestrator")
     service.control("risk", False)
     with pytest.raises(ValueError, match="paused"):
         service.submit("risk")
@@ -135,7 +147,7 @@ def engine(tmp_path):
         BacktestStore(tmp_path / "backtests"),
         ActivityLog(tmp_path / "events.ndjson"),
         MarketService(tmp_path),
-        tmp_path,
+        Workspace(repo=tmp_path, root=tmp_path, vault_mode=False).ensure(),
         ResearchLedger(tmp_path / "research.db"),
     )
 

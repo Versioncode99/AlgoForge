@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from forge.research import ResearchLedger
 from forge.strategy import StrategyLibrary
+from forge.vault import Workspace
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.market import MarketService
@@ -26,7 +27,9 @@ def engine(tmp_path: Path) -> AutonomousEngine:
         BacktestStore(tmp_path / "backtests"),
         ActivityLog(tmp_path / "activity.ndjson"),
         MarketService(Path(".")),
-        tmp_path,
+        # A flat workspace rooted at tmp_path: store, notes and repo all resolve
+        # under it, which is what the pre-vault layout does.
+        Workspace(repo=tmp_path, root=tmp_path, vault_mode=False).ensure(),
         ResearchLedger(tmp_path / "research.db"),
     )
 

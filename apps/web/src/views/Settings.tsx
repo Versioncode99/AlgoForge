@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bot, Check, KeyRound, RefreshCw, Send, Server, X } from 'lucide-react'
+import { Bot, Check, KeyRound, Pause, RefreshCw, Send, Server, X } from 'lucide-react'
 import { useState } from 'react'
 import { getJson, patchJson, postJson } from '../api'
+import { StoragePanel } from '../components/StoragePanel'
 import { PanelHead, Stat } from '../components/ui'
 import type { AskResult, Evolution, OracleInfo, SettingsPayload } from '../types'
 
@@ -35,6 +36,8 @@ export function SettingsView() {
       </div>
 
       {error && <p className="warning bad">{error}</p>}
+
+      <StoragePanel />
 
       <div className="panel">
         <header>
@@ -201,6 +204,17 @@ export function SettingsView() {
         <header><h2>Research defaults</h2></header>
         <div className="panel-body">
           <div className="stack">
+            <label className="budget-row">
+              <span>Continuous research<small>Runs while the local API is open; independent of the backtest engine</small></span>
+              <button className={s.research_loop.enabled ? 'btn primary' : 'btn'} onClick={() => patch.mutate({ research_loop_enabled: !s.research_loop.enabled })}>
+                {s.research_loop.enabled ? <Check /> : <Pause />} {s.research_loop.enabled ? 'Enabled' : 'Paused'}
+              </button>
+            </label>
+            <label className="budget-row">
+              <span>Research cadence<small>Minutes between bounded evidence scans</small></span>
+              <input type="number" step="5" min="5" max="1440" defaultValue={s.research_loop.interval_minutes}
+                onBlur={(e) => patch.mutate({ research_interval_minutes: Number(e.target.value) })} />
+            </label>
             <label className="budget-row">
               <span>Engine cycle seconds<small>Gap between candidates</small></span>
               <input type="number" step="1" min="1" defaultValue={s.engine_cycle_seconds}

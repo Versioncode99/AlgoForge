@@ -22,7 +22,6 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from forge.contracts.hashing import content_hash
@@ -31,6 +30,7 @@ from forge.judge import Judge, JudgeInput
 from forge.prop import MIN_TRADING_DAYS, load_rules, simulate_prop_paths
 from forge.research import ResearchLedger, ResearchPartitions, chronological_split
 from forge.strategy import TEMPLATES, StrategyLibrary, run_backtest
+from forge.vault import VaultMirror, Workspace
 
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
@@ -126,15 +126,20 @@ class AutonomousEngine:
         store: BacktestStore,
         log: ActivityLog,
         market: MarketService,
-        root: Path,
+        workspace: Workspace,
         research_ledger: ResearchLedger,
+        mirror: VaultMirror | None = None,
     ) -> None:
         self.library = library
         self.store = store
         self.log = log
         self.market = market
-        self.root = root
+        self.workspace = workspace
+        # Data artifacts follow the workspace; rule sets are version-controlled
+        # contracts and stay with the code.
+        self.root = workspace.store
         self.research_ledger = research_ledger
+        self.mirror = mirror
         self.state = EngineState()
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
@@ -151,8 +156,8 @@ class AutonomousEngine:
         self._active: dict[int, str] = {}
         self._paused: set[int] = set()
         self.agents: AgentService | None = None
-        self.experiments = Experiments(root / "data" / "experiments.db")
-        self._rules = load_rules(root / "rules")
+        self.experiments = Experiments(workspace.data / "experiments.db")
+        self._rules = load_rules(workspace.repo / "rules")
         # Failure constraints: (template, rounded parameter signature) -> reason.
         self._constraints: dict[tuple[str, str], str] = {}
         self._lineage_failures: dict[str, int] = {}
@@ -481,6 +486,13 @@ class AutonomousEngine:
             self._active[worker] = spec.strategy_id
         self.experiments.finish(attempt_id, strategy_id=spec.strategy_id, status="running")
         self._bump("created")
+        if self.mirror is not None:
+            titles = [
+                str(item["title"])
+                for item in (self.agents.research.list() if self.agents else [])
+                if item["id"] in set(sources)
+            ]
+            self.mirror.strategy(spec, source_titles=titles)
         self.log.record("STRATEGY", f"created {spec.strategy_id}", "info", spec.strategy_id)
 
         self._stage(worker, "backtesting")
@@ -551,6 +563,8 @@ class AutonomousEngine:
                 dataset_key=self.state.config.dataset,
             )
         self.store.save(result)
+        if self.mirror is not None:
+            self.mirror.backtest(result.model_dump(mode="json"), strategy_name=spec.name)
         self.experiments.finish(attempt_id, status="backtested")
         self._bump("backtested")
         self.log.record(
@@ -689,6 +703,13 @@ class AutonomousEngine:
             failed = [gate for gate in verdict.gates if gate.status != "PASS"]
             if verdict.decision == "PASS":
                 self._bump("holdout_passed")
+
+        if self.mirror is not None:
+            self.mirror.verdict(
+                verdict.model_dump(mode="json"),
+                strategy_name=spec.name,
+                strategy_id=spec.strategy_id,
+            )
 
         if verdict.decision == "PASS":
             self._bump("passed")

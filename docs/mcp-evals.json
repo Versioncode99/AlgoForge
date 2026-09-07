@@ -1,0 +1,12 @@
+[
+  {"prompt":"List the strategy families and tell me which are blocked by missing data.","expected_tools":["list_families"],"write_required":false},
+  {"prompt":"Show the latest ten strategies and their evidence tiers.","expected_tools":["list_strategies"],"write_required":false},
+  {"prompt":"What is the autonomous engine doing right now?","expected_tools":["engine_status"],"write_required":false},
+  {"prompt":"Find research already stored about probability of backtest overfitting.","expected_tools":["read_research"],"write_required":false},
+  {"prompt":"Which executable templates belong to the momentum family?","expected_tools":["list_templates"],"write_required":false},
+  {"prompt":"Search scholarly metadata for intraday futures transaction-cost studies.","expected_tools":["search_papers"],"write_required":true},
+  {"prompt":"Register an order-book imbalance family requiring L2 data and explain whether it can run.","expected_tools":["create_family"],"write_required":true},
+  {"prompt":"Create a source-linked strategy from an existing template.","expected_tools":["create_strategy"],"write_required":true},
+  {"prompt":"Backtest this strategy on the configured real dataset.","expected_tools":["backtest_strategy"],"write_required":true},
+  {"prompt":"Ask the validation specialist to review the latest evidence without claiming it passed.","expected_tools":["run_agent"],"write_required":true}
+]

@@ -6,6 +6,9 @@ import './styles/base.css'
 import './styles/app.css'
 import './styles/workspace.css'
 import './styles/command.css'
+import './styles/pipeline.css'
+import './styles/orchestrator.css'
+import './styles/storage.css'
 
 const queryClient = new QueryClient({defaultOptions: {queries: {retry: 1, staleTime: 30_000}}})
 

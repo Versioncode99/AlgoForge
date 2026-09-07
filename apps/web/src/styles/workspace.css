@@ -103,6 +103,25 @@
   overflow: hidden; margin-bottom: var(--sp-3);
 }
 .headline-row .stat-tile { background: var(--bg-1); padding: var(--sp-3); }
+
+/* Validation Lab: dense evidence, with colour carrying rank rather than decoration. */
+.validation-toolbar { display:flex; align-items:end; gap:var(--sp-4); padding:var(--sp-4); }
+.validation-toolbar label { display:grid; gap:6px; min-width:220px; color:var(--fg-2); font:var(--fs-xs) var(--font-mono); text-transform:uppercase; letter-spacing:.08em; }
+.validation-toolbar .btn { margin-left:auto; }
+.validation-empty { display:grid; justify-items:center; gap:var(--sp-3); padding:var(--sp-10); color:var(--fg-2); text-align:center; }
+.validation-empty svg { width:34px; height:34px; color:var(--warn); }
+.validation-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; padding:0; background:var(--line); }
+.validation-metrics>div { display:grid; gap:7px; padding:var(--sp-4); background:var(--bg-1); }
+.validation-metrics span,.validation-heat span { color:var(--fg-2); font:var(--fs-xs) var(--font-mono); text-transform:uppercase; letter-spacing:.07em; }
+.validation-metrics strong { font:500 var(--fs-xl) var(--font-mono); }
+.validation-icon svg { width:15px; height:15px; color:var(--brand); }
+.validation-heat { display:grid; grid-template-columns:230px minmax(0,1fr); align-items:center; gap:var(--sp-4); }
+.validation-heat>div:first-child { display:grid; gap:5px; }
+.validation-heat small { color:var(--fg-3); }
+.heat-cells { display:grid; grid-template-columns:repeat(auto-fit,minmax(12px,1fr)); gap:3px; min-height:34px; padding:4px; background:var(--bg-0); border:1px solid var(--line); border-radius:var(--r-sm); }
+.heat-cells i { min-height:24px; border-radius:2px; transition:transform var(--t-fast) var(--ease); }
+.heat-cells i:hover { transform:scaleY(1.18); outline:1px solid var(--fg-1); }
+@media(max-width:760px) { .validation-toolbar { align-items:stretch; flex-direction:column; }.validation-toolbar label { min-width:0; width:100%; }.validation-toolbar .btn { margin:0; }.validation-heat { grid-template-columns:1fr; } }
 .stat-tile[data-tone="good"] .stat-value { color: var(--verdict-pass); }
 .stat-tile[data-tone="bad"] .stat-value { color: var(--verdict-fail); }
 .stat-tile[data-tone="unknown"] .stat-value { color: var(--verdict-unknown); }

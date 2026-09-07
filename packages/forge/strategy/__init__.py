@@ -1,4 +1,6 @@
+from forge.strategy.authoring import TemplateRejected, TemplateStore
 from forge.strategy.catalog import StrategyCapability, strategy_capability_catalog
+from forge.strategy.families import BUILTIN_FAMILIES, Family, FamilyRegistry
 from forge.strategy.guard import GuardViolation, assert_safe, check_source
 from forge.strategy.library import StrategyLibrary, slugify
 from forge.strategy.models import BacktestResult, ParameterSpec, StrategySpec, Trade
@@ -13,8 +15,11 @@ TEMPLATES.update(QUANT_TEMPLATES)
 TEMPLATES.update(STATISTICAL_TEMPLATES)
 
 __all__ = [
+    "BUILTIN_FAMILIES",
     "TEMPLATES",
     "BacktestResult",
+    "Family",
+    "FamilyRegistry",
     "GuardViolation",
     "LookaheadError",
     "ParameterSpec",
@@ -23,6 +28,8 @@ __all__ = [
     "StrategyLibrary",
     "StrategySpec",
     "Template",
+    "TemplateRejected",
+    "TemplateStore",
     "Trade",
     "Window",
     "assert_safe",

@@ -214,8 +214,15 @@ export type SettingsPayload = {
   }
   default_dataset: string; engine_cycle_seconds: number
   engine_max_strategies: number; databento_max_cost_usd: number
+  research_loop: { enabled: boolean; interval_minutes: number; topics: string[] }
   models: ModelInfo[]; roles: RoleInfo[]; credentials: CredentialInfo[]
   providers: ProviderInfo[]
+}
+export type ResearchLoopStatus = {
+  enabled: boolean; running: boolean; in_flight: boolean; interval_minutes: number
+  topics: string[]; topic_index: number; cycles: number; sources_found: number
+  downstream_tasks: number; last_started: string | null; last_finished: string | null
+  next_run: string | null; last_error: string | null; scope: string; authority: string
 }
 export type OracleInfo = {
   oracle_id: string; installed: boolean; version: string | null; ready: boolean
@@ -264,4 +271,68 @@ export type PropMatrix = {
   rules: { rule_id: string; display_name: string; provider: string; phase: string; verified: boolean }[]
   skipped: MatrixSkip[]
   paths: number
+}
+
+/* ── Storage, catalogue and orchestration ───────────────────────────────── */
+export type StorageFolder = { name: string; path: string; kind: 'notes' | 'store' }
+export type StoragePayload = {
+  root: string; repo: string; pointer: string
+  vault_mode: boolean; is_obsidian_vault: boolean
+  notes: string; store: string; exists: boolean; writable: boolean
+  note_bytes: number
+  counts: {
+    strategies: number; strategy_notes: number; paper_notes: number; backtest_notes: number
+    verdict_notes: number; family_notes: number; mission_notes: number; custom_templates: number
+  }
+  mirror: {
+    enabled: boolean; notes_written: number; notes_skipped: number
+    last_error: string | null; notes_root: string
+  }
+  folders: StorageFolder[]
+  stays_in_repo: { name: string; path: string; why: string }[]
+}
+export type StorageInspect = {
+  path: string; exists: boolean; creatable: boolean; writable: boolean
+  is_obsidian_vault: boolean; vault_mode: boolean; already_initialised: boolean
+  existing_strategies: number; problems: string[]; usable: boolean
+}
+
+export type FamilyInfo = {
+  key: string; label: string; description: string; mechanism: string
+  data_requirements: string[]; origin: string; created_at: string; created_by: string
+  templates: string[]; template_count: number
+  runnable: boolean; blocked_by: string[]; status: 'RUNNABLE' | 'BLOCKED_DATA'
+}
+export type CatalogTemplate = TemplateInfo & {
+  origin: 'builtin' | 'custom'; grid_points: number
+}
+
+export type ActionSchema = {
+  name: string; description: string; mutating: boolean
+  parameters: { type: string; properties: Record<string, Record<string, unknown>>; required: string[] }
+}
+export type MissionStep = {
+  index: number; kind: 'action' | 'agent'; action: string | null; role: string | null
+  task?: string; arguments?: Record<string, unknown>; label: string; why: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  summary: string; error: string | null; job_id: string | null
+  started_at: number | null; finished_at: number | null
+  result?: Record<string, unknown> | null
+}
+export type Mission = {
+  id: string; objective: string
+  status: 'planned' | 'running' | 'completed' | 'partial' | 'failed'
+  plan_source: string; plan_model: string | null
+  plan_rationale: string; plan_note: string | null
+  stop_on_failure: boolean; started_at: number; finished_at: number | null
+  steps: MissionStep[]; outcome: string | null; job_id: string | null
+}
+export type ActionRecord = {
+  action: string; ok: boolean; arguments: Record<string, unknown>
+  result?: Record<string, unknown>; error?: string; elapsed_seconds: number; at: number
+}
+export type MissionSnapshot = {
+  missions: Mission[]; current: string | null; running: boolean
+  actions: ActionSchema[]; recent_actions: ActionRecord[]
+  roles: string[]; max_steps: number
 }

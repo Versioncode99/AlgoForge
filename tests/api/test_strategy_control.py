@@ -182,6 +182,23 @@ def test_settings_routing_can_be_changed_per_role(client):
     assert updated["ai"]["routing"]["hypothesis"] == "deepseek-v4-pro", "other roles untouched"
 
 
+def test_continuous_research_settings_are_persistent_and_bounded(client):
+    current = client.get("/api/v1/settings").json()["data"]
+    assert current["research_loop"]["enabled"] is True
+    updated = client.patch(
+        "/api/v1/settings",
+        json={"research_loop_enabled": False, "research_interval_minutes": 25},
+    ).json()["data"]
+    assert updated["research_loop"] == {
+        **current["research_loop"],
+        "enabled": False,
+        "interval_minutes": 25,
+    }
+    assert client.patch(
+        "/api/v1/settings", json={"research_interval_minutes": 2}
+    ).status_code == 422
+
+
 def test_settings_reject_unknown_model_and_role(client):
     assert client.patch("/api/v1/settings", json={"routing": {"chat": "gpt-9"}}).status_code == 422
     assert (

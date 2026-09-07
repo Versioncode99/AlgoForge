@@ -6,6 +6,7 @@ test('agent network exposes eight specialists and working controls', async ({ pa
   await page.goto('/')
   await page.getByRole('button', { name: 'Agent Command', exact: true }).click()
   await expect(page.locator('.neural-node')).toHaveCount(8)
+  await expect(page.locator('.neural-core')).toContainText('RESEARCH CORE')
   await expect(page.locator('.compute-worker')).toHaveCount(8)
   await page.locator('.neural-node').filter({ hasText: 'Risk officer' }).click()
   await expect(page.locator('.agent-inspector h3')).toHaveText('Risk officer')

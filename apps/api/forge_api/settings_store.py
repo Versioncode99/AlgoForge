@@ -28,6 +28,11 @@ MODEL_MIGRATIONS = {
 # reason routing exists: hypothesis work is rare and hard, tagging is constant
 # and easy.
 ROLES: list[dict[str, str]] = [
+    {
+        "key": "orchestrator",
+        "label": "Orchestrator",
+        "detail": "Plans a mission and dispatches the other specialists through it",
+    },
     {"key": "research", "label": "Research scout", "detail": "Scholarly search and provenance"},
     {
         "key": "validation",
@@ -68,6 +73,13 @@ class BudgetSettings:
 # the whole point of routing. The reasoning jobs are rare enough to afford a
 # frontier model; the constant ones go to the cheapest thing with headroom.
 DEFAULT_ROUTING: dict[str, str] = {
+    # Planning needs instruction-following, not reasoning depth. Measured on the
+    # real planner prompt: deepseek-v4-pro, glm-5.3, glm-5.3-flash and qwen3.8-max
+    # all narrate their thinking and spend the entire response budget before
+    # emitting the object, which reads to the caller as "no model reachable" and
+    # silently drops every mission onto the offline playbook. minimax-m3 returns
+    # a clean plan in about a quarter of the tokens.
+    "orchestrator": "minimax-m3",
     "research": "deepseek-v4-flash",
     "validation": "deepseek-v4-pro",
     "hypothesis": "deepseek-v4-pro",  # strongest reasoning; ~5,200/month
@@ -89,8 +101,26 @@ class AISettings:
 
 
 @dataclass
+class ResearchLoopSettings:
+    """Cadence for evidence intake while the desktop API is running."""
+
+    enabled: bool = True
+    interval_minutes: int = 60
+    topics: list[str] = field(
+        default_factory=lambda: [
+            "intraday futures momentum transaction costs",
+            "futures mean reversion market microstructure",
+            "walk forward backtest overfitting futures",
+            "futures volatility regime forecasting",
+            "order flow liquidity futures price impact",
+        ]
+    )
+
+
+@dataclass
 class Settings:
     ai: AISettings = field(default_factory=AISettings)
+    research_loop: ResearchLoopSettings = field(default_factory=ResearchLoopSettings)
     default_dataset: str = "nq_1m_16y"
     engine_cycle_seconds: float = 6.0
     engine_max_strategies: int = 60
@@ -140,8 +170,22 @@ class SettingsStore:
             routing=routing,
             budget=budget,
         )
+        loop_raw = raw.get("research_loop", {})
+        defaults = ResearchLoopSettings()
+        topics = loop_raw.get("topics", defaults.topics)
+        if not isinstance(topics, list):
+            topics = defaults.topics
         return Settings(
             ai=ai,
+            research_loop=ResearchLoopSettings(
+                enabled=bool(loop_raw.get("enabled", defaults.enabled)),
+                interval_minutes=max(
+                    5,
+                    min(1440, int(loop_raw.get("interval_minutes", defaults.interval_minutes))),
+                ),
+                topics=[str(topic).strip()[:240] for topic in topics if str(topic).strip()][:12]
+                or defaults.topics,
+            ),
             default_dataset=raw.get("default_dataset", "nq_1m_16y"),
             engine_cycle_seconds=float(raw.get("engine_cycle_seconds", 6.0)),
             engine_max_strategies=int(raw.get("engine_max_strategies", 60)),

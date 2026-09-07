@@ -84,7 +84,7 @@ class StrategyLibrary:
             strategy_id=strategy_id,
             name=display,
             lineage=base,
-            family=template.family,  # type: ignore[arg-type]
+            family=template.family,
             market=market,  # type: ignore[arg-type]
             symbol=symbol,
             bar_spec=bar_spec,

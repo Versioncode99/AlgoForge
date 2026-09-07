@@ -9,6 +9,9 @@ __pycache__/
 /runs/
 /artifacts/
 /config/settings.json
+# Where this machine keeps its workspace. It names a local path, so it is
+# operator state rather than a project decision.
+/config/storage.json
 # Strategy folders are generated working state: the engine writes dozens per
 # session from the templates in packages/forge/strategy/templates.py, which are
 # what is actually version-controlled. Keeping every autonomous variant would

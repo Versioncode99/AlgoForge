@@ -20,8 +20,19 @@ export function Rolling({
   className?: string
 }) {
   const [shown, setShown] = useState(value)
+  // Direction is information a rolling number loses: by the time the digits
+  // settle, "went up" and "went down" look identical. The tint is dropped as
+  // soon as it has been read, so a static screen carries no colour.
+  const [tick, setTick] = useState<'' | 'af-tick-up' | 'af-tick-down'>('')
   const from = useRef(value)
   const frame = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (value === from.current) return
+    setTick(value > from.current ? 'af-tick-up' : 'af-tick-down')
+    const clear = window.setTimeout(() => setTick(''), 560)
+    return () => window.clearTimeout(clear)
+  }, [value])
 
   useEffect(() => {
     const start = from.current
@@ -53,7 +64,7 @@ export function Rolling({
   }, [value, decimals])
 
   return (
-    <span className={className}>
+    <span className={[className, tick].filter(Boolean).join(' ') || undefined}>
       {prefix}
       {shown.toLocaleString(undefined, {
         minimumFractionDigits: decimals,

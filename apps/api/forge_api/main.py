@@ -16,15 +16,22 @@ from forge.agents import DebateReport, build_demo_debate
 from forge.analytics import NormalAnalysis, build_normal_analysis
 from forge.contracts.hashing import content_hash
 from forge.contracts.models import ApiEnvelope, Preregistration, RunRecord
+from forge.data.live import load_keys
 from forge.forgekeeper import ForgeKeeper, classify_candidate
 from forge.judge import Judge, JudgeInput, Verdict
 from forge.ledger import LedgerDatabase
 from forge.prop import PropRuleSet, PropSimulation, load_rules, simulate_prop_paths
 from forge.research import ResearchLedger
-from forge.strategy import StrategyLibrary
+from forge.strategy import TEMPLATES, FamilyRegistry, StrategyLibrary, TemplateStore
+from forge.vault import VaultMirror
+from forge.vault import resolve as resolve_workspace
 
 from forge_api.activity import ActivityLog, BacktestStore
+from forge_api.catalog import build_catalog_router
 from forge_api.control import build_control_router
+from forge_api.missions import build_mission_router
+from forge_api.research_loop import ResearchLoop, build_research_loop_router
+from forge_api.storage import build_storage_router
 from forge_api.strategies import build_router
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -55,14 +62,24 @@ def seed_demo(ledger: LedgerDatabase) -> None:
 
 
 def create_app(database_path: Path | None = None) -> FastAPI:
-    db_path = database_path or Path(os.getenv("ALGOFORGE_DB_PATH", ROOT / "data" / "algoforge.db"))
+    # Everything the app writes lives under the workspace, which defaults to the
+    # repository and points at an Obsidian vault once one is configured. See
+    # forge.vault.location for the resolution order.
+    workspace = resolve_workspace(ROOT)
+    # Credentials reach the process from .env and the operator's key file. Loading
+    # them here, once, is what stops one subsystem deciding the model is reachable
+    # while another decides it is not.
+    load_keys()
+    db_path = database_path or Path(os.getenv("ALGOFORGE_DB_PATH", workspace.data / "algoforge.db"))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ledger = LedgerDatabase(db_path)
         seed_demo(ledger)
         app.state.ledger = ledger
+        research_loop.start()
         yield
+        research_loop.stop()
         engine.stop()
         ledger.close()
 
@@ -195,7 +212,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
 
     @app.get("/api/v1/evolution/overview", response_model=ApiEnvelope[dict[str, object]])
     def evolution_overview() -> ApiEnvelope[dict[str, object]]:
-        keeper = ForgeKeeper(ROOT / "data" / "forgekeeper")
+        keeper = ForgeKeeper(workspace.data / "forgekeeper")
         candidate = classify_candidate(
             "graficogit/mnq-1450-strategy",
             "DISCOVERED_UNVERIFIED",
@@ -208,17 +225,57 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             meta={"research_intake_only": True, "human_activation_required": True},
         )
 
-    library = StrategyLibrary(ROOT / "strategies")
-    store = BacktestStore(ROOT / "data" / "backtests")
-    log = ActivityLog(ROOT / "data" / "runtime" / "activity.ndjson")
-    research_ledger = ResearchLedger(ROOT / "data" / "research.db")
-    control_router, engine, market = build_control_router(
-        ROOT, library, store, log, research_ledger
+    library = StrategyLibrary(workspace.strategies)
+    store = BacktestStore(workspace.data / "backtests")
+    log = ActivityLog(workspace.data / "runtime" / "activity.ndjson")
+    research_ledger = ResearchLedger(workspace.data / "research.db")
+    mirror = VaultMirror(workspace)
+    families = FamilyRegistry(workspace.store / "families")
+    templates = TemplateStore(workspace.templates)
+
+    # Operator- and agent-authored templates join the same dict the engine, the
+    # library and every router already hold, so a registered template is
+    # indistinguishable from a shipped one at the point of use.
+    restored = templates.load_all(TEMPLATES)
+    if restored:
+        log.record(
+            "CATALOG",
+            f"{len(restored)} custom template(s) restored: " + ", ".join(t.key for t in restored),
+            "info",
+        )
+    for rejection in templates.rejected_on_load:
+        log.record(
+            "CATALOG",
+            f"custom template '{rejection['key']}' was not loaded: {rejection['reason']}",
+            "fail",
+        )
+
+    surface = build_control_router(
+        workspace, library, store, log, research_ledger, mirror, families, templates
     )
+    engine, market = surface.engine, surface.market
+    research_loop = ResearchLoop(surface.agents, surface.agents.settings, log, surface.actions)
 
     app.state.engine = engine
-    app.include_router(build_router(ROOT, library, store, log, market, research_ledger))
-    app.include_router(control_router)
+    app.state.workspace = workspace
+    app.state.mirror = mirror
+    app.state.research_loop = research_loop
+    app.state.actions = surface.actions
+    app.include_router(build_router(workspace.store, library, store, log, market, research_ledger))
+    app.include_router(surface.router)
+    app.include_router(build_catalog_router(families, templates, mirror, log))
+    app.include_router(build_mission_router(surface.orchestrator, surface.actions))
+    app.include_router(build_research_loop_router(research_loop))
+    app.include_router(
+        build_storage_router(
+            workspace, mirror, log, library, store, families, surface.agents.research
+        )
+    )
+
+    # A vault that has never been opened should still land somewhere useful.
+    mirror.index(workspace.counts())
+    for family in families.all():
+        mirror.family(family.as_dict())
 
     # Serve the built interface from the API itself. The desktop shell then loads
     # a same-origin page, so there is no CORS surface and no separate web server
