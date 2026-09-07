@@ -73,27 +73,53 @@ mandatory research stage. Prompt §20 is satisfied as-is.
 
 ---
 
-## 2. The headline defect: research memory does not survive a restart
-
-**`apps/api/forge_api/engine.py:162-163`** `[DOCUMENTED]`
-
-```python
-self._constraints: dict[tuple[str, str], str] = {}
-self._lineage_failures: dict[str, int] = {}
-```
-
-Plain instance dicts. `_remember()` writes to them; `constraints()` reads the
-last 100. Nothing persists them and nothing reloads them.
+## 2. The headline defect: constraint learning does not gate anything
 
 The README advertises:
 
 > Failures become constraints that skip matching candidates before any compute
 > is spent.
 
-That is true within a single process lifetime and false across restarts. Every
-restart, the engine re-learns from zero and re-spends compute on parameter
-regions it has already disproven. On a 2-core machine this is the difference
-between a research system and a treadmill.
+Tracing what actually skips a candidate shows something different.
+
+**The real gate is `experiments.reserve()`** — `engine.py:454` `[DOCUMENTED]`
+
+```python
+attempt_id = self.experiments.reserve(self._scope(), template_key, params)
+if attempt_id is None:
+    self._bump("skipped_by_memory")
+```
+
+This *is* durable: it hashes `(scope, template, parameters)` into SQLite and
+refuses a duplicate insert. But it is **exact parameter-set dedup**. It cannot
+skip a *region*; only a byte-identical repeat. Change one parameter by one step
+and the candidate runs in full, however many neighbours have already failed.
+
+**The reason-carrying constraint map never gates.** `engine.py:162-164`
+`[DOCUMENTED]`
+
+```python
+self._constraints: dict[tuple[str, str], str] = {}
+self._lineage_failures: dict[str, int] = {}
+self._retired_lineages: set[str] = set()
+```
+
+- `_constraints` is written by `_remember()` and read only by `constraints()`,
+  which serves the UI. **It is never consulted to skip a candidate.** It is a
+  display of recent failure reasons, and it is lost on restart.
+- `_lineage_failures` is written and **never read anywhere**. Dead state.
+- `_retired_lineages` is initialised and **never touched again**. Dead state.
+- `_remember(self, key, lineage, reason)` — the parameter is named `lineage`,
+  but all four call sites (581, 664, 686, 727) pass `template_key`. So the
+  counter that is never read is also not counting what its name says.
+
+So the advertised mechanism is half-built: the cheap exact-match skip is real
+and durable, and the *learning* half — generalising a failure into a constraint
+that prunes a region — does not exist. Failure reasons are collected, shown,
+and discarded.
+
+This is the highest-value gap in the repository, and it is the one the prompt's
+§6 and §12 are entirely about.
 
 Compounding it:
 
@@ -105,8 +131,10 @@ Compounding it:
   only by `tests/judge/test_judge.py`. It is also a toy: it thresholds a returns
   array and never touches a real strategy. `[DOCUMENTED]`
 
-So AlgoForge currently has **no durable research memory**, despite three
-separate components that look like one.
+So the only durable memory AlgoForge has is an exact-match attempt table, while
+three separate components that look like research memory — the constraint map,
+`DecisionMemory`, and `ArraySweepEngine` — contribute nothing to the running
+system.
 
 ---
 
@@ -217,7 +245,8 @@ is unimplemented. `[DOCUMENTED]`
 
 | # | Risk | Location | Severity |
 |---|---|---|---|
-| 1 | Constraints lost on restart; compute re-spent on disproven regions | `engine.py:162` | **High** |
+| 1 | Constraints never gate; only exact repeats are skipped, so disproven regions are re-explored | `engine.py:162`, `engine.py:454` | **High** |
+| 1b | Three pieces of engine state dead or misnamed (`_lineage_failures`, `_retired_lineages`, `_remember`'s `lineage` arg) | `engine.py:162-164, 739` | Low |
 | 2 | PBO/DSR computed from a 2-point grid, presented as measured | `engine.py:594` | **High** |
 | 3 | No experiment lineage; a strategy's origin is unreconstructable | `experiments.py` | **High** |
 | 4 | Fabricated dissent served from a real endpoint | `debate.py` | Medium |
@@ -235,7 +264,7 @@ fold-internal parameter search and the burn-once holdout are all correct.
 
 The weakness is **durability and provenance**, not statistics:
 
-1. Research memory evaporates (§2).
+1. Constraint learning collects reasons but never prunes (§2).
 2. Experiments carry no lineage (§3.1).
 3. The evidence that feeds the good estimators is too thin to support them
    (§3.2).
@@ -246,8 +275,9 @@ existing estimators properly* rather than writing new ones.
 
 Ordering:
 
-1. **B1** — durable research memory: persist constraints and failure
-   classifications to SQLite, reload on start.
+1. **B1** — make constraints real: a persisted, queryable failure record that
+   classifies each failure and is *consulted before compute*, pruning
+   neighbourhoods rather than only byte-identical repeats.
 2. **B2** — real experiment record with parent/child lineage.
 3. **C1** — widen the validation grid so PBO/DSR rest on adequate spread; make
    a degenerate grid report `INCONCLUSIVE` rather than a number.
