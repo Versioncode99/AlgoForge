@@ -299,7 +299,7 @@ def build_router(
                     "latest": latest,
                 }
             )
-        return ApiEnvelope(data=data, meta={"total": len(data)})
+        return ApiEnvelope(data=data, meta={"total": len(data), "index": store.status()})
 
     @router.post("/strategies", response_model=ApiEnvelope[dict[str, Any]], status_code=201)
     def create_strategy(body: CreateStrategyRequest) -> ApiEnvelope[dict[str, Any]]:
@@ -334,19 +334,22 @@ def build_router(
                 "tests": library.get_tests(strategy_id),
                 "code_hash": library.code_hash(strategy_id),
                 "path": str(library.dir_for(strategy_id)),
+                # Projections, not artifacts: this table shows nine scalars per
+                # run, and reading every trade ledger to draw them made opening
+                # a well-explored strategy cost hundreds of megabytes.
                 "backtests": [
                     {
                         "backtest_id": b["backtest_id"],
                         "net_pnl": b["net_pnl"],
-                        "trade_count": len(b["trades"]),
+                        "trade_count": b["trade_count"],
                         "win_rate": b["win_rate"],
                         "max_drawdown": b["max_drawdown"],
                         "parameters": b["parameters"],
                         "finished_at": b["finished_at"],
                         "evidence_tier": b.get("evidence_tier", "LEGACY_IN_SAMPLE"),
-                        "split_id": (b.get("split_receipt") or {}).get("split_id"),
+                        "split_id": b.get("split_id"),
                     }
-                    for b in store.for_strategy(strategy_id)
+                    for b in store.projections_for(strategy_id)
                 ],
             }
         )
@@ -935,12 +938,15 @@ def build_router(
         if not pnl:
             raise HTTPException(422, {"code": "no_trades", "detail": "backtest produced no trades"})
 
+        # Distinct parameter sets tried. Counted from projections: the artifacts
+        # were already read once above, and a second full pass over every trade
+        # ledger to take `parameters` off each one is pure waste.
         trials = max(
             1,
             len(
                 {
-                    tuple(sorted(item.get("parameters", {}).items()))
-                    for item in store.for_strategy(strategy_id)
+                    tuple(sorted((item.get("parameters") or {}).items()))
+                    for item in store.projections_for(strategy_id)
                 }
             ),
         )
@@ -1108,13 +1114,17 @@ def build_router(
         matrix: list[dict[str, Any]] = []
         for template in TEMPLATES.values():
             variants = [spec for spec in specs if spec.template == template.key]
+            # Projections only. This endpoint summarises every template across
+            # every market; reading one trade ledger per strategy to divide two
+            # scalars made the research overview the second slowest route in
+            # the application.
             tested: list[tuple[Any, dict[str, Any]]] = []
             for spec in variants:
-                latest = store.latest(spec.strategy_id)
+                latest = store.latest_projection(spec.strategy_id)
                 if latest is not None and latest.get("calculation_version") == "contract-units-v2":
                     tested.append((spec, latest))
             expectancies = [
-                float(item["net_pnl"]) / max(1, len(item["trades"])) for _, item in tested
+                float(item["net_pnl"]) / max(1, int(item["trade_count"])) for _, item in tested
             ]
             families.append(
                 {
@@ -1154,7 +1164,7 @@ def build_router(
                         "market": market_name,
                         "status": "TESTED" if best else "NOT_TESTED",
                         "expectancy": (
-                            round(float(best["net_pnl"]) / max(1, len(best["trades"])), 4)
+                            round(float(best["net_pnl"]) / max(1, int(best["trade_count"])), 4)
                             if best
                             else None
                         ),

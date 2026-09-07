@@ -234,6 +234,10 @@ def create_app(database_path: Path | None = None) -> FastAPI:
 
     library = StrategyLibrary(workspace.strategies)
     store = BacktestStore(workspace.data / "backtests")
+    # Index anything written since the last run now, off the request path, so a
+    # workspace that gained artifacts while the app was closed does not spend
+    # the first strategy listing catching up. Nothing waits on this.
+    store.warm()
     log = ActivityLog(workspace.data / "runtime" / "activity.ndjson")
     research_ledger = ResearchLedger(workspace.data / "research.db")
     mirror = VaultMirror(workspace)

@@ -330,10 +330,10 @@ class AutonomousEngine:
             for spec in specs:
                 if spec.strategy_id in self._active.values():
                     continue
-                latest = self.store.latest(spec.strategy_id)
+                latest = self.store.latest_projection(spec.strategy_id)
                 # Never run is worse than run and losing: it occupies a slot
                 # while carrying no evidence at all.
-                score = -1e18 if latest is None else float(latest.get("net_pnl", 0.0))
+                score = -1e18 if latest is None else float(latest.get("net_pnl") or 0.0)
                 if worst is None or score < worst[0]:
                     worst = (score, spec.strategy_id)
             if worst is None:

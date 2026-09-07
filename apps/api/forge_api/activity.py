@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
-import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel
+
+from forge_api.artifact_index import ArtifactIndex, project
 
 Level = Literal["info", "pass", "fail", "warn"]
 
@@ -77,47 +80,265 @@ class ActivityLog:
             return list(self._buffer)[-max(1, min(limit, 500)) :][::-1]
 
 
-# How long the in-memory index may go without a full rescan. Only matters for
-# artifacts written by another process; ours are inserted as they are saved.
-RESCAN_SECONDS = 30.0
+# Reads are overlapped because the disk releases the GIL and `json.loads` does
+# not. Small on purpose: this only ever runs during a one-time backfill, and the
+# machine is expected to be doing research at the same time.
+BACKFILL_READERS = 8
+
+# How many artifacts are written to the index per transaction during a backfill.
+# Small enough that an interrupted process keeps most of its progress.
+BACKFILL_BATCH = 200
 
 
 class BacktestStore:
-    """Backtest results are immutable artifacts on disk, keyed by content hash."""
+    """Backtest results are immutable artifacts on disk, keyed by content hash.
+
+    The store keeps a **durable** projection of that directory (see
+    `forge_api.artifact_index`) so that listing the library costs a database
+    read rather than a 3 GB JSON parse on every process start. Anything that
+    needs a trade ledger still reads the artifact itself through `load`.
+    """
 
     def __init__(self, root: Path) -> None:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
-        self._meta: dict[str, tuple[str, str]] = {}
-        # Artifacts are immutable, so the handful of fields a list row needs can
-        # be projected once and kept. Without this, listing the library re-read
-        # and re-parsed every trade of every strategy's newest run — 399 full
-        # artifacts per request — purely to take len(trades).
-        self._summaries: dict[str, dict[str, Any]] = {}
-        self._index_cache: dict[str, list[tuple[str, str]]] | None = None
-        self._index_built: float = -1e9
+        self._index_store = ArtifactIndex(root / "_index.db")
+        # name -> (size, projection) for every artifact the index has seen.
+        self._known: dict[str, tuple[int, dict[str, Any]]] = self._index_store.load_all()
+        # name -> (size, reason) for files on disk that are not readable
+        # artifacts. Remembered so they are not re-attempted on every read, and
+        # reported so corruption is visible rather than silently absent.
+        self._unreadable: dict[str, tuple[int, str]] = self._index_store.load_unreadable()
+        # strategy_id -> [(name, finished_at)], newest first. Rebuilt from
+        # `_known`, which is why it costs a dictionary walk and not a disk pass.
+        self._by_strategy: dict[str, list[tuple[str, str]]] = {}
         # The engine writes from several worker threads.
-        self._index_lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._scanned = False
+        self._pending: list[str] = []
+        self._indexed_this_boot = 0
+        self._worker: threading.Thread | None = None
+        self._regroup()
 
+    # ── index maintenance ────────────────────────────────────────────────────
+    def _regroup(self) -> None:
+        grouped: dict[str, list[tuple[str, str]]] = {}
+        for name, (_, projection) in self._known.items():
+            strategy_id = str(projection.get("strategy_id") or "")
+            grouped.setdefault(strategy_id, []).append(
+                (name, str(projection.get("finished_at") or ""))
+            )
+        for entries in grouped.values():
+            entries.sort(key=lambda item: item[1], reverse=True)
+        self._by_strategy = grouped
+
+    def _scan(self) -> None:
+        """Reconcile the index against the directory. Costs a listing, not a read.
+
+        `os.scandir` returns the size alongside the name on Windows and Linux
+        alike, so the whole reconciliation is one syscall walk: 0.1s over 1,919
+        files against the 78.5s a full parse of the same files costs.
+        """
+        present: dict[str, int] = {}
+        with os.scandir(self.root) as entries:
+            for entry in entries:
+                if not entry.name.endswith(".json"):
+                    continue
+                try:
+                    present[entry.name] = entry.stat().st_size
+                except OSError:
+                    continue
+        with self._lock:
+            vanished = [name for name in self._known if name not in present]
+            for name in vanished:
+                self._known.pop(name, None)
+            if vanished:
+                self._index_store.forget(vanished)
+            healed = [
+                name
+                for name, (size, _) in self._unreadable.items()
+                if name not in present or present[name] != size
+            ]
+            for name in healed:
+                self._unreadable.pop(name, None)
+            if healed:
+                self._index_store.clear_unreadable(healed)
+            # An immutable artifact whose size moved was rewritten by something
+            # else. Re-read it rather than trusting the stale projection. A file
+            # already known to be damaged at this exact size is left alone.
+            self._pending = [
+                name
+                for name, size in present.items()
+                if (name not in self._known or self._known[name][0] != size)
+                and self._unreadable.get(name, (-1, ""))[0] != size
+            ]
+            if vanished:
+                self._regroup()
+            self._scanned = True
+
+    def _project_file(self, name: str) -> tuple[str, int, dict[str, Any] | str]:
+        """Project one artifact, or report why it could not be read.
+
+        The third element is a projection on success and a `DATA_*` reason on
+        failure. Failure is a result here, not an exception: a damaged file must
+        be recorded as damaged, otherwise it is retried forever.
+        """
+        path = self.root / name
+        try:
+            blob = path.read_bytes()
+        except OSError as exc:
+            return name, -1, f"DATA_UNREADABLE: {exc.strerror or type(exc).__name__}"
+        try:
+            payload = json.loads(blob)
+        except ValueError as exc:
+            return name, len(blob), f"DATA_CORRUPTED: {exc}"
+        if not isinstance(payload, dict):
+            return name, len(blob), "SCHEMA_ERROR: artifact is not a JSON object"
+        if not payload.get("backtest_id") or not payload.get("strategy_id"):
+            return name, len(blob), "SCHEMA_ERROR: artifact has no backtest_id or strategy_id"
+        return name, len(blob), project(payload)
+
+    def _absorb(self, rows: list[tuple[str, int, dict[str, Any]]]) -> None:
+        if not rows:
+            return
+        self._index_store.put_many(rows)
+        with self._lock:
+            for name, size, projection in rows:
+                self._known[name] = (size, projection)
+            self._indexed_this_boot += len(rows)
+            self._regroup()
+
+    def _reject(self, rows: list[tuple[str, int, str]]) -> None:
+        if not rows:
+            return
+        self._index_store.mark_unreadable(rows)
+        with self._lock:
+            for name, size, reason in rows:
+                self._unreadable[name] = (size, reason)
+
+    def _backfill(self) -> None:
+        """Parse everything the index has never seen, in batches.
+
+        This is the only place an artifact is fully parsed for its projection,
+        and because artifacts are immutable and the index is durable, each one
+        is parsed exactly once for the lifetime of the workspace.
+        """
+        with self._lock:
+            queue = list(self._pending)
+        if not queue:
+            return
+        with ThreadPoolExecutor(max_workers=BACKFILL_READERS) as pool:
+            batch: list[tuple[str, int, dict[str, Any]]] = []
+            damaged: list[tuple[str, int, str]] = []
+            for name, size, outcome in pool.map(self._project_file, queue):
+                if isinstance(outcome, str):
+                    damaged.append((name, size, outcome))
+                else:
+                    batch.append((name, size, outcome))
+                if len(batch) >= BACKFILL_BATCH:
+                    self._absorb(batch)
+                    batch = []
+            self._absorb(batch)
+            self._reject(damaged)
+        with self._lock:
+            self._pending = [
+                name
+                for name in self._pending
+                if name not in self._known and name not in self._unreadable
+            ]
+
+    def warm(self) -> None:
+        """Start indexing anything new, off the request path.
+
+        Called once at application startup. Nothing depends on it finishing: a
+        read that arrives first does the same work synchronously.
+        """
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                return
+            worker = threading.Thread(target=self._warm_now, name="artifact-index", daemon=True)
+            self._worker = worker
+        worker.start()
+
+    def _warm_now(self) -> None:
+        if not self._scanned:
+            self._scan()
+        self._backfill()
+
+    def _ready(self) -> dict[str, list[tuple[str, str]]]:
+        """The grouped index, with any unseen artifact indexed first.
+
+        A strategy-scoped answer cannot be given from a partial index: until an
+        artifact has been read, nothing knows which strategy it belongs to. So
+        this waits — but only for artifacts never seen *by any previous boot*,
+        which on a warmed workspace is none.
+        """
+        if not self._scanned:
+            self._scan()
+        with self._lock:
+            worker = self._worker
+            pending = bool(self._pending)
+        if pending:
+            if worker is not None and worker.is_alive():
+                worker.join()
+            self._backfill()
+        with self._lock:
+            return self._by_strategy
+
+    def status(self) -> dict[str, Any]:
+        """Honest indexing state, for the interface and the API envelope."""
+        with self._lock:
+            return {
+                "indexed": len(self._known),
+                "pending": len(self._pending),
+                "scanned": self._scanned,
+                "built_this_boot": self._indexed_this_boot,
+                "ready": self._scanned and not self._pending,
+                # Files in the artifact directory that are not readable
+                # artifacts. Surfaced rather than skipped silently: a strategy
+                # missing a run it did produce should be explainable.
+                "unreadable": len(self._unreadable),
+            }
+
+    def damaged(self) -> list[dict[str, str]]:
+        """Every file that would not parse, with the reason it would not.
+
+        Data Health reads this. The reasons use the shared error taxonomy so a
+        truncated file and an unreadable one are distinguishable.
+        """
+        with self._lock:
+            return sorted(
+                (
+                    {"name": name, "reason": reason, "bytes": str(size)}
+                    for name, (size, reason) in self._unreadable.items()
+                ),
+                key=lambda row: row["name"],
+            )
+
+    # ── reads and writes ─────────────────────────────────────────────────────
     def save(self, result: Any) -> None:  # BacktestResult; Any avoids a circular import
         path = self.root / f"{result.backtest_id}.json"
         payload = result.model_dump(mode="json")
-        # Insert into the index rather than discarding it. Throwing the cache
-        # away meant a full rebuild on the next read, and with four workers
-        # saving every few seconds the list spent most of its time rebuilding:
-        # 6.6s while the engine ran, against 0.36s idle.
-        finished = str(payload.get("finished_at", ""))
-        with self._index_lock:
+        with self._lock:
             if path.exists():
                 return
+            blob = json.dumps(payload, indent=2)
             temporary = path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            temporary.write_text(blob, encoding="utf-8")
             temporary.replace(path)
-            self._meta[path.name] = (result.strategy_id, finished)
-            if self._index_cache is not None:
-                entries = self._index_cache.setdefault(result.strategy_id, [])
-                entries.append((path.name, finished))
-                entries.sort(key=lambda item: item[1], reverse=True)
+            # Project from the payload already in hand. A saved artifact is
+            # never re-read to find out what it contains.
+            projection = project(payload)
+            row = (path.name, len(blob.encode("utf-8")), projection)
+            self._known[row[0]] = (row[1], row[2])
+            # Insert into the grouping rather than rebuilding it. With four
+            # workers saving every few seconds, regrouping the whole library on
+            # every write would make the engine pay for the size of its own
+            # history.
+            entries = self._by_strategy.setdefault(str(projection.get("strategy_id") or ""), [])
+            entries.append((path.name, str(projection.get("finished_at") or "")))
+            entries.sort(key=lambda item: item[1], reverse=True)
+        self._index_store.put_many([row])
 
     def load(self, backtest_id: str) -> dict[str, Any] | None:
         if not re.fullmatch(r"[A-Za-z0-9_-]+", backtest_id):
@@ -131,46 +352,13 @@ class BacktestStore:
             return None
         return payload
 
-    # Artifacts are immutable, so a filename -> (strategy, finished_at) index only
-    # ever grows. Caching the *file contents* was not enough: `_index` still
-    # re-globbed the directory and rebuilt the whole dict once per strategy, so
-    # listing 63 strategies over 379 artifacts meant 63 directory scans and took
-    # 8.7 seconds while the engine was writing. The built index is cached too,
-    # and invalidated by our own writes or by the directory changing underneath
-    # us.
-    def _index(self) -> dict[str, list[tuple[str, str]]]:
-        with self._index_lock:
-            # Our own writes keep the index current, so a rescan only catches
-            # changes made by another process. Checking the directory mtime
-            # instead raced with four workers saving concurrently and forced a
-            # full rebuild on almost every read.
-            fresh = time.monotonic() - self._index_built < RESCAN_SECONDS
-            if self._index_cache is not None and fresh:
-                return self._index_cache
-
-            index: dict[str, list[tuple[str, str]]] = {}
-            for path in self.root.glob("*.json"):
-                cached = self._meta.get(path.name)
-                if cached is None:
-                    try:
-                        payload = json.loads(path.read_text(encoding="utf-8"))
-                    except Exception:
-                        continue
-                    cached = (
-                        str(payload.get("strategy_id", "")),
-                        str(payload.get("finished_at", "")),
-                    )
-                    self._meta[path.name] = cached
-                index.setdefault(cached[0], []).append((path.name, cached[1]))
-            # Sort once here rather than at every call site.
-            for entries in index.values():
-                entries.sort(key=lambda item: item[1], reverse=True)
-            self._index_cache = index
-            self._index_built = time.monotonic()
-            return index
-
     def for_strategy(self, strategy_id: str) -> list[dict[str, Any]]:
-        entries = self._index().get(strategy_id, [])
+        """Every artifact for a strategy, in full. Newest first.
+
+        This reads trade ledgers. Callers that only need list-row scalars want
+        `projections_for` instead.
+        """
+        entries = self._ready().get(strategy_id, [])
         items: list[dict[str, Any]] = []
         for name, _ in entries:
             try:
@@ -179,15 +367,35 @@ class BacktestStore:
                 continue
         return items
 
+    def projections_for(self, strategy_id: str) -> list[dict[str, Any]]:
+        """Every artifact for a strategy as projections, newest first.
+
+        No trade ledger is read. This is what a detail table, a trial count or a
+        ranking should use; `for_strategy` exists for the paths that genuinely
+        need the trades.
+        """
+        entries = self._ready().get(strategy_id, [])
+        rows: list[dict[str, Any]] = []
+        with self._lock:
+            for name, _ in entries:
+                known = self._known.get(name)
+                if known is not None:
+                    rows.append(known[1])
+        return rows
+
     def summary_for(self, strategy_id: str) -> tuple[int, dict[str, Any] | None]:
-        """Count plus the newest artifact, without parsing the rest."""
-        entries = self._index().get(strategy_id, [])
+        """Count plus the newest artifact **in full**, without parsing the rest."""
+        entries = self._ready().get(strategy_id, [])
         if not entries:
             return 0, None
         return len(entries), self.load(Path(entries[0][0]).stem)
 
     def latest(self, strategy_id: str) -> dict[str, Any] | None:
         return self.summary_for(strategy_id)[1]
+
+    def latest_projection(self, strategy_id: str) -> dict[str, Any] | None:
+        """The newest run's projected scalars. Reads no artifact at all."""
+        return self.list_summary(strategy_id)[1]
 
     def list_summary(self, strategy_id: str) -> tuple[int, dict[str, Any] | None]:
         """Run count plus a projection of the newest run, for library listings.
@@ -196,29 +404,12 @@ class BacktestStore:
         every judging, validation and dossier path reads; this exists so that
         drawing a list does not have to pay for the trade ledger behind it.
         """
-        entries = self._index().get(strategy_id, [])
+        entries = self._ready().get(strategy_id, [])
         if not entries:
             return 0, None
-        name = entries[0][0]
-        cached = self._summaries.get(name)
-        if cached is not None:
-            return len(entries), cached
-        payload = self.load(Path(name).stem)
-        if payload is None:
-            return len(entries), None
-        summary = {
-            "backtest_id": payload["backtest_id"],
-            "calculation_version": payload.get("calculation_version", "legacy-price-points"),
-            "net_pnl": payload["net_pnl"],
-            "trade_count": len(payload["trades"]),
-            "win_rate": payload["win_rate"],
-            "max_drawdown": payload["max_drawdown"],
-            "finished_at": payload["finished_at"],
-            "evidence_tier": payload.get("evidence_tier", "LEGACY_IN_SAMPLE"),
-            "split_id": (payload.get("split_receipt") or {}).get("split_id"),
-        }
-        self._summaries[name] = summary
-        return len(entries), summary
+        with self._lock:
+            known = self._known.get(entries[0][0])
+        return len(entries), (known[1] if known is not None else None)
 
     def count(self) -> int:
-        return sum(len(entries) for entries in self._index().values())
+        return sum(len(entries) for entries in self._ready().values())

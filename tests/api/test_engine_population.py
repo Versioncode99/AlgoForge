@@ -63,7 +63,9 @@ def test_the_never_run_candidate_is_retired_before_a_losing_one(engine: Autonomo
     untested = engine.library.create_from_template("mean_reversion_band", symbol="NQ")
 
     class _Store:
-        def latest(self, strategy_id: str):
+        # Population pruning reads a projection, never the trade ledger: it
+        # compares one scalar across the whole library.
+        def latest_projection(self, strategy_id: str):
             return {"net_pnl": -500.0} if strategy_id == kept.strategy_id else None
 
     engine.store = _Store()  # type: ignore[assignment]

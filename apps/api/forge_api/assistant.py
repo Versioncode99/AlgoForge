@@ -90,7 +90,9 @@ class Assistant:
         specs = self.library.list_specs()
         rows = []
         for spec in specs:
-            latest = self.store.latest(spec.strategy_id)
+            # Projected scalars. Four hundred trade ledgers were read here to
+            # report three numbers per strategy.
+            latest = self.store.latest_projection(spec.strategy_id)
             if latest and latest.get("calculation_version") != "contract-units-v2":
                 latest = None
             rows.append(
@@ -99,8 +101,8 @@ class Assistant:
                     "family": spec.family,
                     "template": spec.template,
                     "net_pnl": latest["net_pnl"] if latest else None,
-                    "trades": len(latest["trades"]) if latest else 0,
-                    "real_data": bool(latest and "REAL_DATA" in latest.get("labels", [])),
+                    "trades": int(latest["trade_count"]) if latest else 0,
+                    "real_data": bool(latest and "REAL_DATA" in (latest.get("labels") or [])),
                 }
             )
         return {
