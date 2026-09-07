@@ -252,6 +252,8 @@ def build_dossier(
     snapshots: Any = None,
 ) -> dict[str, Any]:
     """Assemble the dossier for one strategy. Raises KeyError if it does not exist."""
+    from forge_api.conformance_store import conformance_verdict
+    from forge_api.preregistration_store import claim_holds
     from forge_api.strategies import judge_evidence, load_evidence
 
     spec = library.get_spec(strategy_id)
@@ -270,15 +272,35 @@ def build_dossier(
                 strategy_id,
                 code_hash=str(latest.get("code_hash", "")),
             )
+            # Read the same stored evidence the judge route reads. A dossier
+            # that computed a friendlier verdict than the judge would be the
+            # worst possible artifact: a document titled "why you should trust
+            # this" disagreeing with the gate that decides it.
+            code_hash = str(latest.get("code_hash", ""))
+            receipt = latest.get("data_quality")
             verdict = Judge().evaluate(
                 JudgeInput(
                     run_id=str(latest["backtest_id"]),
                     tier=str(latest.get("evidence_tier", "LEGACY_IN_SAMPLE")),
                     pnl=pnl,
                     trial_count=max(1, experiments.count(scope)),
-                    data_gate_passed=latest.get("evidence_tier") not in {None, "SYNTHETIC"},
-                    preregistered=True,
-                    implementation_tests_passed=True,
+                    data_gate_passed=(
+                        False
+                        if latest.get("evidence_tier") in {None, "SYNTHETIC"}
+                        else (receipt.get("accepted") if isinstance(receipt, dict) else None)
+                    ),
+                    preregistered=claim_holds(
+                        root, strategy_id, spec, dict(latest.get("parameters") or {})
+                    ),
+                    implementation_tests_passed=conformance_verdict(
+                        root, strategy_id, code_hash=code_hash
+                    ),
+                    # The dossier assembles; it never computes. Re-running the
+                    # determinism and mechanism checks here would make opening a
+                    # record an experiment, so both read as unmeasured unless a
+                    # judge run recorded them.
+                    engine_consistent=None,
+                    mechanism_aligned=None,
                     lookahead_detected=not latest.get("lookahead_clean", True),
                     **evidence_args,
                 )
