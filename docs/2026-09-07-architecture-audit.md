@@ -232,7 +232,28 @@ Absent: Lineage, Evidence/dossier, Experiments, Runs, ForgeKeeper. ForgeKeeper
 has a service (`packages/forge/forgekeeper/service.py`, 141 LOC, wired into
 `main.py`) but no interface. `[DOCUMENTED]`
 
-### 3.7 `oracles` is a capability probe, not an oracle
+### 3.7 The orchestrator tests are flaky, which will mask real regressions
+
+`tests/api/test_orchestrator.py` fails intermittently — a different subset each
+run, sometimes none. Verified pre-existing: it fails at `0696ba2`, before any
+change in this branch's audit work. `[DOCUMENTED]`
+
+Diagnosis. The symptom is a step stuck in `running` with `job_id: None` for
+`create_strategy` on an unknown template — an action that refuses immediately
+(`actions.py:477`), and whose refusal `Actions.call` *catches* and returns as
+`ok: False` rather than raising. So the step cannot be blocked on the action.
+
+What it is blocked on is CPU. `forge_api.jobs.REGISTRY` is a module-level global
+with no teardown, and each `submit` starts a daemon thread. Tests that launch
+backtest jobs leave those threads running into subsequent tests; on a 2-core
+machine they starve the mission thread past the 60s wait in the test's `wait()`
+helper. It passes in isolation and fails under load, which is the signature.
+
+This matters beyond tidiness: nothing cancels orphaned jobs in production
+either. A suite that fails randomly also cannot be used to detect regressions,
+which is the standard prompt §28 sets.
+
+### 3.8 `oracles` is a capability probe, not an oracle
 
 `packages/forge/oracles/nautilus.py` reports whether `nautilus_trader` is
 installed and states its own limitations clearly. It is honest and useful, but
@@ -288,3 +309,28 @@ Ordering:
 
 Nothing in this plan discards existing behaviour; each step is additive or
 replaces an in-memory structure with a persisted one behind the same interface.
+
+---
+
+## 6. Status log
+
+Updated as the plan is worked through. Nothing is marked done without a passing
+artifact gate, per the Definition-of-Done rule.
+
+| Item | State | Evidence |
+|---|---|---|
+| §2 constraint learning never prunes | **Done** | `forge/memory/research.py`; engine consults it before `Experiments.reserve`; 22 store tests + 7 engine tests, including restart durability |
+| §1b dead engine state | **Done** | `_constraints`, `_lineage_failures`, `_retired_lineages` removed; `constraints()` served from disk |
+| §3.2 degenerate G5/G11 evidence | **Done** | `MINIMUM_TRIAL_CONFIGURATIONS = 8` in the judge; engine grid widened to 9 configurations; 10 adequacy tests + 55 grid tests over every shipped template |
+| §3.1 experiment record has no lineage | Open | — |
+| §3.3 validation gated on profitability | Open | — |
+| §3.4 fabricated dissent | Open | — |
+| §3.5 13 of 63 verbs have an action | Open | — |
+| §3.6 no lineage/evidence/experiment views | Open | — |
+| §3.7 orchestrator test flake | Open | diagnosed above, not yet fixed |
+
+### Test baseline
+
+258 at `da92bf6` → 352 now. The 1–2 intermittent failures are always the
+orchestrator flake in §3.7; a run is only a regression signal if something
+*other* than `tests/api/test_orchestrator.py` fails.
