@@ -1,0 +1,117 @@
+/* Evidence view — the dossier.
+ *
+ * Status colour is load-bearing here, so it is never the only signal: every
+ * gate and every claim also carries its status as text. A reader who cannot
+ * separate the lime from the red still gets the answer.
+ *
+ * INCONCLUSIVE is deliberately not styled as a soft failure. It is its own
+ * state — nothing was disproven, the measurement was never taken — so it gets
+ * the neutral border and the dashed edge rather than a washed-out red. */
+
+.evidence-absent {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+  padding: var(--sp-5);
+  color: var(--fg-2);
+}
+.evidence-absent svg { width: 20px; height: 20px; color: var(--fg-3); flex: none; margin-top: 2px; }
+.evidence-absent strong { display: block; color: var(--fg-1); font-size: 13px; }
+.evidence-absent p { margin: 4px 0 0; font-size: 13px; line-height: 1.5; max-width: 62ch; }
+
+/* ── gate ladder ─────────────────────────────────────────────────────────── */
+.evidence-gates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+.evidence-gate {
+  display: grid;
+  gap: 6px;
+  padding: var(--sp-4);
+  background: var(--bg-1);
+  border-left: 2px solid var(--neutral);
+}
+.evidence-gate.is-pass { border-left-color: var(--pass); }
+.evidence-gate.is-fail { border-left-color: var(--fail); }
+.evidence-gate.is-inconclusive { border-left-style: dashed; border-left-color: var(--warn); }
+
+.evidence-gate-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+.evidence-gate-head strong { color: var(--fg-0); font-size: 12px; letter-spacing: .04em; }
+.evidence-gate-head span { color: var(--fg-1); font-size: 13px; flex: 1; min-width: 0; }
+.evidence-gate-head em {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: .08em;
+  color: var(--fg-2);
+}
+.evidence-gate.is-pass .evidence-gate-head em { color: var(--pass); }
+.evidence-gate.is-fail .evidence-gate-head em { color: var(--fail); }
+.evidence-gate.is-inconclusive .evidence-gate-head em { color: var(--warn); }
+
+.evidence-gate p { margin: 0; color: var(--fg-0); font-size: 13px; }
+.evidence-gate small { color: var(--fg-3); font-size: 11px; line-height: 1.45; }
+
+/* ── lineage ─────────────────────────────────────────────────────────────── */
+.evidence-lineage { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.evidence-lineage li {
+  position: relative;
+  padding: var(--sp-2) 0 var(--sp-2) var(--sp-5);
+  border-left: 1px solid var(--line-strong);
+}
+.evidence-lineage li::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 15px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+.evidence-lineage li:last-child { border-left-color: transparent; }
+.evidence-lineage li.is-current::before { background: var(--brand); }
+.evidence-lineage li.is-current span { color: var(--fg-0); }
+.evidence-lineage span { display: block; color: var(--fg-1); font-size: 13px; }
+.evidence-lineage small { color: var(--fg-3); font-size: 11px; }
+
+/* ── failure classes ─────────────────────────────────────────────────────── */
+.evidence-failures { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; background: var(--line); }
+.evidence-failures li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-1);
+}
+.evidence-failures span { color: var(--fg-1); font-size: 12px; }
+.evidence-failures strong { color: var(--fg-0); font-size: 13px; }
+
+/* ── specialist claims ───────────────────────────────────────────────────── */
+.evidence-claims { display: grid; gap: 1px; background: var(--line); padding: 0; }
+.evidence-claim { padding: var(--sp-4); background: var(--bg-1); border-left: 2px solid var(--neutral); }
+.evidence-claim.is-support { border-left-color: var(--pass); }
+.evidence-claim.is-oppose { border-left-color: var(--fail); }
+.evidence-claim.is-caution { border-left-color: var(--warn); }
+.evidence-claim-head { display: flex; align-items: baseline; gap: var(--sp-3); }
+.evidence-claim-head strong { color: var(--fg-0); font-size: 12px; letter-spacing: .04em; }
+.evidence-claim-head em {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: .08em;
+  color: var(--fg-2);
+}
+.evidence-claim-head span { margin-left: auto; color: var(--fg-3); font-size: 11px; }
+.evidence-claim p { margin: 6px 0 0; color: var(--fg-1); font-size: 13px; line-height: 1.55; max-width: 78ch; }
+
+/* ── limitations ─────────────────────────────────────────────────────────── */
+.evidence-limitations { margin: 0; padding: 0 0 0 var(--sp-5); display: grid; gap: 7px; }
+.evidence-limitations li { color: var(--fg-1); font-size: 13px; line-height: 1.55; max-width: 82ch; }
+.evidence-limitations.is-standing li { color: var(--fg-2); }
+
+@media (max-width: 720px) {
+  .evidence-gates { grid-template-columns: 1fr; }
+  .evidence-claim-head { flex-wrap: wrap; }
+  .evidence-claim-head span { margin-left: 0; }
+}

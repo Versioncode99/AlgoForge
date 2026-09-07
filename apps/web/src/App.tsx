@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   ChartNoAxesCombined, Layers, LockKeyhole, MessageSquare, Microscope,
   ScrollText, ShieldCheck, SlidersHorizontal, TriangleAlert, Network, Workflow, Rocket, Grid3X3,
+  FileText,
 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { getJson } from './api'
@@ -18,6 +19,7 @@ const AgentCommandView = lazy(() => import('./views/AgentCommand').then(m => ({ 
 const PipelineView = lazy(() => import('./views/Pipeline').then(m => ({ default: m.PipelineView })))
 const OrchestratorView = lazy(() => import('./views/Orchestrator').then(m => ({ default: m.OrchestratorView })))
 const ValidationLabView = lazy(() => import('./views/ValidationLab').then(m => ({ default: m.ValidationLabView })))
+const EvidenceView = lazy(() => import('./views/Evidence').then(m => ({ default: m.EvidenceView })))
 
 /* Five working sections and a console.
  *
@@ -28,7 +30,7 @@ const ValidationLabView = lazy(() => import('./views/ValidationLab').then(m => (
  * moved into Settings, where an update check belongs. */
 const tabs = [
   'Overview', 'Pipeline', 'Orchestrator', 'Agent Command', 'Research Lab',
-  'Strategies', 'Validation Lab', 'Prop Firm', 'Console', 'Settings',
+  'Strategies', 'Validation Lab', 'Evidence', 'Prop Firm', 'Console', 'Settings',
 ] as const
 type Tab = (typeof tabs)[number]
 
@@ -40,6 +42,7 @@ const ICONS: Record<Tab, typeof Layers> = {
   'Research Lab': Microscope,
   Strategies: Layers,
   'Validation Lab': Grid3X3,
+  Evidence: FileText,
   'Prop Firm': ShieldCheck,
   Console: MessageSquare,
   Settings: SlidersHorizontal,
@@ -53,6 +56,7 @@ const EYEBROW: Record<Tab, string> = {
   'Research Lab': 'EVIDENCE INVENTORY',
   Strategies: 'BUILD · RUN · JUDGE',
   'Validation Lab': 'WALK-FORWARD · CSCV · CPCV',
+  Evidence: 'WHY WE TRUST IT, OR DO NOT',
   'Prop Firm': 'ACCOUNT SURVIVAL',
   Console: 'ASK THE LEDGER',
   Settings: 'PROVIDERS · DATA · UPDATES',
@@ -155,6 +159,7 @@ export function App() {
           {online && tab === 'Research Lab' && <ResearchLabView />}
           {online && tab === 'Strategies' && <StrategiesView />}
           {online && tab === 'Validation Lab' && <ValidationLabView />}
+          {online && tab === 'Evidence' && <EvidenceView />}
           {online && tab === 'Prop Firm' && <PropFirmView />}
           {online && tab === 'Console' && <ConsoleView />}
           {online && tab === 'Settings' && <SettingsView />}

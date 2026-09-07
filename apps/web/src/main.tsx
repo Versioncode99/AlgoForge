@@ -8,6 +8,7 @@ import './styles/workspace.css'
 import './styles/command.css'
 import './styles/pipeline.css'
 import './styles/orchestrator.css'
+import './styles/evidence.css'
 import './styles/storage.css'
 
 const queryClient = new QueryClient({defaultOptions: {queries: {retry: 1, staleTime: 30_000}}})

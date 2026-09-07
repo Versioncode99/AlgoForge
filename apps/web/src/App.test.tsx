@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { App } from './App'
 
 vi.mock('echarts-for-react/lib/core', () => ({ default: () => <div data-testid="chart" /> }))
-// Nine lazily-loaded sections; the tab walk mounts every one of them in a
+// Ten lazily-loaded sections; the tab walk mounts every one of them in a
 // single test, and the last chunks land well past the 5s default.
 configure({ asyncUtilTimeout: 12000 })
 
@@ -112,7 +112,8 @@ test('every remaining tab reaches a section that renders', async () => {
   renderApp()
   await screen.findByText(/autonomous engine/i)
   for (const tab of [
-    'Pipeline', 'Orchestrator', 'Research Lab', 'Strategies', 'Prop Firm', 'Console', 'Settings',
+    'Pipeline', 'Orchestrator', 'Research Lab', 'Strategies', 'Evidence', 'Prop Firm',
+    'Console', 'Settings',
   ]) {
     fireEvent.click(screen.getByRole('button', { name: tab }))
     expect(await screen.findByRole('heading', { name: tab, level: 1 })).toBeInTheDocument()
@@ -166,4 +167,14 @@ test('the orchestrator will not launch a mission from an empty objective', async
   expect(await screen.findByLabelText(/what should the team do/i)).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /plan and run/i })).toBeDisabled()
   expect(screen.getByRole('button', { name: /plan it/i })).toBeDisabled()
+})
+
+test('evidence says why it has nothing rather than showing an empty frame', async () => {
+  // With no strategies the dossier cannot be fetched at all. The view has to
+  // say so: a blank panel would read as "measured, and there is nothing".
+  renderApp()
+  await screen.findByText(/autonomous engine/i)
+  fireEvent.click(screen.getByRole('button', { name: 'Evidence' }))
+  expect(await screen.findByText(/NO STRATEGIES/i)).toBeInTheDocument()
+  expect(screen.getByText(/why this candidate is trusted, or is not/i)).toBeInTheDocument()
 })
