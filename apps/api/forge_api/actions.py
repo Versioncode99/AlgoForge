@@ -696,6 +696,7 @@ class Actions:
                 store=self.store,
                 experiments=self.engine.experiments,
                 memory=self.engine.memory,
+                snapshots=self.engine.snapshots,
                 scope=self.engine._scope(),
                 strategy_id=key,
             )

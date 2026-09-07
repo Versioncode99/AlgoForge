@@ -167,3 +167,28 @@ def test_the_action_refuses_an_unknown_strategy_with_a_reason(
     with pytest.raises(ActionError) as refusal:
         actions.call("strategy_dossier", {"strategy_id": "nope"})
     assert "list_strategies" in str(refusal.value)
+
+
+# ── reproducibility ──────────────────────────────────────────────────────────
+
+
+def test_reproducibility_reports_absent_without_a_verdict(client: TestClient) -> None:
+    data = _dossier(client, _new_strategy(client))
+    assert data["reproducibility"]["available"] is False
+    assert "nothing was snapshotted" in data["reproducibility"]["reason"]
+
+
+def test_reproducibility_reads_a_written_snapshot(client: TestClient) -> None:
+    """A snapshot written for a run id must be found and verified through the dossier."""
+    import forge.judge.engine  # noqa: F401
+
+    engine = client.app.state.engine  # type: ignore[attr-defined]
+    engine.snapshots.write(
+        run_id="run_probe",
+        verdict={"verdict_id": "v1", "decision": "FAIL"},
+        identity={"dataset": "nq_1m_16y"},
+        strategy_source="def signal(bars):\n    return 0\n",
+    )
+    report = engine.snapshots.verify("run_probe")
+    assert report["intact"] is True
+    assert engine.snapshots.drift("run_probe")["comparable"] is True

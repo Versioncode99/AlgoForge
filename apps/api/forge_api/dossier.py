@@ -179,6 +179,41 @@ def _experiment_section(experiments: Any, spec: Any, scope: str) -> dict[str, An
     )
 
 
+def _reproducibility_section(snapshots: Any, run_id: str | None) -> dict[str, Any]:
+    """Can this verdict be re-examined, and do the rules still say the same thing?
+
+    Two questions, deliberately separate. `intact` asks whether the record is
+    undamaged. `comparable` asks whether the judge and statistics modules that
+    produced it still have the same source — a verdict from an edited judge is
+    still an honest record of what that judge decided, but it cannot be lined up
+    against a fresh verdict as though the two agreed.
+    """
+    if not run_id:
+        return _absent("no verdict, so nothing was snapshotted")
+    manifest = snapshots.read(run_id)
+    if manifest is None:
+        return _absent(
+            "no snapshot for this run; it predates run snapshotting or was judged "
+            "outside the engine"
+        )
+    verified = snapshots.verify(run_id)
+    drift = snapshots.drift(run_id)
+    return _section(
+        {
+            "run_id": run_id,
+            "manifest_hash": manifest.get("manifest_hash"),
+            "intact": verified["intact"],
+            "changed": verified["changed"],
+            "comparable": drift["comparable"],
+            "drifted": drift["drifted"],
+            "captured_sources": [
+                {"label": item["label"], "sha256": item["sha256"]}
+                for item in manifest.get("sources", [])
+            ],
+        }
+    )
+
+
 def _memory_section(memory: Any, scope: str, template: str | None) -> dict[str, Any]:
     if not template:
         return _absent("strategy does not record the template it came from")
@@ -214,6 +249,7 @@ def build_dossier(
     memory: Any,
     scope: str,
     strategy_id: str,
+    snapshots: Any = None,
 ) -> dict[str, Any]:
     """Assemble the dossier for one strategy. Raises KeyError if it does not exist."""
     from forge_api.strategies import judge_evidence, load_evidence
@@ -257,6 +293,11 @@ def build_dossier(
         "validation": _evidence_section(load_evidence(root, strategy_id)),
         "provenance": _experiment_section(experiments, spec, scope),
         "research_memory": _memory_section(memory, scope, spec.template),
+        "reproducibility": (
+            _reproducibility_section(snapshots, verdict.run_id if verdict else None)
+            if snapshots is not None
+            else _absent("no snapshot store was supplied")
+        ),
         "dissent": (
             _section(build_debate(verdict).model_dump(mode="json"))
             if verdict is not None

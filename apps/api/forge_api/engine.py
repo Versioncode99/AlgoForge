@@ -35,6 +35,7 @@ from forge.data.models import Bar
 from forge.judge import MINIMUM_TRIAL_CONFIGURATIONS, Judge, JudgeInput
 from forge.memory import FailureClass, ResearchMemory, classify_gate
 from forge.prop import MIN_TRADING_DAYS, load_rules, simulate_prop_paths
+from forge.provenance import RunSnapshots
 from forge.research import ResearchLedger, ResearchPartitions, chronological_split
 from forge.strategy import TEMPLATES, ParameterSpec, StrategyLibrary, run_backtest
 from forge.vault import VaultMirror, Workspace
@@ -172,6 +173,10 @@ class AutonomousEngine:
         # Experiments.reserve; this is what generalises a failure to the region
         # around it, and what makes either survive a restart.
         self.memory = ResearchMemory(workspace.data / "research_memory.db")
+        # Snapshots of judged runs: the judge source, the strategy source and
+        # the data identity that produced each verdict, so a result can be
+        # re-examined rather than only detected as changed.
+        self.snapshots = RunSnapshots(workspace.store / "runs")
         self._rules = load_rules(workspace.repo / "rules")
 
     # ── control ──────────────────────────────────────────────────────────────
@@ -785,6 +790,8 @@ class AutonomousEngine:
             if verdict.decision == "PASS":
                 self._bump("holdout_passed")
 
+        self._snapshot(verdict, spec, result, params, prereg, partitions)
+
         if self.mirror is not None:
             self.mirror.verdict(
                 verdict.model_dump(mode="json"),
@@ -881,6 +888,61 @@ class AutonomousEngine:
             gate=gate,
             strategy_id=strategy_id,
         )
+
+    def _snapshot(
+        self,
+        verdict: Any,
+        spec: Any,
+        result: Any,
+        params: dict[str, float],
+        prereg: Any,
+        partitions: ResearchPartitions | None,
+    ) -> None:
+        """Record what produced this verdict. Never fatal to the search.
+
+        A snapshot is evidence about a run, not part of computing it. If the
+        disk is full or the workspace moved mid-cycle, the right outcome is a
+        logged warning and a completed research cycle — not a lost candidate.
+        """
+        try:
+            self.snapshots.write(
+                run_id=verdict.run_id,
+                verdict=verdict.model_dump(mode="json"),
+                identity={
+                    "strategy_id": spec.strategy_id,
+                    "lineage": spec.lineage,
+                    "template": spec.template,
+                    "family": spec.family,
+                    "parameters": dict(params),
+                    "symbol": spec.symbol,
+                    "bar_spec": spec.bar_spec,
+                    "dataset": self.state.config.dataset,
+                    "data_version": self._data_version,
+                    "catalog_version": self._catalog_version,
+                    "seed": self.state.config.seed,
+                    "code_hash": result.code_hash,
+                    "spec_hash": spec.spec_hash,
+                    "evidence_tier": getattr(result, "evidence_tier", None),
+                    "bar_count": getattr(result, "bar_count", None),
+                    "split_id": partitions.receipt.split_id if partitions else None,
+                    "cost_model": {
+                        "commission_per_side": spec.commission_per_side,
+                        "slippage_ticks": spec.slippage_ticks,
+                        "tick_value": spec.tick_value,
+                    },
+                },
+                strategy_source=self.library.source_path(spec.strategy_id).read_text(
+                    encoding="utf-8"
+                ),
+                template_source=getattr(TEMPLATES.get(spec.template), "source", None),
+                preregistration=prereg.model_dump(mode="json") if prereg else None,
+            )
+        except Exception as error:
+            self.log.record(
+                "SNAPSHOT",
+                f"could not snapshot {verdict.run_id}: {type(error).__name__}: {error}",
+                "warn",
+            )
 
     def _preregistration_holds(
         self, attempt_id: str, template: Any, params: dict[str, float]

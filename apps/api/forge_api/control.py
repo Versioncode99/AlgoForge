@@ -467,6 +467,7 @@ def build_control_router(
                 store=store,
                 experiments=engine.experiments,
                 memory=engine.memory,
+                snapshots=engine.snapshots,
                 scope=engine._scope(),
                 strategy_id=strategy_id,
             )
