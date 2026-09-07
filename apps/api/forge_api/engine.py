@@ -5,10 +5,14 @@ it to disk as real strategy code, backtests it on real market data, submits it t
 the deterministic judge, and records what happened — including, and especially,
 the failures.
 
-The search is deliberately memory-guided rather than random: a candidate whose
-parameter neighbourhood has already failed is skipped before any compute is
-spent, and lineages that keep failing are retired. That is the cheapest gate in
-the system and it runs here, at the front, not in the judge.
+The search is deliberately memory-guided rather than random, and it is guided
+twice. ``Experiments.reserve`` refuses a byte-identical repeat, and
+``ResearchMemory.prune`` refuses a candidate whose parameter *neighbourhood* has
+already failed for a reason that generalises. Both run here, at the front,
+before any compute is spent — not in the judge.
+
+Both survive a restart, which is the point: a research system that forgets what
+it disproved is a treadmill.
 
 Eight search policies consume bounded research proposals and explore executable
 templates. Specialist model tasks run separately under a daily call cap. Selection
@@ -20,6 +24,7 @@ from __future__ import annotations
 import random
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -27,9 +32,10 @@ from typing import Any
 from forge.contracts.hashing import content_hash
 from forge.data.models import Bar
 from forge.judge import Judge, JudgeInput
+from forge.memory import FailureClass, ResearchMemory, classify_gate
 from forge.prop import MIN_TRADING_DAYS, load_rules, simulate_prop_paths
 from forge.research import ResearchLedger, ResearchPartitions, chronological_split
-from forge.strategy import TEMPLATES, StrategyLibrary, run_backtest
+from forge.strategy import TEMPLATES, ParameterSpec, StrategyLibrary, run_backtest
 from forge.vault import VaultMirror, Workspace
 
 from forge_api.activity import ActivityLog, BacktestStore
@@ -73,6 +79,9 @@ class EngineState:
     lineages_retired: int = 0
     engine_errors: int = 0
     skipped_by_memory: int = 0
+    # Skipped because a *neighbouring* parameter set already failed, as
+    # opposed to skipped because this exact set was already attempted.
+    skipped_by_region: int = 0
     pruned: int = 0
     prop_tested: int = 0
     best_pass_rate: float = 0.0
@@ -100,7 +109,8 @@ class EngineState:
             "lineages_retired": self.lineages_retired,
             "engine_errors": self.engine_errors,
             "skipped_by_memory": self.skipped_by_memory,
-            "compute_saved": self.skipped_by_memory,
+            "skipped_by_region": self.skipped_by_region,
+            "compute_saved": self.skipped_by_memory + self.skipped_by_region,
             "pruned": self.pruned,
             "prop_tested": self.prop_tested,
             "best_pass_rate": round(self.best_pass_rate, 6),
@@ -157,11 +167,11 @@ class AutonomousEngine:
         self._paused: set[int] = set()
         self.agents: AgentService | None = None
         self.experiments = Experiments(workspace.data / "experiments.db")
+        # Durable failure record. Exact repeats are already refused by
+        # Experiments.reserve; this is what generalises a failure to the region
+        # around it, and what makes either survive a restart.
+        self.memory = ResearchMemory(workspace.data / "research_memory.db")
         self._rules = load_rules(workspace.repo / "rules")
-        # Failure constraints: (template, rounded parameter signature) -> reason.
-        self._constraints: dict[tuple[str, str], str] = {}
-        self._lineage_failures: dict[str, int] = {}
-        self._retired_lineages: set[str] = set()
 
     # ── control ──────────────────────────────────────────────────────────────
     def start(self, config: EngineConfig | None = None) -> dict[str, Any]:
@@ -449,9 +459,25 @@ class AutonomousEngine:
             params = {p.name: float(p.default) for p in template.parameters}
 
         signature = ",".join(f"{k}={params[k]}" for k in sorted(params))
-        key = (template_key, signature)
 
-        # Memory gate: cheapest rejection in the system, before any compute.
+        # Memory gates: the two cheapest rejections in the system, before any
+        # compute. The neighbourhood check runs first because it subsumes the
+        # exact match — a repeat is at distance zero from itself.
+        pruned = self.memory.prune(
+            scope=self._scope(),
+            template=template_key,
+            parameters=params,
+            ranges=template.parameters,
+        )
+        if pruned is not None:
+            self._bump("skipped_by_region")
+            self.log.record(
+                "MEMORY",
+                f"skipped {template_key} {signature}: {pruned.describe()}",
+                "info",
+            )
+            return
+
         attempt_id = self.experiments.reserve(self._scope(), template_key, params)
         if attempt_id is None:
             self._bump("skipped_by_memory")
@@ -578,7 +604,14 @@ class AutonomousEngine:
         self._stage(worker, "judging")
         pnl = tuple(t.net_pnl for t in result.trades)
         if not pnl:
-            self._remember(key, template_key, "produced no trades")
+            self._remember(
+                template_key,
+                params,
+                template.parameters,
+                FailureClass.NO_TRADES,
+                "produced no trades",
+                strategy_id=spec.strategy_id,
+            )
             self.log.record("JUDGE", f"{spec.strategy_id} → no trades to judge", "warn")
             self.library.delete(spec.strategy_id)
             self._bump("created", -1)
@@ -661,7 +694,16 @@ class AutonomousEngine:
             except ValueError:
                 reason = "holdout already consumed for lineage"
                 self._bump("rejected")
-                self._remember(key, template_key, reason)
+                # Bookkeeping, not research: this says nothing about the
+                # parameters, so it is recorded but never prunes.
+                self._remember(
+                    template_key,
+                    params,
+                    template.parameters,
+                    FailureClass.BOOKKEEPING,
+                    reason,
+                    strategy_id=spec.strategy_id,
+                )
                 self.log.record("HOLDOUT", f"{spec.strategy_id} -> {reason}", "fail")
                 return
             holdout = run_backtest(
@@ -683,7 +725,14 @@ class AutonomousEngine:
             if not holdout_pnl:
                 reason = "burn-once holdout produced no trades"
                 self._bump("rejected")
-                self._remember(key, template_key, reason)
+                self._remember(
+                    template_key,
+                    params,
+                    template.parameters,
+                    FailureClass.NO_TRADES,
+                    reason,
+                    strategy_id=spec.strategy_id,
+                )
                 self.log.record("HOLDOUT", f"{spec.strategy_id} -> {reason}", "fail")
                 return
             verdict = Judge().evaluate(
@@ -724,7 +773,25 @@ class AutonomousEngine:
         else:
             self._bump("rejected")
             reason = f"failed {failed[0].gate} ({failed[0].name})" if failed else "rejected"
-            self._remember(key, template_key, reason)
+            # Learn only from a gate that actually FAILED. `failed` also holds
+            # INCONCLUSIVE gates, which mean "never measured" — pruning a region
+            # because nobody looked at it would delete candidates on the
+            # strength of nothing.
+            broken = next((gate for gate in failed if gate.status == "FAIL"), None)
+            if broken is not None:
+                failure = classify_gate(
+                    broken.gate, broken.status, lookahead=not result.lookahead_clean
+                )
+                if failure is not None:
+                    self._remember(
+                        template_key,
+                        params,
+                        template.parameters,
+                        failure,
+                        f"failed {broken.gate} ({broken.name})",
+                        gate=broken.gate,
+                        strategy_id=spec.strategy_id,
+                    )
             self.log.record(
                 "JUDGE",
                 f"{spec.strategy_id} → {verdict.decision}, {reason}",
@@ -736,16 +803,50 @@ class AutonomousEngine:
 
         self._stage(worker, "idle")
 
-    def _remember(self, key: tuple[str, str], lineage: str, reason: str) -> None:
-        self._constraints[key] = reason
-        self._lineage_failures[lineage] = self._lineage_failures.get(lineage, 0) + 1
+    def _remember(
+        self,
+        template_key: str,
+        params: dict[str, float],
+        ranges: Sequence[ParameterSpec],
+        failure: FailureClass,
+        reason: str,
+        *,
+        gate: str | None = None,
+        strategy_id: str | None = None,
+    ) -> None:
+        """Persist one classified failure so the next cycle can act on it.
+
+        The class, not the message, is what carries research meaning: it decides
+        how far this finding reaches. A reason string is for a human reading the
+        log.
+        """
+        self.memory.record(
+            scope=self._scope(),
+            template=template_key,
+            failure_class=failure,
+            reason=reason,
+            parameters=params,
+            ranges=ranges,
+            gate=gate,
+            strategy_id=strategy_id,
+        )
 
     @staticmethod
     def _symbol(bars: list[Bar]) -> str:
         return bars[0].symbol if bars else "UNKNOWN"
 
     def constraints(self) -> list[dict[str, str]]:
+        """What the engine has learned, newest first, straight from disk."""
         return [
-            {"template": template, "parameters": signature, "reason": reason}
-            for (template, signature), reason in list(self._constraints.items())[-100:]
+            {
+                "template": record.template,
+                "parameters": ",".join(
+                    f"{name}={value}" for name, value in sorted(record.parameters.items())
+                ),
+                "reason": record.reason,
+                "failure_class": str(record.failure_class),
+                "gate": record.gate or "",
+                "at": record.created_at,
+            }
+            for record in self.memory.recent(self._scope(), limit=100)
         ]
