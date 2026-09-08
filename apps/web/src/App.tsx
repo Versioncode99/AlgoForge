@@ -29,9 +29,10 @@ const ResearchMemoryView = lazy(() => import('./views/ResearchMemory').then(m =>
 const DataWorkspaceView = lazy(() => import('./views/DataWorkspace').then(m => ({ default: m.DataWorkspaceView })))
 const ChartsView = lazy(() => import('./views/Charts').then(m => ({ default: m.ChartsView })))
 const StrategyChartView = lazy(() => import('./views/StrategyChartView').then(m => ({ default: m.StrategyChartView })))
+const ResearchLabWorkbench = lazy(() => import('./views/ResearchLabView').then(m => ({ default: m.ResearchLabWorkbench })))
 const WorkspaceView = lazy(() => import('./views/Workspace').then(m => ({ default: m.WorkspaceView })))
 
-type RouteId = 'overview' | 'missions' | 'experiments' | 'strategies' | 'runs' | 'validation' | 'charts' | 'trades' | 'workspace' |
+type RouteId = 'overview' | 'missions' | 'experiments' | 'strategies' | 'runs' | 'validation' | 'charts' | 'trades' | 'lab' | 'workspace' |
   'evidence' | 'memory' | 'lineage' | 'data' | 'research' | 'pipeline' | 'agents' |
   'prop' | 'console' | 'settings'
 type NavItem = PaletteRoute & { id: RouteId; icon: typeof Activity }
@@ -60,6 +61,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
   { group: 'Data', items: [
     { id: 'data', label: 'Data Health', group: 'Data', detail: 'Coverage and provenance', icon: Database },
     { id: 'research', label: 'Research Library', group: 'Data', detail: 'Sources and replication gaps', icon: BookOpen },
+    { id: 'lab', label: 'Research Lab', group: 'Data', detail: 'Ask a question, get back to the trades', icon: FlaskConical },
   ]},
   { group: 'Autonomous', items: [
     { id: 'pipeline', label: 'Engine Pipeline', group: 'Autonomous', detail: 'Graph and live counts', icon: Workflow },
@@ -155,6 +157,7 @@ export function App() {
             {online && route === 'trades' && <StrategyChartView />}
             {online && route === 'data' && <DataWorkspaceView />}
             {online && route === 'research' && <ResearchLabView />}
+            {online && route === 'lab' && <ResearchLabWorkbench />}
             {online && route === 'pipeline' && <PipelineView />}
             {online && route === 'agents' && <AgentCommandView />}
             {online && route === 'prop' && <PropFirmView />}

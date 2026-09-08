@@ -20,6 +20,7 @@ import './styles/panels.css'
 import './styles/workstation.css'
 import './styles/research.css'
 import './styles/trades.css'
+import './styles/lab.css'
 
 const queryClient = new QueryClient({defaultOptions: {queries: {retry: 1, staleTime: 30_000}}})
 

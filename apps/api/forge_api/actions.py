@@ -147,10 +147,11 @@ class Actions:
     ) -> None:
         self.workspace = workspace
         self.library = library
-        # The trade-ledger view, when one is attached. Optional so this
-        # registry can be built before it exists; the actions that need it
-        # refuse by name rather than raising an attribute error.
+        # The trade-ledger view and the research lab, when attached. Optional
+        # so this registry can be built before they exist; the actions that
+        # need them refuse by name rather than raising an attribute error.
         self.ledger = ledger
+        self.lab: Any = None
         self.store = store
         self.log = log
         self.market = market
@@ -433,6 +434,7 @@ class Actions:
             self.read_research,
         )
         self._register_ir()
+        self._register_lab()
         self._register_workspace()
         self._register_builder()
 
@@ -675,6 +677,167 @@ class Actions:
                 "not evidence the idea works."
             ),
         }
+
+    def _register_lab(self) -> None:
+        """Research-lab verbs.
+
+        These answer questions about a ledger that already exists. None of them
+        runs a strategy, consumes a holdout or produces a verdict, which is why
+        they are all safe and none is mutating in the sense that matters —
+        saving an artifact writes a derived record that can be regenerated from
+        the backtest it cites.
+        """
+        self._add(
+            "list_analyses",
+            "The questions the research lab can answer about a strategy's trades, "
+            "and what each one needs.",
+            {},
+            self.list_analyses,
+        )
+        self._add(
+            "run_analysis",
+            "Answer one question about a strategy's historical trades — expectancy "
+            "by hour, by volatility percentile, as a surface over both, by month, "
+            "by excursion, or what the worst 10% of trades have in common. Every "
+            "bucket reports its own sample size and carries the trades behind it.",
+            {
+                "analysis": {
+                    "type": "string",
+                    "description": (
+                        "by_hour | by_volatility_percentile | hour_by_volatility | "
+                        "edge_over_time | excursion | worst_decile"
+                    ),
+                },
+                "strategy_id": {"type": "string"},
+                "backtest_id": {"type": "string", "optional": True},
+                "measure": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "average_trade | net_pnl | win_rate | trade_count",
+                },
+            },
+            self.run_analysis,
+            mutating=True,
+        )
+        self._add(
+            "list_analysis_artifacts",
+            "Questions that have already been asked, newest first, with the run "
+            "each was asked of.",
+            {
+                "strategy_id": {"type": "string", "optional": True},
+                "limit": {"type": "integer", "optional": True},
+            },
+            self.list_analysis_artifacts,
+        )
+        self._add(
+            "analysis_trades",
+            "The trades behind one cell of a stored analysis — the drilldown from "
+            "a region of a chart to the evidence under it. Coordinates are one "
+            "index per axis.",
+            {
+                "artifact_id": {"type": "string"},
+                "coords": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "One index per axis, in axis order.",
+                },
+                "limit": {"type": "integer", "optional": True},
+            },
+            self.analysis_trades,
+        )
+
+    # ── research lab ─────────────────────────────────────────────────────────
+    def _require_lab(self) -> Any:
+        if self.lab is None:
+            raise ActionError("The research lab is not attached to this registry.")
+        return self.lab
+
+    def list_analyses(self) -> dict[str, Any]:
+        items = self._require_lab().catalogue()
+        return {
+            "analyses": items,
+            "total": len(items),
+            "note": (
+                "These slice a ledger that already exists. None of them runs a "
+                "strategy, consumes a holdout, or produces a verdict."
+            ),
+        }
+
+    def run_analysis(
+        self,
+        analysis: str,
+        strategy_id: str,
+        backtest_id: str | None = None,
+        measure: str | None = None,
+    ) -> dict[str, Any]:
+        lab = self._require_lab()
+        try:
+            payload: dict[str, Any] = lab.run(
+                _str(analysis, "analysis", limit=64, lower=True),
+                _str(strategy_id, "strategy_id", limit=120),
+                backtest_id=backtest_id or None,
+                measure=_str(measure or "average_trade", "measure", limit=32, lower=True),
+                created_by="agent",
+            )
+        except Exception as exc:
+            raise ActionError(str(exc)) from exc
+        # The full cell list can be thousands of entries with trade ids attached.
+        # An agent reading this wants the shape and the findings; the artifact id
+        # is how it gets the rest.
+        return {
+            "artifact_id": payload["artifact_id"],
+            "analysis": payload["analysis"],
+            "title": payload["title"],
+            "question": payload["question"],
+            "shape": payload["shape"],
+            "measure": payload["measure"],
+            "axes": [
+                {"name": axis["name"], "label": axis["label"], "categories": axis["categories"]}
+                for axis in payload["axes"]
+            ],
+            "cells": [
+                {
+                    "coords": cell["coords"],
+                    "labels": cell["labels"],
+                    "trade_count": cell["trade_count"],
+                    "value": cell["value"],
+                    "insufficient": cell["insufficient"],
+                }
+                for cell in payload["cells"]
+            ],
+            "total_trades": payload["total_trades"],
+            "covered_trades": payload["covered_trades"],
+            "findings": payload["findings"],
+            "warnings": payload["warnings"],
+            "is_evidence": False,
+            "next": (
+                "analysis_trades(artifact_id, coords) opens the trades behind any "
+                "cell."
+            ),
+        }
+
+    def list_analysis_artifacts(
+        self, strategy_id: str | None = None, limit: int | None = None
+    ) -> dict[str, Any]:
+        lab = self._require_lab()
+        rows = lab.store.list(strategy_id or "", max(1, min(int(limit or 50), 500)))
+        return {"artifacts": rows, "total": len(rows), "stored": lab.store.count()}
+
+    def analysis_trades(
+        self, artifact_id: str, coords: list[int], limit: int | None = None
+    ) -> dict[str, Any]:
+        lab = self._require_lab()
+        if not isinstance(coords, list) or not coords:
+            raise ActionError("'coords' must be a non-empty list of integers, one per axis.")
+        try:
+            payload: dict[str, Any] = lab.drilldown(
+                _str(artifact_id, "artifact_id", limit=120),
+                [int(value) for value in coords],
+                limit=max(1, min(int(limit or 100), 2000)),
+            )
+        except Exception as exc:
+            raise ActionError(str(exc)) from exc
+        return payload
 
     # ── the Strategy IR ──────────────────────────────────────────────────────
     def list_blueprints(self) -> dict[str, Any]:

@@ -1,0 +1,307 @@
+/* The research lab.
+
+   A question, its answer, the findings the answer supports, and a way into the
+   trades underneath. Laid out so all four are on screen together, because the
+   loop this surface exists for is looking at a region that seems wrong and
+   opening it — and that stops being a loop if it needs scrolling. */
+
+.lab-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3, 12px);
+  min-height: 0;
+}
+
+.lab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3, 12px);
+  padding: var(--sp-2, 8px) var(--sp-3, 12px);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.lab-bar .ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.lab-bar .ctl > span {
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.lab-bar select {
+  background: var(--bg-1);
+  color: var(--fg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  min-width: 9rem;
+}
+
+/* The question is the subject of this screen, so it gets the room. */
+.lab-question select {
+  min-width: 26rem;
+  max-width: 100%;
+}
+
+.lab-run {
+  background: var(--brand-wash);
+  border: 1px solid var(--brand-dim);
+  color: var(--fg-0);
+  border-radius: 3px;
+  padding: 6px 16px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lab-run:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.lab-needs {
+  margin: 0;
+  font-size: var(--fs-nano);
+  color: var(--fg-3);
+  padding-left: var(--sp-3, 12px);
+}
+
+/* ── layout ─────────────────────────────────────────────────────────────── */
+
+.lab-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-3, 12px);
+  min-height: 0;
+}
+
+.lab-body.with-drill {
+  grid-template-columns: minmax(0, 1fr) 24rem;
+}
+
+@media (max-width: 1440px) {
+  .lab-body.with-drill {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.lab-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3, 12px);
+  min-width: 0;
+}
+
+/* ── the result ─────────────────────────────────────────────────────────── */
+
+.lab-result {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-1);
+  padding: var(--sp-3, 12px);
+}
+
+.lab-result > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3, 12px);
+  margin-bottom: var(--sp-2, 8px);
+}
+
+.lab-result h3 {
+  margin: 0;
+  font-size: var(--fs-base);
+  color: var(--fg-0);
+}
+
+.lab-sub {
+  margin: 2px 0 0;
+  font-size: var(--fs-micro);
+  color: var(--fg-3);
+}
+
+/* Stated on every result. An analysis slices a ledger that already exists; a
+   reader who mistook one for evidence would be laundering exploration into
+   proof, so the distinction is on the surface rather than in a docstring. */
+.lab-badge {
+  flex-shrink: 0;
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.08em;
+  color: var(--warn);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  padding: 3px 7px;
+  cursor: help;
+}
+
+.analysis-chart {
+  min-width: 0;
+}
+
+.analysis-note {
+  margin: var(--sp-2, 8px) 0 0;
+  font-size: var(--fs-nano);
+  color: var(--fg-3);
+}
+
+.lab-findings {
+  margin: var(--sp-3, 12px) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.lab-findings li {
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--fg-1);
+  padding-left: 10px;
+  border-left: 2px solid var(--brand-dim);
+}
+
+.lab-warning {
+  margin: var(--sp-2, 8px) 0 0;
+  font-size: var(--fs-micro);
+  line-height: 1.55;
+  color: var(--fg-2);
+  padding-left: 10px;
+  border-left: 2px solid var(--warn);
+}
+
+.lab-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3, 12px);
+  margin-top: var(--sp-3, 12px);
+  padding-top: var(--sp-2, 8px);
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-nano);
+  color: var(--fg-3);
+}
+
+/* ── history ────────────────────────────────────────────────────────────── */
+
+.lab-history {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-1);
+  padding: var(--sp-3, 12px);
+  max-height: 18rem;
+  overflow: auto;
+}
+
+.lab-history h4 {
+  margin: 0 0 var(--sp-2, 8px);
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  font-weight: 600;
+}
+
+.lab-history tbody tr {
+  cursor: pointer;
+}
+
+.lab-history tbody tr:hover {
+  background: var(--bg-2);
+}
+
+.lab-empty {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+
+/* ── the drilldown ──────────────────────────────────────────────────────── */
+
+.lab-drill {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2, 8px);
+  padding: var(--sp-3, 12px);
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  max-height: calc(100vh - 14rem);
+  overflow: auto;
+  align-self: start;
+}
+
+.lab-drill > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2, 8px);
+}
+
+.lab-eyebrow {
+  display: block;
+  font-size: var(--fs-nano);
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+
+.lab-drill h4 {
+  margin: 2px 0 0;
+  font-size: var(--fs-base);
+  color: var(--fg-0);
+}
+
+.lab-drill > header button {
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  color: var(--fg-1);
+  width: 1.5rem;
+  height: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lab-drill-table {
+  width: 100%;
+  font-size: var(--fs-micro);
+}
+
+.lab-drill-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-2);
+}
+
+.lab-note {
+  margin: 0;
+  font-size: var(--fs-nano);
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+
+.lab-link {
+  font-size: var(--fs-xs);
+  color: var(--brand);
+  text-decoration: none;
+}
+
+.lab-link:hover {
+  text-decoration: underline;
+}
+
+.lab-view .up { color: var(--pass); }
+.lab-view .down { color: var(--fail); }

@@ -43,6 +43,7 @@ from forge_api.providers import (
     catalog_for,
     status_for,
 )
+from forge_api.research_lab import ArtifactStore, LabError, ResearchLab
 from forge_api.settings_store import (
     KNOWN_MODELS,
     ROLES,
@@ -141,6 +142,20 @@ class PanelSettingRequest(BaseModel):
 class LinkPanelsRequest(BaseModel):
     panel_ids: list[str] = Field(min_length=1)
     group: str | None = None
+
+
+class AnalysisRequest(BaseModel):
+    """One question, asked of one run."""
+
+    analysis: str = Field(min_length=2, max_length=64)
+    strategy_id: str = Field(min_length=1, max_length=120)
+    backtest_id: str | None = Field(default=None, max_length=120)
+    measure: str = Field(default="average_trade", max_length=32)
+    #: Hours per bucket on the two-dimensional surface. Twenty-four by ten
+    #: buckets over a few hundred trades is a picture of noise.
+    hour_bucket: int = Field(default=2, ge=1, le=6)
+    save: bool = True
+    note: str = Field(default="", max_length=400)
 
 
 class BuildWorkspaceRequest(BaseModel):
@@ -272,9 +287,14 @@ def build_control_router(
     # chart can place them at any timeframe. Holds the regime cache, because
     # classifying millions of bars per request would make the inspector unusable.
     ledger_view = TradeLedgerService(market, store, library)
+    # Analysis artifacts are derived records, not evidence: every one can be
+    # recomputed from the backtest it cites. They live in the app-owned data
+    # root beside the other databases.
+    research_lab = ResearchLab(ledger_view, ArtifactStore(workspace.data / "analyses.db"))
     # Handed to the registry so the agent reads trades through the same service
     # the interface does, rather than through a second implementation.
     actions.ledger = ledger_view
+    actions.lab = research_lab
     assistant = Assistant(root, library, store, log, settings_store, actions)
     agents.context = lambda: {
         "running": engine.state.running,
@@ -1093,6 +1113,118 @@ def build_control_router(
                 )
             },
         )
+
+    # ── research lab ─────────────────────────────────────────────────────────
+    # Questions asked of a ledger that already exists. Nothing here runs a
+    # strategy, consumes a holdout, or produces a verdict — which is why it is
+    # cheap to ask, and why every stored artifact says it is not evidence.
+
+    @router.get("/lab/analyses", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def lab_catalogue() -> ApiEnvelope[list[dict[str, Any]]]:
+        """What the lab can be asked, and what each question needs."""
+        items = research_lab.catalogue()
+        return ApiEnvelope(
+            data=items,
+            meta={
+                "total": len(items),
+                "note": (
+                    "A bounded set rather than generated code: everything here is "
+                    "something a person can run and a test can check."
+                ),
+            },
+        )
+
+    @router.post("/lab/run", response_model=ApiEnvelope[dict[str, Any]])
+    def lab_run(body: AnalysisRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Answer one question about a strategy's trades."""
+        try:
+            payload = research_lab.run(
+                body.analysis,
+                body.strategy_id,
+                backtest_id=body.backtest_id,
+                measure=body.measure,
+                hour_bucket=body.hour_bucket,
+                save=body.save,
+                note=body.note,
+            )
+        except LabError as exc:
+            raise HTTPException(
+                422, {"code": "analysis_unavailable", "reason": str(exc)}
+            ) from exc
+        return ApiEnvelope(
+            data=payload,
+            meta={
+                "is_evidence": False,
+                "note": payload.get("evidence_note", ""),
+            },
+        )
+
+    @router.get("/lab/artifacts", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def lab_artifacts(
+        strategy_id: str = "", limit: int = 100
+    ) -> ApiEnvelope[list[dict[str, Any]]]:
+        """Questions that have been asked, newest first."""
+        rows = research_lab.store.list(strategy_id, limit)
+        return ApiEnvelope(
+            data=rows,
+            meta={"total": len(rows), "stored": research_lab.store.count()},
+        )
+
+    @router.get("/lab/artifacts/{artifact_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def lab_artifact(artifact_id: str) -> ApiEnvelope[dict[str, Any]]:
+        payload = research_lab.store.get(artifact_id)
+        if payload is None:
+            raise HTTPException(404, {"code": "artifact_not_found"})
+        return ApiEnvelope(data=payload, meta={"is_evidence": False})
+
+    @router.delete(
+        "/lab/artifacts/{artifact_id}", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def lab_delete(artifact_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Discard a stored analysis.
+
+        Safe in a way deleting evidence would not be: an analysis is derived,
+        and re-running it against the same backtest reproduces it exactly.
+        """
+        if not research_lab.store.delete(artifact_id):
+            raise HTTPException(404, {"code": "artifact_not_found"})
+        return ApiEnvelope(
+            data={"artifact_id": artifact_id, "deleted": True},
+            meta={
+                "note": (
+                    "Derived record. The backtest it cites is untouched, and "
+                    "re-running the analysis reproduces it."
+                )
+            },
+        )
+
+    @router.get(
+        "/lab/artifacts/{artifact_id}/trades", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def lab_drilldown(
+        artifact_id: str, coords: str, limit: int = 500
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """The trades behind one cell.
+
+        `coords` is comma-separated, one index per axis — so a surface cell at
+        the third hour slot and the top volatility band is `2,4`. Read from the
+        ids the analysis recorded rather than recomputed, so a drilldown cannot
+        drift from the picture it came from.
+        """
+        try:
+            parsed = [int(part) for part in coords.split(",") if part.strip() != ""]
+        except ValueError as exc:
+            raise HTTPException(
+                422,
+                {
+                    "code": "bad_coords",
+                    "reason": "coords is comma-separated integers, one per axis",
+                },
+            ) from exc
+        try:
+            return ApiEnvelope(data=research_lab.drilldown(artifact_id, parsed, limit=limit))
+        except LabError as exc:
+            raise HTTPException(404, {"code": "cell_not_found", "reason": str(exc)}) from exc
 
     # ── workspaces ───────────────────────────────────────────────────────────
     # Thin by design. Every one of these delegates to the same action the agent

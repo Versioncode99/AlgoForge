@@ -15,8 +15,11 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
     assert set(tools) == {
         "describe_workspace",
         "engine_status",
+        "analysis_trades",
         "experiment_lineage",
         "export_strategy",
+        "list_analyses",
+        "list_analysis_artifacts",
         "list_blueprints",
         "list_experiments",
         "list_families",
