@@ -39,7 +39,13 @@ build-backend = "hatchling.build"
 packages = ["packages/forge", "apps/api/forge_api"]
 
 [tool.pytest.ini_options]
-pythonpath = ["packages", "apps/api"]
+# The repository root is on the path so a test module can import a sibling
+# test module. `tests/judge/test_explain.py` reuses the fixtures built in
+# `tests/judge/test_judge.py`, and with only `packages` and `apps/api` here,
+# pytest's prepend import mode puts `tests/` on the path but never the root, so
+# `tests.judge.test_judge` did not resolve and collection stopped before a
+# single test ran.
+pythonpath = [".", "packages", "apps/api"]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
 
