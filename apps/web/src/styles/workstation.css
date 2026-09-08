@@ -1,69 +1,864 @@
-/* Research-first shell. Imported last so legacy view styling remains usable
-   while the application chrome is replaced as one coherent system. */
-.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-.app-shell { min-height: 100vh; display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); grid-template-rows: 48px minmax(0, 1fr) 32px; background: var(--bg-0); }
-.workstation-rail { grid-column: 1; grid-row: 1 / 4; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--bg-1); z-index: 20; overflow: hidden; }
-.rail-brand { height: 48px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); }
-.rail-brand .wordmark { min-width: 150px; }
-.rail-brand button, .rail-mobile-toggle { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; color: var(--fg-2); background: transparent; border: 1px solid transparent; }
-.rail-brand button:hover { color: var(--fg-0); border-color: var(--line-strong); }
-.rail-brand svg, .rail-mobile-toggle svg { width: 15px; }
-.workstation-rail nav { flex: 1; overflow: auto; padding: 8px 7px 12px; }
-.workstation-rail nav section + section { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
-.workstation-rail nav h2 { margin: 0 8px 4px; color: var(--fg-3); font: 600 var(--fs-nano)/1 var(--font-label); letter-spacing: .05em; text-transform: uppercase; }
-.workstation-rail nav a { min-height: 31px; display: flex; align-items: center; gap: 9px; padding: 0 9px; border-left: 2px solid transparent; color: var(--fg-2); text-decoration: none; font-size: var(--fs-sm); }
-.workstation-rail nav a svg { width: 15px; flex: 0 0 auto; }
-.workstation-rail nav a:hover { color: var(--fg-0); background: var(--bg-2); }
-.workstation-rail nav a[aria-current='page'] { color: color-mix(in srgb, var(--warn) 45%, var(--fg-0)); border-left-color: var(--brand); background: var(--brand-wash); }
-.rail-search { margin: 8px; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border: 1px solid var(--line); background: var(--bg-1); color: var(--fg-2); }
-.rail-search svg { width: 14px; }.rail-search span { flex: 1; text-align: left; }.rail-search kbd, .context-search kbd { color: var(--fg-3); font-size: 9px; }
+/* The application shell: rail, context bar, workspace, status bar, drawer.
+ *
+ * This is the chrome every screen is seen through, and until this rewrite it
+ * was the least-designed file in the application — sixty-nine lines, several
+ * rules to a line, and not one radius anywhere, while a hundred and fifty
+ * lines of polish in app.css styled a topbar and tab strip that had already
+ * been deleted. That is the whole of why the navigation read as a directory
+ * listing.
+ *
+ * Three rules hold it together now:
+ *
+ *   Geometry is tokenised. Every radius is one of the four in tokens.css and
+ *   every shell dimension is a token, so a media query moves `--rail-w` rather
+ *   than restating the four rules that depend on it. `test_theme_tokens.py`
+ *   refuses a literal radius in this file for the same reason it refuses a
+ *   literal colour anywhere outside the token file.
+ *
+ *   Selection and hover are two steps of one idea. The active destination is
+ *   *filled*, not bordered; hover is a lighter fill of the same family. The
+ *   old two-pixel left border was a third, unrelated treatment.
+ *
+ *   Labels are prose. The shell used to set its own type inline at eight and
+ *   nine pixels of letter-spaced monospace, undercutting the type scale's
+ *   deliberate ten-pixel floor everywhere it appeared. Monospace is for
+ *   figures, hashes, identifiers and timestamps only.
+ */
 
-.context-bar { grid-column: 2; grid-row: 1; position: sticky; top: 0; z-index: 15; min-width: 0; display: flex; align-items: stretch; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg-0) 97%, transparent); }
-.rail-mobile-toggle { display: none; margin: 9px 4px; }
-.context-title { min-width: 180px; padding: 6px 15px; border-right: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; }
-.context-title span { color: var(--fg-3); font: 600 8px/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
-.context-title strong { margin-top: 3px; font-size: 13px; }
-.context-facts { min-width: 0; flex: 1; display: flex; align-items: center; overflow: hidden; }
-.context-facts > span { height: 100%; flex: 0 0 auto; display: flex; align-items: center; gap: 5px; padding: 0 12px; border-right: 1px solid var(--line); color: var(--fg-2); font: 500 9px/1 var(--font-mono); letter-spacing: .04em; }
-.context-facts svg { width: 12px; }.context-facts .pulse { position: static; }
-.context-search { align-self: center; margin: 0 9px; height: 30px; min-width: 104px; display: flex; align-items: center; gap: 7px; padding: 0 8px; border: 1px solid var(--line-strong); background: var(--bg-2); color: var(--fg-2); }
-.context-search svg { width: 13px; }.context-search span { flex: 1; text-align: left; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 
-.workstation-main { grid-column: 2; grid-row: 2; min-width: 0; overflow: auto; padding: 18px clamp(14px, 2vw, 28px) 38px; }
-.workstation-main .view-content { max-width: 1900px; margin: 0 auto; }
-.global-status { grid-column: 2; grid-row: 3; z-index: 30; min-width: 0; display: flex; align-items: center; gap: 16px; padding: 0 10px; border-top: 1px solid var(--line); background: var(--bg-1); color: var(--fg-3); font: 500 9px/1 var(--font-mono); }
-.global-status > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 7px; }
-.global-status svg { width: 12px; }.global-status .is-pass { color: var(--pass); }.global-status .is-fail { color: var(--fail); }.global-status .is-warn { color: var(--warn); }
-.global-status button { height: 100%; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--fg-2); font-size: 9px; }
+/* The skip link is the first thing a keyboard user reaches, so it has to be
+   reachable itself. It used to point at a fragment that was also a route id,
+   which meant activating it navigated the application instead of moving focus
+   to the content. */
+.skip-link {
+  position: absolute;
+  top: var(--sp-2);
+  left: var(--sp-2);
+  z-index: 200;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  background: var(--bg-raised);
+  color: var(--fg-0);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+  transform: translateY(calc(-100% - var(--sp-4)));
+  transition: transform var(--t-fast) var(--ease-out);
+}
+.skip-link:focus-visible { transform: translateY(0); }
 
-.event-drawer { position: fixed; left: var(--rail-w); right: 0; bottom: 32px; z-index: 25; height: min(42vh, 390px); border-top: 1px solid var(--brand-dim); background: var(--bg-1); transform: translateY(calc(100% + 1px)); visibility: hidden; transition: transform var(--t-slow) var(--ease-out), visibility 0s linear var(--t-slow); }
-.event-drawer[data-open='true'] { transform: translateY(0); visibility: visible; transition-delay: 0s; box-shadow: 0 -20px 45px color-mix(in srgb, var(--bg-0) 35%, transparent); }
-.event-drawer header { height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--line); }.event-drawer header svg { width: 14px; }.event-drawer header span { flex: 1; color: var(--fg-3); }.event-drawer header button { border: 1px solid var(--line); background: var(--bg-2); }
-.event-drawer > div { height: calc(100% - 38px); overflow: auto; }.event-drawer article { min-height: 31px; display: grid; grid-template-columns: 70px 100px minmax(200px,1fr) auto; gap: 10px; align-items: center; padding: 5px 12px; border-bottom: 1px solid var(--line); font-size: 11px; }.event-drawer article time, .event-drawer article code { color: var(--fg-3); }.event-drawer article[data-level='fail'] strong { color: var(--fail); }.event-drawer article[data-level='pass'] strong { color: var(--pass); }.event-drawer article[data-level='warn'] strong { color: var(--warn); }
+/* ── shell ─────────────────────────────────────────────────────────────────
+   Three rows, two columns. The rail spans all three rows so the wordmark sits
+   at the same height as the context bar rather than under it. */
+.app-shell {
+  height: 100vh;
+  height: 100dvh;
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--statusbar-h);
+  background: var(--bg-0);
+  transition: grid-template-columns var(--t) var(--ease-soft);
+}
 
-.is-rail-collapsed { grid-template-columns: 52px minmax(0,1fr); }.is-rail-collapsed .workstation-rail { width: 52px; }.is-rail-collapsed .rail-brand { padding: 0 11px; }.is-rail-collapsed .rail-brand .wordmark { display: none; }.is-rail-collapsed .workstation-rail nav { padding-inline: 6px; }.is-rail-collapsed .workstation-rail nav h2, .is-rail-collapsed .workstation-rail nav a span, .is-rail-collapsed .rail-search span, .is-rail-collapsed .rail-search kbd { display: none; }.is-rail-collapsed .workstation-rail nav a { justify-content: center; padding: 0; }.is-rail-collapsed .rail-search { justify-content: center; }.is-rail-collapsed .event-drawer { left: 52px; }
+/* ── rail ──────────────────────────────────────────────────────────────────
+   A padded column rather than a full-bleed list, so every row inside it can be
+   a rounded object with its own hit area. */
+.workstation-rail {
+  grid-column: 1;
+  grid-row: 1 / 4;
+  z-index: 20;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--bg-1);
+}
 
-.palette-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; justify-items: center; align-items: start; padding-top: min(16vh, 150px); background: color-mix(in srgb, var(--bg-0) 68%, transparent);
-  /* The scrim behind a modal. Themeable for the same reason the toolbar is. */
-  backdrop-filter: blur(var(--blur-1)); -webkit-backdrop-filter: blur(var(--blur-1)); }
+.rail-brand {
+  flex: 0 0 auto;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: 0 var(--shell-gap) 0 var(--sp-4);
+  border-bottom: 1px solid var(--line);
+}
+.rail-brand .brand { min-width: 0; overflow: hidden; }
+
+.rail-collapse {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--fg-2);
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.rail-collapse:hover {
+  color: var(--fg-0);
+  background: var(--bg-2);
+}
+.rail-collapse svg { width: 16px; height: 16px; }
+
+.workstation-rail nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--sp-3) var(--shell-gap);
+}
+
+/* No rule between groups. A hairline after every five items is nineteen more
+   lines than the eye needs; the label and the space above it say the same
+   thing without drawing anything. */
+.workstation-rail nav section + section { margin-top: var(--sp-4); }
+
+.workstation-rail nav h2 {
+  margin: 0 0 var(--sp-1);
+  padding: 0 var(--sp-3);
+  color: var(--fg-3);
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.workstation-rail nav a {
+  position: relative;
+  min-height: var(--rail-row-h);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r);
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.workstation-rail nav a + a { margin-top: 1px; }
+.workstation-rail nav a svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  opacity: .82;
+}
+.workstation-rail nav a span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Hover and selection: two steps of one idea. */
+.workstation-rail nav a:hover {
+  color: var(--fg-0);
+  background: var(--bg-2);
+}
+.workstation-rail nav a[aria-current='page'] {
+  color: var(--fg-0);
+  background: var(--accent-wash);
+  font-weight: 500;
+}
+.workstation-rail nav a[aria-current='page'] svg {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.rail-search {
+  flex: 0 0 auto;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 var(--shell-gap) var(--shell-gap);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+  transition: border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.rail-search:hover {
+  border-color: var(--line-strong);
+  color: var(--fg-1);
+}
+.rail-search svg { flex: 0 0 auto; width: 15px; height: 15px; }
+.rail-search span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+/* A shortcut nobody sees is a shortcut nobody uses, so it is printed on the
+   control rather than left to be discovered. */
+.rail-search kbd,
+.context-search kbd {
+  flex: 0 0 auto;
+  padding: 2px var(--sp-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+  color: var(--fg-3);
+  font-size: var(--fs-nano);
+  line-height: 1.4;
+}
+
+/* ── context bar ───────────────────────────────────────────────────────────
+   One row: where you are, the facts that change, and search. */
+.context-bar {
+  grid-column: 2;
+  grid-row: 1;
+  z-index: 15;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4) 0 var(--sp-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-0);
+}
+
+.rail-mobile-toggle {
+  display: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  color: var(--fg-1);
+}
+.rail-mobile-toggle svg { width: 16px; height: 16px; }
+
+.context-title {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+.context-title span {
+  color: var(--fg-3);
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.context-title strong {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -.01em;
+}
+
+/* The facts are chips, not cells. The hairline-separated cells they replaced
+   made a row of live telemetry read as a table header. */
+.context-facts {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  overflow: hidden;
+}
+.context-facts > span {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 28px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+  color: var(--fg-2);
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  font-weight: 600;
+  letter-spacing: .05em;
+  white-space: nowrap;
+}
+.context-facts svg { width: 13px; height: 13px; }
+.context-facts b {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: var(--fg-0);
+}
+.context-facts b.good { color: var(--pass); }
+.context-facts b.warn { color: var(--warn); }
+/* A count that was never fetched is a different fact from a count of zero, and
+   they used to look identical. */
+.context-facts b.unknown { color: var(--fg-3); }
+.context-facts .pulse { position: static; }
+
+.context-search {
+  flex: 0 0 auto;
+  height: 32px;
+  min-width: 112px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+  transition: border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.context-search:hover {
+  border-color: var(--line-strong);
+  color: var(--fg-0);
+}
+.context-search svg { width: 14px; height: 14px; }
+.context-search span { flex: 1 1 auto; text-align: left; }
+
+/* ── workspace ─────────────────────────────────────────────────────────────*/
+.workstation-main {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-5) clamp(var(--sp-4), 2vw, var(--sp-8)) var(--sp-10);
+}
+.workstation-main .view-content {
+  max-width: 1900px;
+  margin: 0 auto;
+}
+
+/* ── status bar ────────────────────────────────────────────────────────────*/
+.global-status {
+  grid-column: 2;
+  grid-row: 3;
+  z-index: 30;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-2) 0 var(--sp-5);
+  border-top: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--fg-3);
+  font-size: var(--fs-nano);
+}
+.global-status > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.global-status svg { flex: 0 0 auto; width: 13px; height: 13px; }
+.global-status .is-pass { color: var(--pass); }
+.global-status .is-fail { color: var(--fail); }
+.global-status .is-warn { color: var(--warn); }
+.global-status button {
+  flex: 0 0 auto;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-2);
+  font-size: var(--fs-nano);
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.global-status button:hover {
+  color: var(--fg-0);
+  background: var(--bg-3);
+}
+
+/* ── event drawer ──────────────────────────────────────────────────────────
+   It floats over the workspace, so it takes the large radius and the third
+   shadow step — the one step reserved for things that are actually above. */
+.event-drawer {
+  position: fixed;
+  left: calc(var(--rail-w) + var(--shell-gap));
+  right: var(--shell-gap);
+  bottom: calc(var(--statusbar-h) + var(--shell-gap));
+  z-index: 25;
+  height: min(42vh, 390px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+  transform: translateY(calc(100% + var(--sp-6)));
+  visibility: hidden;
+  transition:
+    transform var(--t-slow) var(--ease-out),
+    left var(--t) var(--ease-soft),
+    visibility 0s linear var(--t-slow);
+}
+.event-drawer[data-open='true'] {
+  transform: translateY(0);
+  visibility: visible;
+  transition-delay: 0s;
+}
+.event-drawer header {
+  flex: 0 0 auto;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+.event-drawer header svg { width: 15px; height: 15px; color: var(--fg-2); }
+.event-drawer header span { flex: 1 1 auto; color: var(--fg-3); font-size: var(--fs-nano); }
+.event-drawer header button {
+  height: 26px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  font-size: var(--fs-nano);
+}
+.event-drawer header button:hover { border-color: var(--line-strong); color: var(--fg-0); }
+.event-drawer > div {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-1) var(--sp-2);
+}
+.event-drawer > div > p { padding: var(--sp-5); color: var(--fg-2); text-align: center; }
+.event-drawer article {
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: 70px 108px minmax(200px, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-micro);
+}
+.event-drawer article:hover { background: var(--bg-2); }
+.event-drawer article time,
+.event-drawer article code {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-nano);
+}
+.event-drawer article[data-level='pass'] strong { color: var(--pass); }
+.event-drawer article[data-level='fail'] strong { color: var(--fail); }
+.event-drawer article[data-level='warn'] strong { color: var(--warn); }
+
+/* ── collapsed rail ────────────────────────────────────────────────────────
+   It has to stay usable collapsed, so the label becomes a tooltip that does
+   not wait on the title attribute's delay, and the active fill still reads at
+   icon width. */
+.is-rail-collapsed { grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr); }
+.is-rail-collapsed .rail-brand { justify-content: center; padding: 0; }
+.is-rail-collapsed .rail-brand .brand { display: none; }
+.is-rail-collapsed .workstation-rail nav h2,
+.is-rail-collapsed .rail-search span,
+.is-rail-collapsed .rail-search kbd { display: none; }
+
+/* The label is hidden visually, not removed. `display: none` takes it out of
+   the accessibility tree too, and the icon carries no name of its own, so a
+   collapsed rail announced twenty unlabelled links. */
+.is-rail-collapsed .workstation-rail nav a span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.is-rail-collapsed .workstation-rail nav a,
+.is-rail-collapsed .rail-search { justify-content: center; padding-inline: 0; }
+.is-rail-collapsed .workstation-rail nav section + section {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+.is-rail-collapsed .event-drawer { left: calc(var(--rail-w-collapsed) + var(--shell-gap)); }
+
+/* The label as a hover tooltip, drawn outside the rail.
+ *
+ * It has to escape the nav, which scrolls, and a scrolling ancestor clips its
+ * descendants. `position: absolute` is cut off at the rail's edge, and
+ * `overflow-x: clip` does not help: beside a scrolling axis it computes to
+ * `hidden`, which takes `overflow-clip-margin` with it. Both were tried in the
+ * browser rather than reasoned about.
+ *
+ * `position: fixed` is what escapes an ancestor's overflow clip. It also makes
+ * the horizontal placement trivial rather than something to anchor: the
+ * collapsed rail is pinned to the viewport's left edge and is exactly
+ * `--rail-w-collapsed` wide, so the tooltip's left is that plus a gap. Only the
+ * vertical position has to track the row, and `top: auto` is the row's own
+ * static position, which is exactly that.
+ *
+ * The label is hidden visually rather than with `display: none`, so it stays in
+ * the accessibility tree and the collapsed rail is still navigable by screen
+ * reader whether or not this paints. */
+.is-rail-collapsed .workstation-rail nav a::after {
+  content: attr(data-label);
+  position: fixed;
+  left: calc(var(--rail-w-collapsed) + var(--sp-2));
+  top: auto;
+  z-index: 40;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-2);
+  color: var(--fg-0);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.is-rail-collapsed .workstation-rail nav a:hover::after,
+.is-rail-collapsed .workstation-rail nav a:focus-visible::after { opacity: 1; }
+
+/* ── command palette ───────────────────────────────────────────────────────*/
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  justify-items: center;
+  align-items: start;
+  padding-top: min(16vh, 150px);
+  background: color-mix(in srgb, var(--bg-0) 68%, transparent);
+  /* The scrim behind a modal — one of the three surfaces allowed to blur. */
+  backdrop-filter: blur(var(--blur-1));
+  -webkit-backdrop-filter: blur(var(--blur-1));
+}
+
 /* Glass, because it floats over the workspace and is about to go away again:
    seeing what is underneath is what tells you the palette is acting on the
-   screen behind it. `.af-glass` carries the material; only the geometry is
-   here. */
-.command-palette { width: min(680px, calc(100vw - 32px)); border-radius: var(--r-lg); }
-.palette-search { height: 50px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); }.palette-search svg { width: 17px; color: var(--brand); }.palette-search input { flex: 1; border: 0; outline: 0; background: transparent; font-size: 14px; }.palette-search kbd { color: var(--fg-3); }
-.palette-results { max-height: 420px; overflow: auto; padding: 5px; }.palette-results button { width: 100%; min-height: 43px; display: grid; grid-template-columns: 1fr auto; align-items: center; padding: 6px 9px; border: 1px solid transparent; background: transparent; text-align: left; }.palette-results button strong { font-size: 12px; }.palette-results button small { grid-row: 2; color: var(--fg-3); }.palette-results button > span { grid-column: 2; grid-row: 1 / 3; color: var(--fg-3); }.palette-results button:hover, .palette-results button:focus-visible { border-color: var(--brand-dim); background: var(--brand-wash); }.palette-results > p { padding: 20px; color: var(--fg-2); text-align: center; }.command-palette footer { display: flex; justify-content: space-between; padding: 8px 12px; border-top: 1px solid var(--line); color: var(--fg-3); font-size: 9px; }
+   screen behind it. `.af-glass` carries the material; only geometry is here. */
+.command-palette {
+  width: min(680px, calc(100vw - var(--sp-8)));
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.palette-search {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+  border-bottom: 1px solid var(--line);
+}
+.palette-search svg { width: 17px; height: 17px; color: var(--brand); }
+.palette-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: var(--fs-lg);
+}
+.palette-search kbd { color: var(--fg-3); font-size: var(--fs-nano); }
+.palette-results {
+  max-height: 420px;
+  overflow-y: auto;
+  padding: var(--sp-2);
+}
+.palette-results button {
+  width: 100%;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  background: transparent;
+  text-align: left;
+  transition: background var(--t-fast) var(--ease);
+}
+.palette-results button strong { font-size: var(--fs-xs); }
+.palette-results button small { grid-row: 2; color: var(--fg-3); }
+.palette-results button > span { grid-column: 2; grid-row: 1 / 3; color: var(--fg-3); }
+.palette-results button:hover,
+.palette-results button:focus-visible,
+.palette-results button[data-active='true'] {
+  border-color: var(--brand-dim);
+  background: var(--brand-wash);
+}
+.palette-results > p { padding: var(--sp-5); color: var(--fg-2); text-align: center; }
+.command-palette footer {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--line);
+  color: var(--fg-3);
+  font-size: var(--fs-nano);
+}
 
-.section-title h2 { font-size: clamp(20px, 2vw, 28px); }.workspace-intro { max-width: 850px; color: var(--fg-2); line-height: 1.55; }.table-note { display: block; margin-top: 2px; color: var(--fg-3); font-size: 9px; }
-.overview-control-strip { display: grid; grid-template-columns: 1.4fr 1fr 1fr; border: 1px solid var(--line); background: var(--bg-1); }.overview-control-strip section { min-width: 0; min-height: 82px; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-right: 1px solid var(--line); }.overview-control-strip section:last-child { border: 0; }.overview-control-strip span { color: var(--fg-3); font: 600 9px/1 var(--font-mono); letter-spacing: .09em; text-transform: uppercase; }.overview-control-strip strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.overview-control-strip small { color: var(--fg-2); }.text-action { width: fit-content; padding: 0; border: 0; background: transparent; color: color-mix(in srgb, var(--warn) 70%, var(--fg-1)); font-size: 11px; }
-.coverage-panel .panel-head { border-bottom: 1px solid var(--line); }.coverage-matrix { display: grid; align-items: stretch; overflow: auto; }.coverage-matrix > * { min-height: 34px; display: flex; align-items: center; padding: 6px 8px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }.coverage-matrix > strong { justify-content: center; color: var(--fg-3); font: 600 9px/1 var(--font-mono); text-transform: uppercase; }.coverage-matrix > b { font-size: 11px; }.coverage-matrix > span { position: relative; justify-content: flex-end; color: var(--fg-1); font: 500 10px/1 var(--font-mono); overflow: hidden; }.coverage-matrix > span i { position: absolute; inset: 3px; z-index: 0; background: var(--pass); }.coverage-matrix > span[data-status*='BLOCKED'] i, .coverage-matrix > span[data-status*='MISSING'] i { background: var(--warn); }.coverage-matrix > span[data-status*='UNTESTED'] i { background: var(--neutral); }.coverage-matrix > span { isolation: isolate; }.coverage-matrix > span i { z-index: -1; }
+/* ── shared view furniture ─────────────────────────────────────────────────
+   These belong to screens rather than to the shell, and sit here because the
+   shell rewrite is what loads last. */
+.section-title h2 { font-size: clamp(var(--fs-2xl), 2vw, var(--fs-hero)); }
+.workspace-intro { max-width: 850px; color: var(--fg-2); line-height: var(--lh); }
+.table-note { display: block; margin-top: 2px; color: var(--fg-3); font-size: var(--fs-nano); }
 
-.command-hero-compact { min-height: auto; padding: 18px 20px; }.command-hero-compact h2 { font-size: 26px; line-height: 1.1; }.command-hero-compact .command-vitals { align-self: stretch; }.agent-register { min-height: 420px; }.agent-register-coordinator { display: grid; grid-template-columns: 105px 1fr auto; gap: 10px; padding: 11px 12px; border-bottom: 1px solid var(--line); background: var(--brand-wash); }.agent-register-coordinator span { color: var(--brand); font: 600 9px/1.3 var(--font-mono); }.agent-register-coordinator small { color: var(--fg-2); }.agent-register > button { width: 100%; min-height: 52px; display: grid; grid-template-columns: 32px minmax(180px,1fr) 80px 55px 65px; gap: 9px; align-items: center; padding: 7px 11px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--fg-2); text-align: left; }.agent-register > button:hover { background: var(--bg-2); }.agent-register > button.is-selected { box-shadow: inset 2px 0 var(--brand); background: var(--brand-wash); color: var(--fg-0); }.agent-register > button span:nth-child(2) { min-width: 0; }.agent-register > button strong, .agent-register > button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.agent-register > button small { margin-top: 3px; color: var(--fg-3); }.agent-register > button > span:nth-last-child(-n+2) { color: var(--fg-3); font-size: 10px; text-align: right; }
+.overview-control-strip {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  overflow: hidden;
+}
+.overview-control-strip section {
+  min-width: 0;
+  min-height: 82px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-right: 1px solid var(--line);
+}
+.overview-control-strip section:last-child { border-right: 0; }
+.overview-control-strip span {
+  color: var(--fg-3);
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.overview-control-strip strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overview-control-strip small { color: var(--fg-2); }
 
+.text-action {
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-micro);
+}
+.text-action:hover { text-decoration: underline; }
+
+.coverage-panel .panel-head { border-bottom: 1px solid var(--line); }
+.coverage-matrix { display: grid; align-items: stretch; overflow: auto; }
+.coverage-matrix > * {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: var(--sp-2);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.coverage-matrix > strong {
+  justify-content: center;
+  color: var(--fg-3);
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  font-weight: 600;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.coverage-matrix > b { font-size: var(--fs-micro); }
+.coverage-matrix > span {
+  position: relative;
+  isolation: isolate;
+  justify-content: flex-end;
+  overflow: hidden;
+  color: var(--fg-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-nano);
+  font-variant-numeric: tabular-nums;
+}
+.coverage-matrix > span i {
+  position: absolute;
+  inset: 3px;
+  z-index: -1;
+  border-radius: var(--r-sm);
+  background: var(--pass);
+}
+.coverage-matrix > span[data-status*='BLOCKED'] i,
+.coverage-matrix > span[data-status*='MISSING'] i { background: var(--warn); }
+.coverage-matrix > span[data-status*='UNTESTED'] i { background: var(--neutral); }
+
+.command-hero-compact { min-height: auto; padding: var(--sp-5); }
+.command-hero-compact h2 { font-size: var(--fs-hero); line-height: 1.1; }
+.command-hero-compact .command-vitals { align-self: stretch; }
+
+.agent-register { min-height: 420px; }
+.agent-register-coordinator {
+  display: grid;
+  grid-template-columns: 105px 1fr auto;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--brand-wash);
+}
+.agent-register-coordinator span {
+  color: var(--brand);
+  font-family: var(--font-mono);
+  font-size: var(--fs-nano);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+}
+.agent-register-coordinator small { color: var(--fg-2); }
+.agent-register > button {
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 32px minmax(180px, 1fr) 80px 55px 65px;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-2);
+  text-align: left;
+}
+.agent-register > button:hover { background: var(--bg-2); }
+.agent-register > button.is-selected {
+  background: var(--brand-wash);
+  color: var(--fg-0);
+  box-shadow: inset 2px 0 var(--brand);
+}
+.agent-register > button span:nth-child(2) { min-width: 0; }
+.agent-register > button strong,
+.agent-register > button small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-register > button small { margin-top: 3px; color: var(--fg-3); }
+.agent-register > button > span:nth-last-child(-n + 2) {
+  color: var(--fg-3);
+  font-size: var(--fs-nano);
+  text-align: right;
+}
+
+/* ── breakpoints ───────────────────────────────────────────────────────────
+   Moving the token moves everything that depends on it, which is why the
+   drawer no longer needs its own `left` at each width. */
 @media (max-width: 1280px) {
-  .app-shell { grid-template-columns: 190px minmax(0,1fr); }.workstation-rail { width: 190px; }.context-facts > span:nth-of-type(3), .context-facts > span:nth-of-type(4) { display: none; }.event-drawer { left: 190px; }.command-vitals > div { min-width: 110px; }.agent-register > button { grid-template-columns: 28px minmax(150px,1fr) 74px 48px; }.agent-register > button > span:last-child { display: none; }
+  :root { --rail-w: 204px; }
+  .context-facts > span:nth-of-type(3),
+  .context-facts > span:nth-of-type(4) { display: none; }
+  .command-vitals > div { min-width: 110px; }
+  .agent-register > button { grid-template-columns: 28px minmax(150px, 1fr) 74px 48px; }
+  .agent-register > button > span:last-child { display: none; }
 }
+
+/* Below this width the rail is an overlay rather than a column, because 200px
+   of a 700px viewport spent on navigation is most of the reading width. The
+   toggle in the context bar owns it; the collapse control in the rail head is
+   for the docked rail and is hidden here. */
 @media (max-width: 900px) {
-  .app-shell, .app-shell.is-rail-collapsed { grid-template-columns: 52px minmax(0,1fr); }.workstation-rail, .is-rail-collapsed .workstation-rail { width: 52px; }.rail-brand .wordmark, .workstation-rail nav h2, .workstation-rail nav a span, .rail-search span, .rail-search kbd { display: none; }.workstation-rail nav a, .rail-search { justify-content: center; padding-inline: 0; }.context-title { min-width: 135px; }.context-facts > span:not(:first-child) { display: none; }.context-search { min-width: 38px; }.context-search span, .context-search kbd { display: none; }.event-drawer { left: 52px; }.overview-control-strip { grid-template-columns: 1fr; }.overview-control-strip section { border-right: 0; border-bottom: 1px solid var(--line); }.command-workspace { grid-template-columns: 1fr; }
+  .app-shell,
+  .app-shell.is-rail-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+  .rail-mobile-toggle { display: grid; }
+  .rail-collapse { display: none; }
+
+  .workstation-rail {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(var(--rail-w), 82vw);
+    border-right: 1px solid var(--line-strong);
+    box-shadow: var(--shadow-3);
+    transform: translateX(-101%);
+    transition: transform var(--t) var(--ease-out);
+  }
+  .app-shell[data-rail-open='true'] .workstation-rail { transform: translateX(0); }
+  .is-rail-collapsed .workstation-rail { width: min(var(--rail-w), 82vw); }
+  /* Collapsed styling must not follow the rail into the overlay: an icon-only
+     drawer is the one shape that has no reason to exist. */
+  .is-rail-collapsed .rail-brand { justify-content: space-between; padding: 0 var(--shell-gap) 0 var(--sp-4); }
+  .is-rail-collapsed .rail-brand .brand,
+  .is-rail-collapsed .workstation-rail nav h2,
+  .is-rail-collapsed .rail-search span { display: revert; }
+  /* The collapsed label is visually hidden rather than removed, so undoing it
+     means restoring the flow, not the display value. */
+  .is-rail-collapsed .workstation-rail nav a span {
+    position: static;
+    width: auto;
+    height: auto;
+    clip-path: none;
+  }
+  .is-rail-collapsed .workstation-rail nav a,
+  .is-rail-collapsed .rail-search { justify-content: flex-start; padding-inline: var(--sp-3); }
+  .is-rail-collapsed .workstation-rail nav a::after { content: none; }
+  .is-rail-collapsed .workstation-rail nav section + section { border-top: 0; padding-top: 0; margin-top: var(--sp-4); }
+
+  .rail-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 19;
+    border: 0;
+    padding: 0;
+    background: color-mix(in srgb, var(--bg-0) 62%, transparent);
+  }
+
+  .context-bar { padding-inline: var(--sp-3); }
+  .context-title { min-width: 0; }
+  .context-facts > span:not(:first-child) { display: none; }
+  .context-search { min-width: 40px; padding-inline: var(--sp-2); }
+  .context-search span,
+  .context-search kbd { display: none; }
+  .event-drawer,
+  .is-rail-collapsed .event-drawer { left: var(--shell-gap); }
+  .overview-control-strip { grid-template-columns: 1fr; }
+  .overview-control-strip section { border-right: 0; border-bottom: 1px solid var(--line); }
+  .command-workspace { grid-template-columns: 1fr; }
 }
-@media (prefers-reduced-motion: reduce) { .event-drawer { transition: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell,
+  .event-drawer,
+  .workstation-rail,
+  .skip-link { transition: none; }
+}

@@ -1,72 +1,42 @@
-/* ── Shell ───────────────────────────────────────────────────────────────── */
-.app {
-  display: grid;
-  /* An implicit `auto` column sizes to max-content and lets wide children blow the
-     layout out past the viewport. Pin it so every row is constrained instead. */
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: var(--topbar-h) 1fr auto;
-  height: 100vh;
-  height: 100dvh;
-  overflow: hidden;
-  background:
-    radial-gradient(1200px 340px at 78% -14%, color-mix(in srgb, var(--pass) 6%, transparent), transparent 62%),
-    var(--bg-0);
-}
+/* Screen-level styling: panels, metrics, tables, and the workbenches.
+ *
+ * The application chrome is NOT here — it is in `workstation.css`. It used to
+ * be in both. This file opened with a hundred and seventy lines styling a
+ * shell that had already been replaced: `.app`, `.topbar`, the tab strip,
+ * `.topstats`, the old `.rail-group` / `.rail-head` / `.rail-row` list,
+ * `.main`, `.view-head`, `.notice`, and the whole `.logbar` / `.logline`
+ * orchestrator log. Nothing rendered any of them. Meanwhile the shell that did
+ * render got sixty-nine lines, several rules to a line, and no radius at all.
+ *
+ * That is not a tidiness complaint. Dead rules are why the live shell never got
+ * the same care: a reader looking for the navigation styling found a fully
+ * specified rail here and stopped.
+ *
+ * What survived the cut, and why:
+ *   .brand*   the wordmark, rendered by `components/Logo.tsx` in the rail head
+ *   .pulse    the connection indicator in the context bar
+ *   .eyebrow  section kickers, used across the views
+ *   .chip     used by Orchestrator, Pipeline and the strategy chart
+ */
 
-/* ── Top bar ─────────────────────────────────────────────────────────────── */
-.topbar {
-  display: flex; align-items: center; gap: var(--sp-5); min-width: 0;
-  padding: 0 var(--sp-4);
-  border-bottom: 1px solid var(--line);
-  /* A floating toolbar over scrolling content — one of the three places the
-     brief puts glass. The blur is a token so the high-contrast theme can turn
-     it down to almost nothing without touching this rule. */
-  background: color-mix(in srgb, var(--bg-0) 86%, transparent);
-  backdrop-filter: blur(var(--blur-1));
-  -webkit-backdrop-filter: blur(var(--blur-1));
-  z-index: 20;
-}
-.brand { display: flex; align-items: center; gap: var(--sp-3); flex: none; }
-.brand-mark { width: 22px; height: 22px; display: block; }
-.brand-text { display: flex; align-items: baseline; gap: var(--sp-2); }
+/* ── Wordmark ────────────────────────────────────────────────────────────── */
+.brand { display: flex; align-items: center; gap: var(--sp-3); flex: none; min-width: 0; }
+.brand-mark { width: 22px; height: 22px; display: block; flex: none; }
+.brand-text { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
 .brand-name {
   font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-sm);
-  letter-spacing: .16em; color: var(--fg-0);
+  letter-spacing: .14em; color: var(--fg-0);
 }
 .brand-sub {
   font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
-  letter-spacing: .16em; color: var(--fg-2);
+  letter-spacing: .1em; color: var(--fg-3);
   padding-left: var(--sp-2); border-left: 1px solid var(--line-strong);
+  white-space: nowrap;
 }
 
-.tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; flex: 1 1 auto; min-width: 0; }
-.tabs::-webkit-scrollbar { display: none; }
-.tabs button {
-  position: relative; display: inline-flex; align-items: center; gap: var(--sp-2);
-  white-space: nowrap; border: 0; background: transparent; color: var(--fg-2);
-  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-micro); letter-spacing: .045em;
-  text-transform: uppercase; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm);
-  transition: color .14s var(--ease), background .14s var(--ease);
-}
-.tabs button svg { width: 13px; height: 13px; flex: none; }
-.tabs button:hover { color: var(--fg-1); background: var(--bg-2); }
-.tabs button.active { color: var(--fg-0); background: var(--bg-3); }
-.tabs button.active::after {
-  content: ""; position: absolute; left: var(--sp-3); right: var(--sp-3); bottom: -1px;
-  height: 2px; background: var(--brand); border-radius: 2px 2px 0 0;
-}
-
-.topstats { display: flex; align-items: center; gap: var(--sp-4); flex: none; }
-.topstat {
-  display: flex; align-items: baseline; gap: var(--sp-2);
-  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); letter-spacing: .05em;
-  color: var(--fg-2); text-transform: uppercase;
-}
-.topstat b { font-size: var(--fs-xs); color: var(--fg-0); font-weight: 500; letter-spacing: .02em; }
-.topstat.is-live { color: var(--brand); }
-
+/* ── Connection indicator ────────────────────────────────────────────────── */
 .pulse {
-  width: 6px; height: 6px; border-radius: 50%; background: var(--brand); flex: none;
+  width: 6px; height: 6px; border-radius: var(--r-round); background: var(--pass); flex: none;
   box-shadow: 0 0 0 0 color-mix(in srgb, var(--pass) 55%, transparent); animation: pulse 2.4s infinite;
 }
 .pulse.is-off { background: var(--fail); animation: none; box-shadow: none; }
@@ -76,47 +46,12 @@
   100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pass) 0%, transparent); }
 }
 
-/* ── Body: rail + main ───────────────────────────────────────────────────── */
-.body { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); min-height: 0; min-width: 0; }
-
-.rail {
-  border-right: 1px solid var(--line);
-  background: var(--bg-1);
-  overflow-y: auto; padding-bottom: var(--sp-6);
-}
-.rail-group { border-bottom: 1px solid var(--line); padding: var(--sp-3) 0; }
-.rail-head {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 0 var(--sp-4) var(--sp-2);
-  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); letter-spacing: .05em;
-  text-transform: uppercase; color: var(--fg-3);
-}
-.rail-row {
-  display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: var(--sp-2);
-  padding: 5px var(--sp-4); font-size: var(--fs-xs); color: var(--fg-1);
-}
-.rail-row:hover { background: var(--bg-2); }
-.rail-row b {
-  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
-  font-weight: 500; color: var(--fg-0); font-size: var(--fs-xs);
-}
-.rail-row .sub { font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); color: var(--fg-3); }
-
-.main { overflow-y: auto; padding: 0 var(--sp-6) var(--sp-8); min-width: 0; }
-
-.view-head {
-  position: sticky; top: 0; z-index: 10;
-  display: flex; justify-content: space-between; align-items: flex-end; gap: var(--sp-4);
-  padding: var(--sp-5) 0 var(--sp-3);
-  background: linear-gradient(var(--bg-0) 72%, transparent);
-}
-.view-head h1 { font-size: var(--fs-xl); letter-spacing: -.02em; font-weight: 600; }
+/* ── Section kickers and chips ───────────────────────────────────────────── */
 .eyebrow, .section-title p {
   margin: 0 0 3px; font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
-  letter-spacing: .16em; text-transform: uppercase; color: var(--fg-3);
+  letter-spacing: .14em; text-transform: uppercase; color: var(--fg-3);
 }
 
-.chips { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   border: 1px solid var(--line); border-radius: var(--r-sm);
@@ -125,50 +60,12 @@
   text-transform: uppercase; color: var(--fg-2);
 }
 .chip svg { width: 11px; height: 11px; }
-.chip.is-locked { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 24%, var(--line)); background: color-mix(in srgb, var(--fail) 10%, var(--bg-1)); }
-.chip.is-good { color: var(--brand); border-color: var(--line-glow); }
-
-.notice {
-  display: flex; align-items: flex-start; gap: var(--sp-2);
-  margin: 0 0 var(--sp-4);
-  border: 1px solid color-mix(in srgb, var(--warn) 25%, var(--line)); border-left: 2px solid var(--warn);
-  background: color-mix(in srgb, var(--warn) 9%, var(--bg-1)); color: color-mix(in srgb, var(--warn) 70%, var(--fg-1));
-  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm);
-  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
-  letter-spacing: .04em; line-height: 1.6;
-}
-.notice svg { width: 12px; height: 12px; flex: none; margin-top: 1px; }
-
-/* ── Orchestrator log ────────────────────────────────────────────────────── */
-.logbar { border-top: 1px solid var(--line); background: var(--bg-1); min-width: 0; overflow: hidden; }
-.logbar-head {
-  display: flex; align-items: center; gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--line);
-  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
-  letter-spacing: .16em; text-transform: uppercase; color: var(--fg-3);
-}
-.logbar-head .spacer { flex: 1; }
-.logbar-toggle {
-  border: 1px solid var(--line); background: var(--bg-2); color: var(--fg-2);
-  border-radius: var(--r-sm); padding: 3px var(--sp-2);
-  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); letter-spacing: .05em;
-}
-.logbar-toggle:hover { color: var(--fg-0); border-color: var(--line-strong); }
-.logbar-body { height: calc(var(--logbar-h) - 30px); overflow-y: auto; padding: var(--sp-2) 0; }
-.logbar[data-collapsed="true"] .logbar-body { display: none; }
-.logline {
-  display: grid; grid-template-columns: 68px 132px 1fr; gap: var(--sp-3);
-  padding: 2px var(--sp-4);
-  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); line-height: 1.7;
-  color: var(--fg-1);
-}
-.logline:hover { background: var(--bg-2); }
-.logline time { color: var(--fg-3); }
-.logline .stage { color: var(--fg-2); letter-spacing: .06em; }
-.logline .msg { overflow-wrap: anywhere; }
-.logline[data-level="pass"] .msg { color: var(--pass); }
-.logline[data-level="fail"] .msg { color: var(--fail); }
-.logline[data-level="warn"] .msg { color: var(--warn); }
+/* The views write `chip good` / `chip warn` / `chip active`; the older
+   `is-` variants were never rendered and the plain ones were never styled, so
+   a "good" chip and a "warn" chip looked identical. */
+.chip.good { color: var(--pass); border-color: color-mix(in srgb, var(--pass) 30%, var(--line)); background: color-mix(in srgb, var(--pass) 9%, var(--bg-1)); }
+.chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, var(--line)); background: color-mix(in srgb, var(--warn) 9%, var(--bg-1)); }
+.chip.active { color: var(--fg-0); border-color: var(--line-glow); background: var(--accent-wash); }
 
 /* ── Panels, metrics, tables ─────────────────────────────────────────────── */
 .section-title { padding: var(--sp-4) 0 var(--sp-3); }
@@ -345,6 +242,26 @@
   color: var(--fg-2); font-family: var(--font-mono); font-size: var(--fs-xs); text-align: center;
 }
 .state.error { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 24%, var(--line)); }
+
+/* An offline state that carries an action.
+ *
+ * The shell used to answer an unreachable API with one line of red and a blank
+ * workspace, which reads as a lost application rather than as a lost
+ * connection. Anything with more than a message in it needs to stack. */
+.state.error:has(button) {
+  display: flex; flex-direction: column; align-items: center; gap: var(--sp-4);
+  font-family: var(--font-ui); line-height: var(--lh); text-wrap: balance;
+}
+.state.error button {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid color-mix(in srgb, var(--fail) 30%, var(--line-strong));
+  border-radius: var(--r);
+  background: var(--bg-2); color: var(--fg-0);
+  font-family: var(--font-ui); font-size: var(--fs-sm);
+}
+.state.error button:hover { border-color: var(--fail); background: var(--bg-3); }
+.state.error button svg { width: 14px; height: 14px; }
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 @media (max-width: 1180px) {

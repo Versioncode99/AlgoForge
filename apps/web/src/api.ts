@@ -67,11 +67,42 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: init?.body ? { 'content-type': 'application/json' } : undefined,
   })
   const text = await response.text()
-  const payload = text ? JSON.parse(text) : {}
-  if (!response.ok) {
-    throw new ApiError(readMessage(payload, response.status), response.status, payload)
+
+  /* Not every response is JSON, and the ones that are not are exactly the ones
+   * worth reporting well. A proxy's HTML error page, a gateway timeout with an
+   * empty body, a crashed worker returning a stack trace as plain text: each
+   * used to throw a SyntaxError out of `JSON.parse` *before* the status was
+   * ever read. That error is not an ApiError, so every caller's handling of it
+   * was bypassed and the user saw "Unexpected token '<'" with no status
+   * attached and nothing to act on.
+   *
+   * Parse defensively, keep the raw body as the payload when it will not
+   * parse, and let the status carry the message. */
+  let payload: unknown = {}
+  let parsed = true
+  if (text) {
+    try {
+      payload = JSON.parse(text)
+    } catch {
+      parsed = false
+      payload = text
+    }
   }
-  return payload.data as T
+
+  if (!response.ok) {
+    const message = parsed
+      ? readMessage(payload, response.status)
+      : `API ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`
+    throw new ApiError(message, response.status, payload)
+  }
+  if (!parsed) {
+    throw new ApiError(
+      `API ${response.status} returned a body that is not JSON`,
+      response.status,
+      payload,
+    )
+  }
+  return (payload as { data?: unknown }).data as T
 }
 
 export const getJson = <T,>(path: string) => request<T>(path)
