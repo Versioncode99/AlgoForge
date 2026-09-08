@@ -438,6 +438,37 @@ def inspect(repo: Path, candidate: str) -> dict[str, object]:
     }
 
 
+# Store directories that are derived and not worth copying. Everything else in
+# the store is migrated, including trees added after this function was written.
+DERIVED_TREES = frozenset({"cache", "logs"})
+
+
+def _migration_pairs(source: Workspace, target: Workspace) -> list[tuple[Path, Path]]:
+    """Every tree a migration must carry, discovered rather than listed.
+
+    This used to be a hard-coded list of four: strategies, data, templates and
+    notes. The store grew ``families/`` and ``runs/`` afterwards and nobody
+    updated the list, so a migration silently dropped all 43 run snapshots —
+    the reproducibility records, which are among the least replaceable things
+    the application holds.
+
+    Enumerating the store instead means a tree added next year is carried
+    without anyone remembering to add it here. Being exhaustive by default and
+    naming the exceptions is the safer direction for a function whose failure
+    mode is losing data quietly.
+    """
+    pairs: list[tuple[Path, Path]] = []
+    if source.store.is_dir():
+        for child in sorted(source.store.iterdir()):
+            if not child.is_dir() or child.name in DERIVED_TREES:
+                continue
+            pairs.append((child, target.store / child.name))
+    # Notes are a sibling of the store in the application layout and a parent of
+    # it in the vault layout, so they are always added explicitly.
+    pairs.append((source.notes, target.notes))
+    return pairs
+
+
 def migrate(source: Workspace, target: Workspace, *, copy: bool = True) -> dict[str, object]:
     """Move existing output into a new workspace.
 
@@ -447,15 +478,20 @@ def migrate(source: Workspace, target: Workspace, *, copy: bool = True) -> dict[
     target.ensure()
     moved: list[str] = []
     skipped: list[str] = []
-    pairs = [
-        (source.strategies, target.strategies),
-        (source.data, target.data),
-        (source.templates, target.templates),
-        (source.notes, target.notes),
-    ]
+    pairs = _migration_pairs(source, target)
     for src, dst in pairs:
         if not src.is_dir() or src.resolve() == dst.resolve():
             skipped.append(str(src))
+            continue
+        # The destination has to exist before anything is copied into it.
+        # `ensure()` only creates the trees it knows about, so a store
+        # directory added later — `runs`, `families` — had no target directory
+        # and every `copy2` into it failed with a caught OSError. That is how
+        # 43 run snapshots went missing quietly.
+        try:
+            dst.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            skipped.append(f"{dst} ({exc.strerror or type(exc).__name__})")
             continue
         for item in src.iterdir():
             # The store lives under notes; copying notes must not recurse into it.

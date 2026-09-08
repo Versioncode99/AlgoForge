@@ -145,6 +145,60 @@ def test_the_legacy_vault_layout_still_resolves(tmp_path: Path, monkeypatch):
     assert workspace.store == vault / NOTES_FOLDER / STORE_FOLDER
 
 
+def test_migration_carries_every_store_tree_not_a_hard_coded_four(tmp_path: Path):
+    """Regression: `runs/` and `families/` were silently dropped.
+
+    The pair list was written when the store held four trees. It grew two more
+    and nobody updated it, so a real migration lost all 43 run snapshots — the
+    reproducibility records, among the least replaceable things here. The
+    verification step caught it; the copy should not have needed catching.
+    """
+    source = Workspace(repo=tmp_path, root=tmp_path / "from", vault_mode=False).ensure()
+    for tree in ("strategies", "data", "templates", "families", "runs", "a_tree_added_later"):
+        (source.store / tree).mkdir(parents=True, exist_ok=True)
+        (source.store / tree / "thing.json").write_text("{}", encoding="utf-8")
+
+    target = Workspace(repo=tmp_path, root=tmp_path / "to", vault_mode=False).ensure()
+    migrate(source, target)
+
+    for tree in ("strategies", "data", "templates", "families", "runs", "a_tree_added_later"):
+        assert (target.store / tree / "thing.json").exists(), f"{tree} was not carried"
+
+
+def test_migration_leaves_derived_trees_behind(tmp_path: Path):
+    """Cache and logs rebuild themselves; copying them is pure cost."""
+    source = Workspace(repo=tmp_path, root=tmp_path / "from", vault_mode=False).ensure()
+    for tree in ("cache", "logs"):
+        (source.store / tree).mkdir(parents=True, exist_ok=True)
+        (source.store / tree / "junk.bin").write_bytes(b"x" * 32)
+
+    target = Workspace(repo=tmp_path, root=tmp_path / "to", vault_mode=False).ensure()
+    migrate(source, target)
+
+    assert not (target.store / "cache" / "junk.bin").exists()
+    assert not (target.store / "logs" / "junk.bin").exists()
+
+
+def test_run_snapshots_survive_a_layout_migration(tmp_path: Path, monkeypatch):
+    """End to end, through the verified path that refused before."""
+    monkeypatch.delenv("ALGOFORGE_VAULT", raising=False)
+    monkeypatch.delenv("ALGOFORGE_HOME", raising=False)
+    repo, vault, target = tmp_path / "repo", tmp_path / "vault", tmp_path / "appdata"
+    repo.mkdir()
+    (vault / ".obsidian").mkdir(parents=True)
+    write_pointer(repo, vault, layout=LAYOUT_VAULT)
+
+    source = resolve(repo)
+    snapshot = source.store / "runs" / "run_one"
+    snapshot.mkdir(parents=True)
+    (snapshot / "manifest.json").write_text("{}", encoding="utf-8")
+
+    report = migrate_layout(repo, source, target)
+    assert report["migrated"] is True, report.get("missing")
+    assert report["before"]["runs"] == report["after"]["runs"] == 1
+    assert (target / "runs" / "run_one" / "manifest.json").exists()
+
+
 def test_migration_copies_verifies_and_only_then_switches(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("ALGOFORGE_VAULT", raising=False)
     monkeypatch.delenv("ALGOFORGE_HOME", raising=False)
