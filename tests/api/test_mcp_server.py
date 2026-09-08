@@ -13,17 +13,24 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
     tools = {tool.name: tool for tool in server._tool_manager.list_tools()}
 
     assert set(tools) == {
+        "describe_workspace",
         "engine_status",
         "experiment_lineage",
         "list_experiments",
         "list_families",
         "list_strategies",
         "list_templates",
+        "list_workspace_templates",
+        "list_workspaces",
         "read_research",
         "research_memory",
         "strategy_dossier",
     }
     assert all(tool.annotations.read_only_hint for tool in tools.values())
+    # Reading a layout is not destructive, so nothing here should be flagged as
+    # needing a prompt. The workspace verbs that *do* change one are mutating
+    # and never reach this list.
+    assert not any(tool.annotations.destructive_hint for tool in tools.values())
 
 
 def test_mcp_write_mode_exposes_the_same_action_registry(tmp_path, monkeypatch):

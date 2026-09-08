@@ -79,7 +79,12 @@ def build_server(actions: Actions, *, allow_write: bool = False) -> MCPServer[An
             structured_output=True,
             annotations=ToolAnnotations(
                 read_only_hint=not bool(schema["mutating"]),
-                destructive_hint=False,
+                # Taken from the action's own risk tier rather than asserted
+                # here. A client uses this to decide whether to ask a person
+                # first, so it has to mean the same thing the registry means --
+                # and the registry will refuse a non-SAFE action anyway unless
+                # the operator has confirmed it.
+                destructive_hint=schema.get("risk", "safe") != "safe",
                 idempotent_hint=not bool(schema["mutating"]),
                 open_world_hint=name == "search_papers",
             ),

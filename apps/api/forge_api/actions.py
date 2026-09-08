@@ -29,17 +29,49 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from forge.research import chronological_split
 from forge.strategy import TEMPLATES, TemplateRejected, run_backtest
 from forge.vault import VaultMirror
+from forge.workstation import (
+    GRID_COLUMNS,
+    MAX_ROWS,
+    Panel,
+    PanelKind,
+    Workspace,
+    WorkspaceStore,
+    catalogue,
+    new_panel_id,
+    template,
+)
 
 from forge_api.jobs import REGISTRY, JobHandle
 
 
 class ActionError(Exception):
     """A refusal with a reason the caller can show verbatim."""
+
+
+class ActionRisk(StrEnum):
+    """How much a caller should have to mean it.
+
+    Separate from `mutating`, which only says whether something is written.
+    Rearranging panels writes to a database and is still nothing to worry
+    about; cancelling an order writes no more than that and is not. What
+    matters is what is lost if the caller misunderstood.
+    """
+
+    #: Layout, opening records, changing a chart's symbol. Reversible by doing
+    #: the opposite, and nothing downstream depends on it.
+    SAFE = "safe"
+    #: Destroys something a person made, or changes configuration that outlives
+    #: the session. Recoverable only if they happen to have a backup.
+    CONFIRM = "confirm"
+    #: Reaches a broker, an account, or real money. No agent may perform one of
+    #: these on inference alone, ever.
+    HIGH = "high"
 
 
 @dataclass(frozen=True)
@@ -49,12 +81,15 @@ class Action:
     parameters: dict[str, Any]
     run: Callable[..., dict[str, Any]]
     mutating: bool = False
+    risk: ActionRisk = ActionRisk.SAFE
 
     def schema(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.summary,
             "mutating": self.mutating,
+            "risk": str(self.risk),
+            "requires_confirmation": self.risk is not ActionRisk.SAFE,
             "parameters": {
                 "type": "object",
                 "properties": self.parameters,
@@ -90,6 +125,7 @@ class Actions:
         families: Any,
         templates: Any,
         mirror: VaultMirror,
+        workspaces: WorkspaceStore,
     ) -> None:
         self.workspace = workspace
         self.library = library
@@ -101,6 +137,7 @@ class Actions:
         self.families = families
         self.templates = templates
         self.mirror = mirror
+        self.workspaces = workspaces
         self._lock = threading.Lock()
         self.history: list[dict[str, Any]] = []
         self._registry: dict[str, Action] = {}
@@ -113,10 +150,29 @@ class Actions:
     def schemas(self) -> list[dict[str, Any]]:
         return [self._registry[name].schema() for name in self.names()]
 
-    def call(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    def call(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        confirmed: bool = False,
+    ) -> dict[str, Any]:
+        """Run one action.
+
+        `confirmed` is the operator's answer, not the caller's opinion. Anything
+        above SAFE refuses without it, and the refusal names the tier so the
+        surface asking can show the right prompt. An agent cannot set this on
+        its own behalf: it has to come back through a person, which is the whole
+        point of the boundary.
+        """
         action = self._registry.get(name)
         if action is None:
             raise ActionError(f"No action named '{name}'. Available: {', '.join(self.names())}.")
+        if action.risk is not ActionRisk.SAFE and not confirmed:
+            raise ActionError(
+                f"'{name}' is a {action.risk} action and needs explicit confirmation "
+                f"from the operator before it will run."
+            )
         args = dict(arguments or {})
         unknown = set(args) - set(action.parameters)
         if unknown:
@@ -165,8 +221,9 @@ class Actions:
         run: Callable[..., dict[str, Any]],
         *,
         mutating: bool = False,
+        risk: ActionRisk = ActionRisk.SAFE,
     ) -> None:
-        self._registry[name] = Action(name, summary, parameters, run, mutating)
+        self._registry[name] = Action(name, summary, parameters, run, mutating, risk)
 
     def _register_all(self) -> None:
         self._add(
@@ -353,6 +410,7 @@ class Actions:
             },
             self.read_research,
         )
+        self._register_workspace()
 
     # ── implementations ──────────────────────────────────────────────────────
     def search_papers(self, query: str) -> dict[str, Any]:
@@ -769,3 +827,410 @@ class Actions:
             if not needle or needle in f"{item.get('title', '')} {item.get('topic', '')}".lower()
         ][: max(1, min(int(limit), 100))]
         return {"count": len(rows), "sources": rows}
+
+    # ── workspace ────────────────────────────────────────────────────────────
+    # These verbs are what make the agent an operator rather than a parallel
+    # implementation. Each one is what the interface itself calls when a person
+    # drags a panel, so there is exactly one way to change a layout and both
+    # callers go through it. An agent able to arrange panels by some private
+    # route would be a second implementation to keep in step, and the first
+    # divergence between them would be silent.
+
+    def _register_workspace(self) -> None:
+        self._add(
+            "list_workspace_templates",
+            "List the workspace templates available as starting points. Templates are "
+            "presets, not modes: nothing is locked behind one, and a workspace built "
+            "from a template can be changed into anything else.",
+            {},
+            self.list_workspace_templates,
+        )
+        self._add(
+            "list_workspaces",
+            "List the operator's saved workspaces, newest first, with panel counts.",
+            {},
+            self.list_workspaces,
+        )
+        self._add(
+            "describe_workspace",
+            "The full contents of one workspace: every panel, its kind, position and "
+            "settings. Omit workspace_id for the one currently open.",
+            {"workspace_id": {"type": "string", "optional": True}},
+            self.describe_workspace,
+        )
+        self._add(
+            "create_workspace",
+            "Create a workspace, optionally seeded from a template.",
+            {
+                "name": {"type": "string", "description": "What to call it."},
+                "template_key": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "A key from list_workspace_templates. Omit for empty.",
+                },
+                "activate": {"type": "boolean", "optional": True},
+            },
+            self.create_workspace,
+            mutating=True,
+        )
+        self._add(
+            "open_workspace",
+            "Make a workspace the active one.",
+            {"workspace_id": {"type": "string"}},
+            self.open_workspace,
+            mutating=True,
+        )
+        self._add(
+            "rename_workspace",
+            "Rename a workspace. The layout is untouched.",
+            {"workspace_id": {"type": "string"}, "name": {"type": "string"}},
+            self.rename_workspace,
+            mutating=True,
+        )
+        self._add(
+            "clone_workspace",
+            "Copy a workspace under a new name - the way to make an ES version of an NQ "
+            "desk without disturbing the original.",
+            {"workspace_id": {"type": "string"}, "name": {"type": "string"}},
+            self.clone_workspace,
+            mutating=True,
+        )
+        self._add(
+            "delete_workspace",
+            "Delete a workspace and its layout. Research is not touched: a workspace "
+            "holds no experiments, artifacts or evidence.",
+            {"workspace_id": {"type": "string"}},
+            self.delete_workspace,
+            mutating=True,
+            risk=ActionRisk.CONFIRM,
+        )
+        self._add(
+            "add_panel",
+            "Add a panel to a workspace. Position is in grid units on a 12-column grid; "
+            "omit it and the panel lands below everything already there.",
+            {
+                "kind": {
+                    "type": "string",
+                    "description": "One of: " + ", ".join(sorted(k.value for k in PanelKind)),
+                },
+                "workspace_id": {"type": "string", "optional": True},
+                "x": {"type": "integer", "optional": True},
+                "y": {"type": "integer", "optional": True},
+                "width": {"type": "integer", "optional": True},
+                "height": {"type": "integer", "optional": True},
+                "symbol": {"type": "string", "optional": True},
+                "timeframe": {"type": "string", "optional": True},
+                "title": {"type": "string", "optional": True},
+            },
+            self.add_panel,
+            mutating=True,
+        )
+        self._add(
+            "remove_panel",
+            "Remove a panel from a workspace.",
+            {
+                "panel_id": {"type": "string"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.remove_panel,
+            mutating=True,
+        )
+        self._add(
+            "move_panel",
+            "Move a panel to a new grid position, keeping its size.",
+            {
+                "panel_id": {"type": "string"},
+                "x": {"type": "integer"},
+                "y": {"type": "integer"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.move_panel,
+            mutating=True,
+        )
+        self._add(
+            "resize_panel",
+            "Resize a panel, keeping its position.",
+            {
+                "panel_id": {"type": "string"},
+                "width": {"type": "integer"},
+                "height": {"type": "integer"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.resize_panel,
+            mutating=True,
+        )
+        self._add(
+            "set_panel_setting",
+            "Change one setting on a panel - a chart's symbol or timeframe, a table's "
+            "filter. Use add_indicator for indicators.",
+            {
+                "panel_id": {"type": "string"},
+                "key": {"type": "string"},
+                "value": {"type": "string"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.set_panel_setting,
+            mutating=True,
+        )
+        self._add(
+            "add_indicator",
+            "Add an indicator to a chart panel. Refuses on a panel that is not a chart "
+            "rather than storing a setting nothing will read.",
+            {
+                "panel_id": {"type": "string"},
+                "indicator": {"type": "string", "description": "e.g. vwap, ema, atr"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.add_indicator,
+            mutating=True,
+        )
+        self._add(
+            "link_panels",
+            "Put panels in a link group so they follow each other's symbol and "
+            "timeframe. Pass no group to unlink them.",
+            {
+                "panel_ids": {"type": "array", "description": "Panel ids to link together."},
+                "group": {"type": "string", "optional": True},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.link_panels,
+            mutating=True,
+        )
+
+    # ── workspace implementations ────────────────────────────────────────────
+    def _workspace(self, workspace_id: str | None) -> Workspace:
+        """The named workspace, or the open one.
+
+        Refuses rather than creating something. "No workspace is open" is a true
+        statement the caller can act on; silently conjuring one would make
+        `add_panel` quietly build a desk nobody asked for.
+        """
+        if workspace_id:
+            found = self.workspaces.get(_str(workspace_id, "workspace_id", limit=120))
+            if found is None:
+                raise ActionError(f"No workspace '{workspace_id}'.")
+            return found
+        active = self.workspaces.active()
+        if active is None:
+            raise ActionError(
+                "No workspace is open. Create one with create_workspace, or pass "
+                "workspace_id to say which you mean."
+            )
+        return active
+
+    @staticmethod
+    def _panel_view(panel: Panel) -> dict[str, Any]:
+        return {
+            "panel_id": panel.panel_id,
+            "kind": panel.kind.value,
+            "title": panel.display_title(),
+            "x": panel.x,
+            "y": panel.y,
+            "width": panel.width,
+            "height": panel.height,
+            "settings": panel.settings,
+            "link_group": panel.link_group,
+            "collapsed": panel.collapsed,
+        }
+
+    def _view(self, workspace: Workspace) -> dict[str, Any]:
+        return {
+            "workspace_id": workspace.workspace_id,
+            "name": workspace.name,
+            "template_key": workspace.template_key,
+            "updated_at": workspace.updated_at.isoformat(),
+            "panels": [self._panel_view(p) for p in workspace.panels],
+        }
+
+    def _save_workspace(self, workspace: Workspace) -> dict[str, Any]:
+        self.workspaces.save(workspace)
+        return self._view(workspace)
+
+    def list_workspace_templates(self) -> dict[str, Any]:
+        items = catalogue()
+        return {"count": len(items), "templates": items}
+
+    def list_workspaces(self) -> dict[str, Any]:
+        rows = self.workspaces.summaries()
+        return {"count": len(rows), "active": self.workspaces.active_id(), "workspaces": rows}
+
+    def describe_workspace(self, workspace_id: str | None = None) -> dict[str, Any]:
+        return self._view(self._workspace(workspace_id))
+
+    def create_workspace(
+        self,
+        name: str,
+        template_key: str | None = None,
+        activate: bool = True,
+    ) -> dict[str, Any]:
+        label = _str(name, "name", limit=120)
+        panels: tuple[Panel, ...] = ()
+        key = None
+        if template_key:
+            key = _str(template_key, "template_key", limit=60, lower=True)
+            try:
+                preset = template(key)
+            except KeyError as exc:
+                raise ActionError(str(exc)) from exc
+            panels = preset.panels
+        workspace = self.workspaces.create(label, panels=panels, template_key=key)
+        if activate:
+            self.workspaces.set_active(workspace.workspace_id)
+        return self._view(workspace)
+
+    def open_workspace(self, workspace_id: str) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        self.workspaces.set_active(workspace.workspace_id)
+        return self._view(workspace)
+
+    def rename_workspace(self, workspace_id: str, name: str) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        return self._save_workspace(workspace.renamed(_str(name, "name", limit=120)))
+
+    def clone_workspace(self, workspace_id: str, name: str) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        clone = self.workspaces.clone(workspace.workspace_id, _str(name, "name", limit=120))
+        return self._view(clone)
+
+    def delete_workspace(self, workspace_id: str) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        removed = self.workspaces.delete(workspace.workspace_id)
+        return {"workspace_id": workspace.workspace_id, "deleted": removed}
+
+    def add_panel(
+        self,
+        kind: str,
+        workspace_id: str | None = None,
+        x: int | None = None,
+        y: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        try:
+            panel_kind = PanelKind(_str(kind, "kind", limit=40, lower=True))
+        except ValueError as exc:
+            raise ActionError(
+                f"'{kind}' is not a panel kind. Available: "
+                f"{', '.join(sorted(k.value for k in PanelKind))}."
+            ) from exc
+
+        settings: dict[str, Any] = {}
+        if symbol:
+            settings["symbol"] = _str(symbol, "symbol", limit=24).upper()
+        if timeframe:
+            settings["timeframe"] = _str(timeframe, "timeframe", limit=12, lower=True)
+
+        # Below everything already placed, so a new panel never lands on top of
+        # one the operator is using.
+        default_y = max((p.y + p.height for p in workspace.panels), default=0)
+        try:
+            panel = Panel(
+                panel_id=new_panel_id(panel_kind, tuple(p.panel_id for p in workspace.panels)),
+                kind=panel_kind,
+                title=_str(title, "title", limit=80) if title else "",
+                x=_bounded(x, 0, 0, GRID_COLUMNS - 1, "x"),
+                y=_bounded(y, default_y, 0, MAX_ROWS - 1, "y"),
+                width=_bounded(width, 6, 1, GRID_COLUMNS, "width"),
+                height=_bounded(height, 6, 1, MAX_ROWS, "height"),
+                settings=settings,
+            )
+            updated = workspace.with_panel(panel)
+        except ValueError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._save_workspace(updated)
+
+    def remove_panel(self, panel_id: str, workspace_id: str | None = None) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        return self._save_workspace(
+            workspace.without_panel(self._panel_id(workspace, panel_id))
+        )
+
+    def move_panel(
+        self, panel_id: str, x: int, y: int, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        return self._reshape(workspace_id, panel_id, x=x, y=y)
+
+    def resize_panel(
+        self, panel_id: str, width: int, height: int, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        return self._reshape(workspace_id, panel_id, width=width, height=height)
+
+    @staticmethod
+    def _panel_id(workspace: Workspace, panel_id: str) -> str:
+        """Check the panel exists, and turn a miss into a refusal with the list."""
+        wanted = _str(panel_id, "panel_id", limit=60)
+        if workspace.panel(wanted) is None:
+            known = ", ".join(p.panel_id for p in workspace.panels) or "none"
+            raise ActionError(f"No panel '{wanted}' in this workspace. Panels: {known}.")
+        return wanted
+
+    def _reshape(self, workspace_id: str | None, panel_id: str, **geometry: int) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        panel = workspace.require(self._panel_id(workspace, panel_id))
+        try:
+            moved = panel.model_copy(update={k: int(v) for k, v in geometry.items()})
+            # Re-validate: model_copy skips validators, so a panel that runs off
+            # the grid would otherwise be stored and only fail on the way out.
+            moved = Panel.model_validate(moved.model_dump())
+        except (ValueError, TypeError) as exc:
+            raise ActionError(f"That geometry does not fit the grid: {exc}") from exc
+        return self._save_workspace(workspace.replacing_panel(moved))
+
+    def set_panel_setting(
+        self, panel_id: str, key: str, value: str, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        panel = workspace.require(self._panel_id(workspace, panel_id))
+        name = _str(key, "key", limit=40, lower=True)
+        settings = {**panel.settings, name: _str(value, "value", limit=200)}
+        return self._save_workspace(
+            workspace.replacing_panel(panel.model_copy(update={"settings": settings}))
+        )
+
+    def add_indicator(
+        self, panel_id: str, indicator: str, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        panel = workspace.require(self._panel_id(workspace, panel_id))
+        if panel.kind is not PanelKind.CHART:
+            raise ActionError(
+                f"'{panel.panel_id}' is a {panel.kind} panel, not a chart. An indicator "
+                "only means something on a chart."
+            )
+        name = _str(indicator, "indicator", limit=40, lower=True)
+        existing = list(panel.settings.get("indicators", []))
+        if name not in existing:
+            existing.append(name)
+        settings = {**panel.settings, "indicators": existing}
+        return self._save_workspace(
+            workspace.replacing_panel(panel.model_copy(update={"settings": settings}))
+        )
+
+    def link_panels(
+        self,
+        panel_ids: list[str],
+        group: str | None = None,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        if not isinstance(panel_ids, list) or not panel_ids:
+            raise ActionError("'panel_ids' must be a non-empty list of panel ids.")
+        ids = tuple(self._panel_id(workspace, item) for item in panel_ids)
+        name = _str(group, "group", limit=40, lower=True) if group else None
+        return self._save_workspace(workspace.linked(name, ids))
+
+
+def _bounded(value: Any, fallback: int, low: int, high: int, field: str) -> int:
+    if value is None:
+        return fallback
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ActionError(f"'{field}' must be a whole number.") from exc
+    if not low <= number <= high:
+        raise ActionError(f"'{field}' must be between {low} and {high}.")
+    return number

@@ -15,10 +15,16 @@ from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
 from forge.prop.engine import MAX_BACKTEST_BARS, MIN_TRADING_DAYS
 from forge.research import ResearchLedger
 from forge.strategy import FamilyRegistry, StrategyLibrary, TemplateStore
+
+# `Workspace` here is the storage location, not the screen layout. The two are
+# different types with the same name in different packages, so this import is
+# worth reading twice before changing it — an import sorter merging them is a
+# silent type change, not a formatting one.
 from forge.vault import VaultMirror, Workspace
+from forge.workstation import WorkspaceStore
 from pydantic import BaseModel, Field
 
-from forge_api.actions import Actions
+from forge_api.actions import ActionError, Actions
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
 from forge_api.assistant import Assistant
@@ -91,6 +97,46 @@ class PropRequest(BaseModel):
     rule_id: str
     paths: int = Field(default=1000, ge=100, le=10_000)
     seed: int = 20260901
+
+
+class CreateWorkspaceRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    template_key: str | None = None
+    activate: bool = True
+
+
+class RenameWorkspaceRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class AddPanelRequest(BaseModel):
+    kind: str
+    x: int | None = None
+    y: int | None = None
+    width: int | None = None
+    height: int | None = None
+    symbol: str | None = None
+    timeframe: str | None = None
+    title: str | None = None
+
+
+class PanelGeometryRequest(BaseModel):
+    """Move, resize, or both. Omitted pairs are left alone."""
+
+    x: int | None = None
+    y: int | None = None
+    width: int | None = None
+    height: int | None = None
+
+
+class PanelSettingRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=40)
+    value: str = Field(min_length=1, max_length=200)
+
+
+class LinkPanelsRequest(BaseModel):
+    panel_ids: list[str] = Field(min_length=1)
+    group: str | None = None
 
 
 class PropMatrixRequest(BaseModel):
@@ -180,6 +226,10 @@ def build_control_router(
     market = MarketService(root)
     engine = AutonomousEngine(library, store, log, market, workspace, research_ledger, mirror)
     settings_store = SettingsStore(root / "config" / "settings.json")
+    # Layouts are application state, not research: they live in the app-owned
+    # data root beside the other databases, and losing them costs a screen
+    # arrangement rather than any evidence.
+    workspaces = WorkspaceStore(workspace.data / "workspaces.db")
     agents = AgentService(workspace.store, log, settings_store, mirror)
     engine.agents = agents
     actions = Actions(
@@ -193,6 +243,7 @@ def build_control_router(
         families=families,
         templates=templates,
         mirror=mirror,
+        workspaces=workspaces,
     )
     orchestrator = Orchestrator(
         workspace.data / "missions.db", actions, agents, settings_store, log, mirror
@@ -800,6 +851,183 @@ def build_control_router(
                     "noise. Blocks of 5 days preserve losing streaks."
                 ),
             },
+        )
+
+
+    def _action(
+        name: str, arguments: dict[str, Any], *, confirmed: bool = False
+    ) -> dict[str, Any]:
+        """Call an action and turn its refusal into the right HTTP status.
+
+        An ActionError is a refusal with a reason written for a person, so it is
+        returned verbatim rather than replaced with a generic message. 409 is
+        deliberate: the request was well-formed and the application declined it,
+        which is different from 422 (the caller sent nonsense) and from 500 (we
+        broke).
+        """
+        try:
+            return actions.call(name, arguments, confirmed=confirmed)
+        except ActionError as exc:
+            raise HTTPException(409, {"code": "action_refused", "reason": str(exc)}) from exc
+
+
+    # ── workspaces ───────────────────────────────────────────────────────────
+    # Thin by design. Every one of these delegates to the same action the agent
+    # calls, so the interface cannot drift from what the operator can ask for in
+    # words. A route with its own layout logic would be the second
+    # implementation this architecture exists to avoid.
+
+    @router.get("/workspaces", response_model=ApiEnvelope[dict[str, Any]])
+    def list_workspaces() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=actions.call("list_workspaces"))
+
+    @router.get("/workspaces/templates", response_model=ApiEnvelope[dict[str, Any]])
+    def workspace_templates() -> ApiEnvelope[dict[str, Any]]:
+        """Starting points. Nothing is locked behind one."""
+        return ApiEnvelope(data=actions.call("list_workspace_templates"))
+
+    @router.get("/workspaces/active", response_model=ApiEnvelope[dict[str, Any] | None])
+    def active_workspace() -> ApiEnvelope[dict[str, Any] | None]:
+        """The open workspace, or an honest null when none is.
+
+        Deliberately not "create one on read": a GET that silently builds a desk
+        is a side effect nobody asked for, and the caller needs to be able to
+        tell "nothing open yet" from "here is your layout".
+        """
+        active = workspaces.active()
+        return ApiEnvelope(
+            data=None if active is None else actions.call("describe_workspace"),
+            meta={"count": workspaces.count()},
+        )
+
+    @router.get("/workspaces/{workspace_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def get_workspace(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("describe_workspace", {"workspace_id": workspace_id}))
+
+    @router.post("/workspaces", response_model=ApiEnvelope[dict[str, Any]])
+    def create_workspace(body: CreateWorkspaceRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "create_workspace",
+                {
+                    "name": body.name,
+                    "template_key": body.template_key,
+                    "activate": body.activate,
+                },
+            )
+        )
+
+    @router.post("/workspaces/{workspace_id}/open", response_model=ApiEnvelope[dict[str, Any]])
+    def open_workspace(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("open_workspace", {"workspace_id": workspace_id}))
+
+    @router.post("/workspaces/{workspace_id}/clone", response_model=ApiEnvelope[dict[str, Any]])
+    def clone_workspace(
+        workspace_id: str, body: RenameWorkspaceRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action("clone_workspace", {"workspace_id": workspace_id, "name": body.name})
+        )
+
+    @router.post("/workspaces/{workspace_id}/rename", response_model=ApiEnvelope[dict[str, Any]])
+    def rename_workspace(
+        workspace_id: str, body: RenameWorkspaceRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action("rename_workspace", {"workspace_id": workspace_id, "name": body.name})
+        )
+
+    @router.delete("/workspaces/{workspace_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def delete_workspace(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Deleting a layout is a CONFIRM action, so the confirmation is the
+        HTTP verb itself: a DELETE is not something a caller issues by accident,
+        and the interface asks before sending it."""
+        return ApiEnvelope(
+            data=_action("delete_workspace", {"workspace_id": workspace_id}, confirmed=True)
+        )
+
+    @router.post("/workspaces/{workspace_id}/panels", response_model=ApiEnvelope[dict[str, Any]])
+    def add_panel(workspace_id: str, body: AddPanelRequest) -> ApiEnvelope[dict[str, Any]]:
+        arguments = {"workspace_id": workspace_id, "kind": body.kind}
+        for field in ("x", "y", "width", "height", "symbol", "timeframe", "title"):
+            value = getattr(body, field)
+            if value is not None:
+                arguments[field] = value
+        return ApiEnvelope(data=_action("add_panel", arguments))
+
+    @router.delete(
+        "/workspaces/{workspace_id}/panels/{panel_id}",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def remove_panel(workspace_id: str, panel_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action("remove_panel", {"workspace_id": workspace_id, "panel_id": panel_id})
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/geometry",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def set_panel_geometry(
+        workspace_id: str, panel_id: str, body: PanelGeometryRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """Move and resize in one call, because dragging a corner does both.
+
+        Two separate actions would make an intermediate state observable: a
+        panel briefly at its new size in its old place can run off the grid and
+        be rejected, even though the gesture as a whole was fine.
+        """
+        result: dict[str, Any] = {}
+        if body.x is not None and body.y is not None:
+            result = _action(
+                "move_panel",
+                {"workspace_id": workspace_id, "panel_id": panel_id, "x": body.x, "y": body.y},
+            )
+        if body.width is not None and body.height is not None:
+            result = _action(
+                "resize_panel",
+                {
+                    "workspace_id": workspace_id,
+                    "panel_id": panel_id,
+                    "width": body.width,
+                    "height": body.height,
+                },
+            )
+        if not result:
+            raise HTTPException(422, {"code": "no_geometry_given"})
+        return ApiEnvelope(data=result)
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/settings",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def set_panel_setting(
+        workspace_id: str, panel_id: str, body: PanelSettingRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        name = "add_indicator" if body.key == "indicator" else "set_panel_setting"
+        arguments = (
+            {"workspace_id": workspace_id, "panel_id": panel_id, "indicator": body.value}
+            if name == "add_indicator"
+            else {
+                "workspace_id": workspace_id,
+                "panel_id": panel_id,
+                "key": body.key,
+                "value": body.value,
+            }
+        )
+        return ApiEnvelope(data=_action(name, arguments))
+
+    @router.post("/workspaces/{workspace_id}/link", response_model=ApiEnvelope[dict[str, Any]])
+    def link_panels(workspace_id: str, body: LinkPanelsRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "link_panels",
+                {
+                    "workspace_id": workspace_id,
+                    "panel_ids": body.panel_ids,
+                    "group": body.group,
+                },
+            )
         )
 
     return ControlSurface(
