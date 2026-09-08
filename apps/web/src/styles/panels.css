@@ -1,0 +1,300 @@
+/* Workspace panels and their contents.
+   The app shell itself lives in workstation.css; this file is only what goes
+   inside the grid.
+
+   Original header:
+   The workstation grid.
+   Dense and quiet: panels are the content, so their chrome is a single hairline
+   and a 22px header. Nothing here animates on its own. */
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workspace-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  flex-wrap: wrap;
+}
+
+.workspace-bar .ctl { display: flex; align-items: center; gap: 6px; }
+.workspace-bar .ctl > span {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.workspace-bar select {
+  background: var(--bg-3);
+  color: var(--fg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.workspace-bar .ghost,
+.workspace-foot button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-3);
+  color: var(--fg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workspace-bar .ghost:hover,
+.workspace-foot button:hover { color: var(--fg-0); border-color: var(--line-glow); }
+.workspace-foot .danger:hover { color: var(--fail); border-color: var(--fail); }
+
+.workspace-hint { margin-left: auto; font-size: 11px; color: var(--fg-3); }
+
+.panel-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+
+.panel-picker button {
+  background: var(--bg-3);
+  color: var(--fg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 11px;
+  text-transform: capitalize;
+  cursor: pointer;
+}
+
+.panel-picker button:hover { color: var(--bg-0); background: var(--brand); border-color: var(--brand); }
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.wpanel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.wpanel.dragging {
+  border-color: var(--brand);
+  /* No shadow and no scale: the border is enough to say "this one", and a
+     lifting animation would be decoration on a drag that is already obvious. */
+  z-index: 2;
+}
+
+.wpanel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  padding: 0 6px 0 9px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.wpanel-head:active { cursor: grabbing; }
+
+.wpanel-title {
+  font-size: 11px;
+  color: var(--fg-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wpanel-link {
+  font-size: 9px;
+  color: var(--brand);
+  border: 1px solid var(--brand-dim);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.wpanel-head button {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--fg-3);
+  cursor: pointer;
+  padding: 2px;
+}
+
+.wpanel-head button:hover { color: var(--fail); }
+
+.wpanel-body { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; }
+
+/* The chart fills its panel rather than carrying its own height. */
+.wpanel-body .chart-panel { height: 100%; border: none; border-radius: 0; }
+.wpanel-body .price-chart { flex: 1 1 auto; height: auto; min-height: 0; }
+
+.wpanel-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--line-strong) 50%);
+}
+
+.workspace-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 10px;
+  color: var(--fg-3);
+  padding: 0 4px;
+}
+
+.workspace-foot button { margin-left: auto; }
+
+/* ── empty and unbuilt states ─────────────────────────────────────────────── */
+
+.workspace-empty { max-width: 780px; }
+.workspace-empty h2 { font-size: 16px; margin: 0 0 6px; }
+.workspace-empty > p { color: var(--fg-2); font-size: 12px; margin: 0 0 14px; }
+
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.template-grid button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  text-align: left;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  color: var(--fg-1);
+  font: inherit;
+  cursor: pointer;
+}
+
+.template-grid button:hover { border-color: var(--brand-dim); }
+.template-grid strong { font-size: 12px; color: var(--fg-0); }
+.template-grid span { font-size: 11px; color: var(--fg-2); }
+.template-grid .count { font-size: 10px; color: var(--fg-3); }
+
+.workspace-blank {
+  padding: 40px;
+  text-align: center;
+  color: var(--fg-2);
+  font-size: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r);
+}
+
+.panel-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+  min-height: 60px;
+  padding: 14px;
+  text-align: center;
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+.panel-state.error { color: var(--fail); }
+.panel-state.scaffold strong { color: var(--warn); font-size: 11px; }
+.panel-state.scaffold p { color: var(--fg-3); max-width: 42ch; margin: 0; }
+
+/* ── panel contents ───────────────────────────────────────────────────────── */
+
+.panel-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.panel-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-2);
+  color: var(--fg-3);
+  font-weight: 500;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.panel-table td { padding: 3px 8px; border-bottom: 1px solid var(--bg-2); color: var(--fg-1); }
+.panel-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.panel-table .ok { color: var(--pass); }
+.panel-table .missing { color: var(--fg-3); }
+
+.panel-log { list-style: none; margin: 0; padding: 0; font-size: 11px; }
+.panel-log li { display: flex; gap: 8px; padding: 2px 8px; border-bottom: 1px solid var(--bg-2); color: var(--fg-1); }
+.panel-log .stage { color: var(--fg-3); min-width: 72px; font-size: 10px; }
+.panel-log .is-fail { color: var(--fail); }
+.panel-log .is-warn { color: var(--warn); }
+
+.panel-watchlist { display: flex; flex-direction: column; height: 100%; }
+.watchlist-input { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.watchlist-input input {
+  width: 100%;
+  background: var(--bg-3);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--fg-0);
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
+.panel-symbols { list-style: none; margin: 0; padding: 0; font-size: 11px; }
+.panel-symbols li {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--bg-2);
+  color: var(--fg-0);
+}
+.panel-symbols .no-quote { color: var(--fg-3); font-size: 10px; }
+

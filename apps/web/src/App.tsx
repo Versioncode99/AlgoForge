@@ -3,7 +3,7 @@ import {
   Activity, Archive, BookOpen, BrainCircuit, ChevronLeft, ChevronRight, Database,
   FileCheck2, FlaskConical, GitBranch, Layers3, LockKeyhole, Menu, MessageSquare,
   Network, PanelBottomOpen, PlaySquare, Radar, ScrollText, Search, Settings,
-  ShieldCheck, TestTubes, Workflow, CandlestickChart,
+  ShieldCheck, TestTubes, Workflow, CandlestickChart, LayoutGrid,
 } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { getJson } from './api'
@@ -28,8 +28,9 @@ const RunsView = lazy(() => import('./views/Runs').then(m => ({ default: m.RunsV
 const ResearchMemoryView = lazy(() => import('./views/ResearchMemory').then(m => ({ default: m.ResearchMemoryView })))
 const DataWorkspaceView = lazy(() => import('./views/DataWorkspace').then(m => ({ default: m.DataWorkspaceView })))
 const ChartsView = lazy(() => import('./views/Charts').then(m => ({ default: m.ChartsView })))
+const WorkspaceView = lazy(() => import('./views/Workspace').then(m => ({ default: m.WorkspaceView })))
 
-type RouteId = 'overview' | 'missions' | 'experiments' | 'strategies' | 'runs' | 'validation' | 'charts' |
+type RouteId = 'overview' | 'missions' | 'experiments' | 'strategies' | 'runs' | 'validation' | 'charts' | 'workspace' |
   'evidence' | 'memory' | 'lineage' | 'data' | 'research' | 'pipeline' | 'agents' |
   'prop' | 'console' | 'settings'
 type NavItem = PaletteRoute & { id: RouteId; icon: typeof Activity }
@@ -50,8 +51,9 @@ const NAV: { group: string; items: NavItem[] }[] = [
     { id: 'memory', label: 'Memory', group: 'Research Memory', detail: 'Classified failures', icon: BrainCircuit },
     { id: 'lineage', label: 'Lineage', group: 'Research Memory', detail: 'Experiment ancestry', icon: GitBranch },
   ]},
-  { group: 'Market', items: [
-    { id: 'charts', label: 'Charts', group: 'Market', detail: 'Candles over the local archives', icon: CandlestickChart },
+  { group: 'Workstation', items: [
+    { id: 'workspace', label: 'Workspace', group: 'Workstation', detail: 'Your panels, arranged your way', icon: LayoutGrid },
+    { id: 'charts', label: 'Charts', group: 'Workstation', detail: 'Candles over the local archives', icon: CandlestickChart },
   ]},
   { group: 'Data', items: [
     { id: 'data', label: 'Data Health', group: 'Data', detail: 'Coverage and provenance', icon: Database },
@@ -146,6 +148,7 @@ export function App() {
             {online && route === 'validation' && <ValidationLabView />}
             {online && route === 'evidence' && <EvidenceView />}
             {online && route === 'memory' && <ResearchMemoryView />}
+            {online && route === 'workspace' && <WorkspaceView />}
             {online && route === 'charts' && <ChartsView />}
             {online && route === 'data' && <DataWorkspaceView />}
             {online && route === 'research' && <ResearchLabView />}
