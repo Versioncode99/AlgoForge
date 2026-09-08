@@ -513,9 +513,21 @@ class OpenCodeGoClient:
                 if response.status_code == 200:
                     payload = response.json()
                     used_in, used_out = self._usage(shape, payload)
+                    truncated = self._truncated(shape, payload)
+                    answer = self._clean(self._extract(shape, payload, truncated=truncated))
+                    if truncated and not answer:
+                        # The budget ran out before the model said anything. The
+                        # honest report is a refusal naming the cause, not an
+                        # empty string a caller will render as a blank reply.
+                        raise OpenCodeError(
+                            f"OPENCODE_TRUNCATED: {model} used its entire "
+                            f"{max_tokens}-token budget without producing an answer. "
+                            "Raise max_tokens, or choose a model that reasons less.",
+                            200,
+                        )
                     return {
                         "model": payload.get("model", model),
-                        "answer": self._clean(self._extract(shape, payload)),
+                        "answer": answer,
                         "error": None,
                         "status_code": 200,
                         "shape": shape,
@@ -524,6 +536,10 @@ class OpenCodeGoClient:
                         "input_tokens": used_in,
                         "output_tokens": used_out,
                         "used_standby_key": index > 0,
+                        # Carried so a caller can tell a complete answer from one
+                        # that stopped mid-sentence. A truncated answer is still
+                        # returned — it may be useful — but never silently.
+                        "truncated": truncated,
                     }
                 # Only a rejected credential or an exhausted quota could be
                 # fixed by a different key; anything else would repeat.
@@ -565,13 +581,46 @@ class OpenCodeGoClient:
         }
 
     @staticmethod
-    def _extract(shape: Shape, payload: Any) -> str:
-        """Pull the answer out of whichever body shape came back."""
+    def _truncated(shape: Shape, payload: Any) -> bool:
+        """Did the gateway stop because it ran out of budget rather than words?
+
+        Discarding this is how a truncated non-answer gets presented as an
+        answer. It matters most on the reasoning models, where the tokens spent
+        before the budget ran out were spent thinking rather than replying.
+        """
+        try:
+            if shape == "chat":
+                return str(payload["choices"][0].get("finish_reason") or "") == "length"
+            if shape == "messages":
+                return str(payload.get("stop_reason") or "") == "max_tokens"
+            details = payload.get("incomplete_details") or {}
+            reason = details.get("reason") if isinstance(details, dict) else None
+            return str(payload.get("status") or "") == "incomplete" or reason is not None
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return False
+
+    @staticmethod
+    def _extract(shape: Shape, payload: Any, *, truncated: bool = False) -> str:
+        """Pull the answer out of whichever body shape came back.
+
+        The `reasoning_content` fallback is narrower than it looks, and the
+        narrowing is the point. LongCat genuinely puts its answer there, so the
+        fallback has to exist. But a reasoning model cut off by the token budget
+        also has an empty `content` and a full `reasoning_content` — and taking
+        it then hands the operator the model's private working as though it were
+        the reply, marked grounded, with no sign it was cut off. Measured on
+        glm-5.3 at max_tokens=32: the "answer" to "what is 2+2" came back as
+        'The user asks "What is 2+2?" and the sys'.
+
+        So the fallback applies only when the response actually finished.
+        """
         try:
             if shape == "chat":
                 message = payload["choices"][0]["message"]
-                # LongCat returns its answer under reasoning_content instead.
-                return message.get("content") or message.get("reasoning_content") or ""
+                content = message.get("content") or ""
+                if content:
+                    return str(content)
+                return "" if truncated else str(message.get("reasoning_content") or "")
             if shape == "messages":
                 return "".join(
                     block.get("text", "")

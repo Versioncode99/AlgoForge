@@ -325,3 +325,82 @@ def test_anthropic_usage_uses_the_other_spelling():
     )
     result = OpenCodeGoClient(transport=transport).chat(model="qwen3.8-max", system="s", prompt="p")
     assert (result["input_tokens"], result["output_tokens"]) == (7, 2)
+
+
+# ── truncation ───────────────────────────────────────────────────────────────
+# A reasoning model cut off by the token budget has an empty `content` and a
+# full `reasoning_content`. Falling back to the second one there hands the
+# operator the model's private working as though it were the reply. Measured
+# against the live gateway on glm-5.3 at max_tokens=32: the "answer" to "what
+# is 2+2" came back as 'The user asks "What is 2+2?" and the sys'.
+
+
+def test_a_truncated_reasoning_model_does_not_pass_its_thinking_off_as_an_answer():
+    transport, _ = _capture(
+        200,
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "reasoning_content": "The user asks what 2+2 is. I should",
+                    },
+                    "finish_reason": "length",
+                }
+            ]
+        },
+    )
+    with pytest.raises(OpenCodeError, match="OPENCODE_TRUNCATED"):
+        OpenCodeGoClient(transport=transport).chat(
+            model="glm-5.3", system="s", prompt="p", max_tokens=32
+        )
+
+
+def test_longcat_still_gets_its_answer_from_reasoning_content_when_it_finished():
+    """The fallback has to survive; it is only the truncated case that is wrong."""
+    transport, _ = _capture(
+        200,
+        {"choices": [{"message": {"reasoning_content": "Tokyo"}, "finish_reason": "stop"}]},
+    )
+    result = OpenCodeGoClient(transport=transport).chat(
+        model="longcat-2.0", system="s", prompt="p"
+    )
+    assert result["answer"] == "Tokyo"
+    assert result["truncated"] is False
+
+
+def test_a_truncated_answer_is_returned_but_flagged():
+    """It may still be useful. It must never be silent."""
+    transport, _ = _capture(
+        200,
+        {
+            "choices": [
+                {"message": {"content": "The first half of a sen"}, "finish_reason": "length"}
+            ]
+        },
+    )
+    result = OpenCodeGoClient(transport=transport).chat(model="glm-5.3", system="s", prompt="p")
+    assert result["answer"] == "The first half of a sen"
+    assert result["truncated"] is True
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        ("qwen3.8-max", {"content": [{"type": "text", "text": "ok"}], "stop_reason": "max_tokens"}),
+        (
+            "grok-4.6",
+            {
+                "output": [{"type": "message", "content": [{"text": "ok"}]}],
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            },
+        ),
+    ],
+)
+def test_every_shape_reports_its_own_truncation(model: str, payload: dict):
+    """Each route spells it differently, and reading only one spelling would
+    make the other two silently look complete."""
+    transport, _ = _capture(200, payload)
+    result = OpenCodeGoClient(transport=transport).chat(model=model, system="s", prompt="p")
+    assert result["truncated"] is True

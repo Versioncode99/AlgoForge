@@ -32,6 +32,8 @@ sample it understood.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -285,10 +287,107 @@ class TradeRegime(FrozenModel):
     entry_vol_percentile: float | None = None
 
 
+def attribute_at_times(
+    trades: list[Any],
+    series: RegimeSeries,
+    times: Sequence[datetime],
+    *,
+    with_percentile: bool = False,
+) -> list[TradeRegime]:
+    """Map trades onto regimes by *timestamp* rather than by bar index.
+
+    This exists because of a defect that produced entirely plausible nonsense.
+    A trade's `entry_index` is an index into the bars that backtest ran on — the
+    last 120,000 of an archive, say. A regime series built from the whole
+    4.7-million-bar archive has an index 119 too, and it is a bar from sixteen
+    years earlier. Reading `series.at(trade.entry_index)` against a differently
+    windowed series therefore returns a real label for a real bar that has
+    nothing to do with the trade, and the resulting report looks correct in
+    every respect: sensible coverage, sensible cells, sensible warnings.
+
+    Indices are only meaningful within one window. Timestamps are meaningful
+    everywhere, which is the same reason chart markers carry them.
+
+    A trade whose bars are not in the classified series is `UNCLASSIFIED`. Not
+    approximated to the nearest bar: a nearby bar is a different bar, and the
+    whole point of this function is to stop a label being attached to one.
+    """
+    if len(times) != len(series.labels):
+        raise ValueError(
+            f"the classification covers {len(series.labels)} bars but {len(times)} "
+            "timestamps were supplied; they must describe the same bars"
+        )
+    position = {stamp: index for index, stamp in enumerate(times)}
+    vol = np.asarray(series.volatility, dtype=np.float64)
+    strength = np.asarray(series.trend_strength, dtype=np.float64)
+    reference = vol[np.isfinite(vol)] if with_percentile else np.empty(0)
+    ordered = np.sort(reference) if reference.size else reference
+
+    out: list[TradeRegime] = []
+    for trade in trades:
+        entry_at = position.get(trade.entry_time)
+        exit_at = position.get(trade.exit_time)
+        if entry_at is None or exit_at is None:
+            out.append(
+                TradeRegime(
+                    trade_id=str(trade.trade_id),
+                    entry=Regime.UNCLASSIFIED,
+                    exit=Regime.UNCLASSIFIED,
+                    dominant=Regime.UNCLASSIFIED,
+                    dominant_share=0.0,
+                )
+            )
+            continue
+
+        # The decision sits exactly one bar before the fill, by construction of
+        # the runtime, and the decision is what the regime is meant to explain.
+        decision = entry_at - 1
+        entry_regime = series.at(decision) if decision >= 0 else Regime.UNCLASSIFIED
+        span = series.labels[entry_at : exit_at + 1]
+        measured = [label for label in span if label is not Regime.UNCLASSIFIED]
+        dominant: Regime = Regime.UNCLASSIFIED
+        share = 0.0
+        if measured:
+            dominant = max(set(measured), key=measured.count)
+            share = measured.count(dominant) / len(span)
+
+        entry_vol = float(vol[decision]) if 0 <= decision < vol.size else float("nan")
+        entry_strength = (
+            float(strength[decision]) if 0 <= decision < strength.size else float("nan")
+        )
+        percentile: float | None = None
+        if with_percentile and ordered.size and np.isfinite(entry_vol):
+            percentile = round(
+                100.0 * float(np.searchsorted(ordered, entry_vol, side="right")) / ordered.size, 3
+            )
+
+        out.append(
+            TradeRegime(
+                trade_id=str(trade.trade_id),
+                entry=entry_regime,
+                exit=series.at(exit_at),
+                dominant=dominant,
+                dominant_share=round(share, 4),
+                entry_volatility=round(entry_vol, 6) if np.isfinite(entry_vol) else None,
+                entry_trend_strength=(
+                    round(entry_strength, 6) if np.isfinite(entry_strength) else None
+                ),
+                entry_vol_percentile=percentile,
+            )
+        )
+    return out
+
+
 def attribute(
     trades: list[Any], series: RegimeSeries, *, with_percentile: bool = False
 ) -> list[TradeRegime]:
-    """Map each trade onto the regime(s) it ran in.
+    """Map each trade onto the regime(s) it ran in, by bar index.
+
+    **Only correct when `series` was classified from exactly the bars the trades
+    were produced on.** An index is meaningful within one window and nowhere
+    else; against a differently windowed series this returns real labels for the
+    wrong bars, and the result looks entirely reasonable. Anything reading
+    trades back from an artifact must use :func:`attribute_at_times` instead.
 
     The entry regime is read at the *decision* bar, not the fill bar: the
     decision is what the regime is supposed to explain, and it is one bar

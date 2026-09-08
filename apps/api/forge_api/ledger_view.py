@@ -38,7 +38,7 @@ from forge.analytics.regime import (
     Regime,
     RegimeSeries,
     RegimeSettings,
-    attribute,
+    attribute_at_times,
     classify,
     summarise,
 )
@@ -46,6 +46,11 @@ from forge.analytics.regime import (
 #: How many trades a single response will carry. A chart cannot usefully draw
 #: more, and a caller that wants the whole ledger should page.
 MAX_TRADES = 4000
+
+#: Bars to classify when a backtest does not record how many it ran on. Large
+#: enough to cover any run this application produces, small enough that it is
+#: seconds rather than minutes.
+DEFAULT_BAR_LIMIT = 400_000
 
 
 class LedgerError(Exception):
@@ -67,25 +72,42 @@ class RegimeCache:
         self._lock = threading.Lock()
         self._series: dict[str, tuple[RegimeSeries, list[datetime]]] = {}
 
-    def key(self, dataset: str, settings: RegimeSettings) -> str:
-        return f"{dataset}@{settings.model_dump_json()}"
+    def key(self, dataset: str, settings: RegimeSettings, bar_limit: int | None) -> str:
+        # The window is part of the identity. Two classifications of the same
+        # dataset over different windows are different classifications, and
+        # serving one for the other is precisely the defect this cache caused
+        # once already.
+        return f"{dataset}@{bar_limit}@{settings.model_dump_json()}"
 
     def get(
         self, dataset: str, settings: RegimeSettings, bar_limit: int | None = None
     ) -> tuple[RegimeSeries, list[datetime]]:
-        cache_key = self.key(dataset, settings)
+        cache_key = self.key(dataset, settings, bar_limit)
         with self._lock:
             cached = self._series.get(cache_key)
         if cached is not None:
             return cached
 
-        bars, _ = self.market.load(dataset, limit=bar_limit)
+        # Bounded on purpose. Without a limit this loads every bar in the
+        # archive — 4.7 million for NQ — builds a validated model object for
+        # each, and then materialises four Python sequences of that length. It
+        # is minutes of work and gigabytes of memory to answer a question about
+        # a backtest that ran on a hundred and twenty thousand of them.
+        bars, _ = self.market.load(dataset, limit=bar_limit or DEFAULT_BAR_LIMIT)
         if not bars:
             raise LedgerError(f"no bars available for dataset '{dataset}'")
         series = classify(
             [b.high for b in bars], [b.low for b in bars], [b.close for b in bars], settings
         )
-        times = [b.event_time for b in bars]
+        # Normalised to UTC so a lookup against an artifact's ISO timestamps
+        # matches. A naive datetime never equals an aware one, and the failure
+        # mode would be every trade falling outside the series.
+        times = [
+            b.event_time.astimezone(UTC)
+            if b.event_time.tzinfo
+            else b.event_time.replace(tzinfo=UTC)
+            for b in bars
+        ]
         with self._lock:
             self._series[cache_key] = (series, times)
         return series, times
@@ -138,6 +160,18 @@ def marker_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _parse(value: Any) -> datetime | None:
+    """A timestamp from an artifact, normalised to UTC, or None."""
+    if isinstance(value, datetime):
+        return value.astimezone(UTC)
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
 def _seconds(value: str) -> float:
     try:
         return datetime.fromisoformat(value).timestamp()
@@ -179,6 +213,27 @@ class TradeLedgerService:
             )
         return dict(latest if isinstance(latest, dict) else latest.model_dump(mode="json"))
 
+    def classified(
+        self, payload: dict[str, Any], settings: RegimeSettings | None = None
+    ) -> tuple[RegimeSeries, list[datetime]]:
+        """The classification of the bars *this run* was executed over.
+
+        `bar_count` is what makes the window right. The backtest read the last
+        N bars of the archive, so the classification must cover the same N, or
+        the timestamps will not line up and every trade will fall outside the
+        series — which is a visible refusal rather than a silent mislabelling,
+        but is still wrong.
+        """
+        dataset = str(payload.get("dataset_key") or "")
+        if not dataset:
+            raise LedgerError(
+                "this backtest does not record which dataset it ran on, so its bars "
+                "cannot be classified. Re-run it to attribute regimes."
+            )
+        recorded = payload.get("bar_count")
+        window = int(recorded) if isinstance(recorded, int) and recorded > 0 else None
+        return self.regimes.get(dataset, settings or RegimeSettings(), window)
+
     # -- the ledger -----------------------------------------------------------
     def ledger(
         self,
@@ -203,10 +258,10 @@ class TradeLedgerService:
         dataset = str(payload.get("dataset_key") or "")
         if with_regimes and dataset and rows:
             try:
-                series, _ = self.regimes.get(dataset, RegimeSettings())
+                series, times = self.classified(payload)
                 marks = {
                     item.trade_id: item
-                    for item in attribute(_TradeShim.many(payload), series)
+                    for item in attribute_at_times(_TradeShim.many(payload), series, times)
                 }
             except Exception as exc:
                 # A missing archive must cost the regime column, not the ledger.
@@ -282,8 +337,10 @@ class TradeLedgerService:
         regime_detail: dict[str, Any] = {}
         if dataset:
             try:
-                series, _ = self.regimes.get(dataset, RegimeSettings())
-                marks = attribute(_TradeShim.many(payload), series, with_percentile=True)
+                series, times = self.classified(payload)
+                marks = attribute_at_times(
+                    _TradeShim.many(payload), series, times, with_percentile=True
+                )
                 found = next((m for m in marks if m.trade_id == trade_id), None)
                 if found is not None:
                     regime_detail = {
@@ -346,18 +403,13 @@ class TradeLedgerService:
         descriptive: bool = False,
     ) -> dict[str, Any]:
         payload = self.resolve(strategy_id, backtest_id)
-        dataset = str(payload.get("dataset_key") or "")
-        if not dataset:
-            raise LedgerError(
-                "this backtest does not record which dataset it ran on, so its bars "
-                "cannot be classified. Re-run it to attribute regimes."
-            )
         settings = RegimeSettings(basis=Basis.FULL_SAMPLE) if descriptive else RegimeSettings()
-        series, _ = self.regimes.get(dataset, settings)
+        series, times = self.classified(payload, settings)
+        dataset = str(payload.get("dataset_key") or "")
         trades = _TradeShim.many(payload)
         if not trades:
             raise LedgerError("this backtest recorded no trades, so there is nothing to attribute")
-        marks = attribute(trades, series)
+        marks = attribute_at_times(trades, series, times)
         report = summarise(trades, marks, series, attribution=attribution)  # type: ignore[arg-type]
         return {
             **report.model_dump(mode="json"),
@@ -400,8 +452,8 @@ class _TradeShim:
     attributes the attribution reads.
     """
 
-    __slots__ = ("entry_decision_index", "entry_index", "exit_index", "gross_pnl",
-                 "net_pnl", "trade_id")
+    __slots__ = ("entry_decision_index", "entry_index", "entry_time", "exit_index",
+                 "exit_time", "gross_pnl", "net_pnl", "trade_id")
 
     def __init__(self, raw: dict[str, Any]) -> None:
         self.trade_id = str(raw.get("trade_id") or "")
@@ -410,6 +462,11 @@ class _TradeShim:
         self.exit_index = int(raw.get("exit_index") or 0)
         self.net_pnl = float(raw.get("net_pnl") or 0.0)
         self.gross_pnl = float(raw.get("gross_pnl") or 0.0)
+        # Timestamps are what the regime attribution aligns on; indices are only
+        # meaningful inside the window the run used. Parsed once here rather
+        # than per lookup, because a ledger can hold tens of thousands of rows.
+        self.entry_time = _parse(raw.get("entry_time"))
+        self.exit_time = _parse(raw.get("exit_time"))
 
     @classmethod
     def many(cls, payload: dict[str, Any]) -> list[Any]:

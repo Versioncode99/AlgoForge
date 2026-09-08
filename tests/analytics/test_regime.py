@@ -21,6 +21,7 @@ from forge.analytics.regime import (
     Regime,
     RegimeSettings,
     attribute,
+    attribute_at_times,
     classify,
     summarise,
     transition_matrix,
@@ -377,3 +378,92 @@ def test_the_pnl_only_summary_no_longer_claims_to_know_the_market() -> None:
     names = {regime.name for regime in analysis.regimes}
     assert not names & {"TREND", "HIGH_VOL", "RANGE", "LOW_VOL"}
     assert all(regime.basis == "chronological_quarter" for regime in analysis.regimes)
+
+
+# ── windows, and the mislabelling that hides inside them ────────────────────
+
+
+def test_timestamp_attribution_refuses_a_series_from_a_different_window() -> None:
+    """The regression guard for a defect that produced plausible nonsense.
+
+    A trade's `entry_index` is an index into the bars its backtest ran on — the
+    last 120,000 of an archive, say. A regime series built from the whole
+    archive has an index 119 too, and it is a bar from years earlier. Reading
+    the label at that index returns a real classification of a real bar that has
+    nothing to do with the trade, and the resulting report looks correct in
+    every respect: sensible coverage, sensible cells, sensible warnings.
+
+    Aligning on timestamps makes the mismatch visible: a trade whose bars are
+    not in the series is UNCLASSIFIED, never approximated to a nearby bar.
+    """
+    bars = generate_bars(count=6000, seed=4242)
+    window = bars[-2000:]  # what the "backtest" ran on
+    defn, spec = strategy()
+    result = run_backtest(compile_definition(defn), spec, window, code_hash="w")
+    assert result.trades, "the fixture needs trades to attribute"
+
+    # Classified over the WHOLE archive — a different window from the run's.
+    whole = classify(
+        [b.high for b in bars], [b.low for b in bars], [b.close for b in bars], SETTINGS
+    )
+    whole_times = [b.event_time for b in bars]
+    correct = classify(
+        [b.high for b in window], [b.low for b in window], [b.close for b in window], SETTINGS
+    )
+    window_times = [b.event_time for b in window]
+
+    trades = list(result.trades)
+    by_time = attribute_at_times(trades, whole, whole_times)
+    by_index = attribute(trades, whole)
+
+    # Timestamp attribution reads the label of the bar the trade actually
+    # decided on. Asserted against the series directly rather than by comparing
+    # two classifications: the whole-archive series has thousands more bars of
+    # prior history at the same timestamp, so its *labels* may legitimately
+    # differ from the window-only one. What must not differ is which bar is
+    # read.
+    position = {stamp: index for index, stamp in enumerate(whole_times)}
+    for trade, mark in zip(trades, by_time, strict=True):
+        decision = position[trade.entry_time] - 1
+        assert mark.entry == whole.labels[decision]
+
+    # Index attribution against a differently windowed series reads a bar
+    # thousands of positions away — a real classification of a real bar that
+    # has nothing to do with the trade. It looks entirely reasonable, which is
+    # exactly why it must not be used to read trades back from an artifact.
+    for trade, mark in zip(trades, by_index, strict=True):
+        assert mark.entry == whole.labels[trade.entry_decision_index]
+        assert trade.entry_decision_index != position[trade.entry_time] - 1
+    assert [m.entry for m in by_index] != [m.entry for m in by_time]
+
+    # And the correctly windowed series places the same trades from its own
+    # timestamps, which is what the API path does.
+    from_window = attribute_at_times(trades, correct, window_times)
+    assert any(m.entry is not Regime.UNCLASSIFIED for m in from_window)
+
+
+def test_a_trade_outside_the_classified_series_is_unclassified_not_guessed() -> None:
+    bars = generate_bars(count=6000, seed=77)
+    defn, spec = strategy()
+    result = run_backtest(compile_definition(defn), spec, bars[-2000:], code_hash="w")
+    assert result.trades
+
+    # A series over an entirely different stretch of history: no timestamp of
+    # the run's appears in it.
+    other = generate_bars(count=3000, seed=77, start=datetime(2019, 3, 4, 14, 30, tzinfo=UTC))
+    series = classify(
+        [b.high for b in other], [b.low for b in other], [b.close for b in other], SETTINGS
+    )
+    marks = attribute_at_times(list(result.trades), series, [b.event_time for b in other])
+    assert marks
+    assert all(m.entry is Regime.UNCLASSIFIED for m in marks)
+    assert all(m.dominant is Regime.UNCLASSIFIED for m in marks)
+
+
+def test_timestamp_attribution_refuses_mismatched_lengths() -> None:
+    """A times list that does not describe the classified bars is a caller bug,
+    and a silent one if it is tolerated."""
+    high, low, close = arrays(count=1000)
+    series = classify(high, low, close, SETTINGS)
+    with pytest.raises(ValueError, match="must describe the same bars"):
+        attribute_at_times([], series, [])

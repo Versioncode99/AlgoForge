@@ -61,6 +61,35 @@ def seed_demo(ledger: LedgerDatabase) -> None:
     )
 
 
+def _allowed_origins() -> list[str]:
+    """Which browser origins may call this API.
+
+    The default is the Vite dev server on its default port and nothing else.
+    That is correct and, on its own, quietly hostile: Vite silently moves to
+    5174, 5175 and upward whenever the port is taken, and every request from
+    the moved server is then blocked by CORS. The application does not report
+    that as a CORS problem — it reports "API OFFLINE", which sends you looking
+    at the API, which is running fine.
+
+    So the list is extendable by environment for exactly that case. Loopback
+    only, and never a wildcard: a `*` here would let any page the operator has
+    open reach a research database on their own machine.
+    """
+    origins = ["http://127.0.0.1:5173", "http://localhost:5173"]
+    extra = os.environ.get("ALGOFORGE_CORS_ORIGINS", "")
+    for candidate in extra.split(","):
+        cleaned = candidate.strip()
+        if not cleaned:
+            continue
+        if not cleaned.startswith(("http://127.0.0.1:", "http://localhost:")):
+            raise ValueError(
+                f"ALGOFORGE_CORS_ORIGINS may only name loopback origins; got '{cleaned}'"
+            )
+        if cleaned not in origins:
+            origins.append(cleaned)
+    return origins
+
+
 def create_app(database_path: Path | None = None) -> FastAPI:
     # Everything the app writes lives under the workspace, which defaults to the
     # repository and points at an Obsidian vault once one is configured. See
@@ -94,7 +123,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_origins=_allowed_origins(),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["*"],
