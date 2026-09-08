@@ -3,7 +3,7 @@ import {
   Activity, Archive, BookOpen, BrainCircuit, ChevronLeft, ChevronRight, Database,
   FileCheck2, FlaskConical, GitBranch, Layers3, LockKeyhole, Menu, MessageSquare,
   Network, PanelBottomOpen, PlaySquare, Radar, ScrollText, Search, Settings,
-  ShieldCheck, TestTubes, Workflow,
+  ShieldCheck, TestTubes, Workflow, CandlestickChart,
 } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { getJson } from './api'
@@ -27,8 +27,9 @@ const ExperimentsView = lazy(() => import('./views/Experiments').then(m => ({ de
 const RunsView = lazy(() => import('./views/Runs').then(m => ({ default: m.RunsView })))
 const ResearchMemoryView = lazy(() => import('./views/ResearchMemory').then(m => ({ default: m.ResearchMemoryView })))
 const DataWorkspaceView = lazy(() => import('./views/DataWorkspace').then(m => ({ default: m.DataWorkspaceView })))
+const ChartsView = lazy(() => import('./views/Charts').then(m => ({ default: m.ChartsView })))
 
-type RouteId = 'overview' | 'missions' | 'experiments' | 'strategies' | 'runs' | 'validation' |
+type RouteId = 'overview' | 'missions' | 'experiments' | 'strategies' | 'runs' | 'validation' | 'charts' |
   'evidence' | 'memory' | 'lineage' | 'data' | 'research' | 'pipeline' | 'agents' |
   'prop' | 'console' | 'settings'
 type NavItem = PaletteRoute & { id: RouteId; icon: typeof Activity }
@@ -48,6 +49,9 @@ const NAV: { group: string; items: NavItem[] }[] = [
   { group: 'Research Memory', items: [
     { id: 'memory', label: 'Memory', group: 'Research Memory', detail: 'Classified failures', icon: BrainCircuit },
     { id: 'lineage', label: 'Lineage', group: 'Research Memory', detail: 'Experiment ancestry', icon: GitBranch },
+  ]},
+  { group: 'Market', items: [
+    { id: 'charts', label: 'Charts', group: 'Market', detail: 'Candles over the local archives', icon: CandlestickChart },
   ]},
   { group: 'Data', items: [
     { id: 'data', label: 'Data Health', group: 'Data', detail: 'Coverage and provenance', icon: Database },
@@ -142,6 +146,7 @@ export function App() {
             {online && route === 'validation' && <ValidationLabView />}
             {online && route === 'evidence' && <EvidenceView />}
             {online && route === 'memory' && <ResearchMemoryView />}
+            {online && route === 'charts' && <ChartsView />}
             {online && route === 'data' && <DataWorkspaceView />}
             {online && route === 'research' && <ResearchLabView />}
             {online && route === 'pipeline' && <PipelineView />}

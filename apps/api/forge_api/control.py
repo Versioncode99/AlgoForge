@@ -871,6 +871,38 @@ def build_control_router(
             raise HTTPException(409, {"code": "action_refused", "reason": str(exc)}) from exc
 
 
+
+    # ── charting ─────────────────────────────────────────────────────────────
+    @router.get("/timeframes", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def timeframes() -> ApiEnvelope[list[dict[str, Any]]]:
+        return ApiEnvelope(data=market.timeframe_catalogue())
+
+    @router.get("/bars", response_model=ApiEnvelope[dict[str, Any]])
+    def bars(
+        dataset: str = DEFAULT_DATASET,
+        timeframe: str = "1m",
+        limit: int = 1500,
+        before: str | None = None,
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """Candles for a chart.
+
+        Real bars from a real archive or nothing at all. A dataset that is not
+        present is a 409 naming it, never a generated stand-in -- a chart that
+        silently invents prices is worse than a chart that refuses to draw.
+        """
+        try:
+            payload = market.chart_bars(dataset, timeframe, limit=limit, before=before)
+        except KeyError as exc:
+            raise HTTPException(422, {"code": "unknown_timeframe", "reason": str(exc)}) from exc
+        except ProviderError as exc:
+            raise HTTPException(
+                409, {"code": "market_data_unavailable", "reason": str(exc)}
+            ) from exc
+        return ApiEnvelope(
+            data=payload,
+            meta={"convention": payload["convention"], "authority": payload["authority"]},
+        )
+
     # ── workspaces ───────────────────────────────────────────────────────────
     # Thin by design. Every one of these delegates to the same action the agent
     # calls, so the interface cannot drift from what the operator can ask for in

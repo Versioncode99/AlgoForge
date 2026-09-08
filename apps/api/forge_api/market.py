@@ -20,6 +20,13 @@ from forge.data.dbn_import import cached_batch
 from forge.data.live import DataRequest as LiveRequest
 from forge.data.live import MarketDataCache, ProviderError, _frame_to_bars, get_provider
 from forge.data.models import Bar
+from forge.data.timeframes import (
+    TIMEFRAMES,
+    aggregate,
+    cached_timeframe,
+    timeframe,
+    write_derived,
+)
 from forge.strategy import generate_bars
 
 if TYPE_CHECKING:  # pragma: no cover - types only
@@ -164,6 +171,10 @@ class MarketService:
         # the count is wanted far more often than the bars, and is thousands of
         # times cheaper to get.
         self._row_counts: dict[str, int] = {}
+        # Derived aggregates, keyed by dataset@timeframe. Small next to the
+        # archives: a daily series over sixteen years is about four thousand
+        # rows, and the whole point is not to touch the archive again.
+        self._aggregates: dict[str, pd.DataFrame] = {}
 
     @staticmethod
     def window(dataset: Dataset, today: date | None = None) -> tuple[str, str]:
@@ -204,6 +215,123 @@ class MarketService:
 
         bars = self._memo[key]
         return (bars[-limit:] if limit and limit < len(bars) else bars), dataset
+
+
+    # ── charting ─────────────────────────────────────────────────────────────
+    def chart_bars(
+        self,
+        key: str,
+        timeframe_key: str = "1m",
+        limit: int = 1500,
+        before: str | None = None,
+    ) -> dict[str, Any]:
+        """OHLCV for a chart, newest `limit` bars at `timeframe_key`.
+
+        Reads a derived aggregate rather than the archive, and builds that
+        aggregate the first time it is asked for. A daily chart of sixteen years
+        of NQ is 4.7 million rows reduced to about four thousand: doing that per
+        request would be the same mistake as parsing every artifact to render a
+        table.
+
+        `before` pages backwards for pan-left, in the only direction a chart
+        actually needs: give it the timestamp of the oldest bar on screen and it
+        returns the `limit` bars before it.
+        """
+        dataset = DATASETS.get(key)
+        if dataset is None:
+            raise ProviderError(f"unknown dataset '{key}'")
+        spec = timeframe(timeframe_key)
+        frame = self._timeframe_frame(key, dataset, spec.key)
+
+        total = len(frame)
+        if before:
+            cutoff = _pd().Timestamp(before)
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.tz_localize("UTC")
+            frame = frame[frame["event_time"] < cutoff]
+        window = frame.tail(max(1, min(int(limit), 20_000)))
+
+        return {
+            "dataset": key,
+            "symbol": dataset.symbol,
+            "timeframe": spec.key,
+            "timeframe_label": spec.label,
+            # Stated rather than implied: a daily bar's boundary is a
+            # convention, and a chart that does not say which one it used is
+            # showing numbers nobody can check.
+            "convention": spec.note,
+            "authority": dataset.authority,
+            "is_real": dataset.is_real,
+            "bar_count": len(window),
+            "total_bars": total,
+            # True when there is more history to the left, so the chart knows
+            # whether panning further can load anything.
+            "has_more": bool(len(frame) > len(window)),
+            "bars": [
+                {
+                    "time": stamp.isoformat(),
+                    "open": float(o),
+                    "high": float(h),
+                    "low": float(low),
+                    "close": float(c),
+                    "volume": float(v),
+                }
+                for stamp, o, h, low, c, v in zip(
+                    window["event_time"],
+                    window["open"],
+                    window["high"],
+                    window["low"],
+                    window["close"],
+                    window["volume"],
+                    strict=True,
+                )
+            ],
+        }
+
+    def _timeframe_frame(self, key: str, dataset: Dataset, timeframe_key: str) -> pd.DataFrame:
+        """The aggregate for one dataset and timeframe, built once and kept."""
+        memo_key = f"{key}@{timeframe_key}"
+        if memo_key in self._aggregates:
+            return self._aggregates[memo_key]
+
+        if not dataset.is_imported:
+            # Streaming and synthetic datasets are small enough to aggregate in
+            # memory; there is no archive to derive a cache from.
+            bars, _ = self.load(key)
+            source = _pd().DataFrame(
+                [
+                    {
+                        "event_time": bar.event_time,
+                        "open": bar.open,
+                        "high": bar.high,
+                        "low": bar.low,
+                        "close": bar.close,
+                        "volume": bar.volume,
+                    }
+                    for bar in bars
+                ]
+            )
+            frame = aggregate(source, timeframe_key) if not source.empty else source
+            self._aggregates[memo_key] = frame
+            return frame
+
+        cached = cached_timeframe(self.cache.root, key, timeframe_key)
+        if cached is None:
+            source = self._frame_for(key, dataset)
+            frame = aggregate(source, timeframe_key)
+            cached = write_derived(self.cache.root, key, timeframe_key, frame)
+        else:
+            frame = _pd().read_parquet(cached)
+            frame["event_time"] = _pd().to_datetime(frame["event_time"], utc=True)
+
+        self._aggregates[memo_key] = frame
+        return frame
+
+    def timeframe_catalogue(self) -> list[dict[str, Any]]:
+        return [
+            {"key": tf.key, "label": tf.label, "note": tf.note}
+            for tf in TIMEFRAMES.values()
+        ]
 
     def available_rows(self, key: str) -> int:
         """How many bars an imported dataset holds, without materialising them.

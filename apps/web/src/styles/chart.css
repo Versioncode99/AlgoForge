@@ -1,0 +1,143 @@
+/* Price chart.
+   Dense and quiet: the candles are the content, so the chrome around them is
+   as close to invisible as it can be while staying legible and reachable. */
+
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+  flex-wrap: wrap;
+}
+
+.chart-toolbar .ctl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-toolbar .ctl > span {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.chart-toolbar select {
+  background: var(--bg-3);
+  color: var(--fg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm, 5px);
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 11px;
+}
+
+/* Timeframe buttons read as one segmented control rather than seven buttons. */
+.chart-toolbar .tf {
+  background: transparent;
+  color: var(--fg-2);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chart-toolbar .tf:hover {
+  color: var(--fg-0);
+  background: var(--bg-3);
+}
+
+.chart-toolbar .tf.active {
+  color: var(--bg-0);
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.chart-readout {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-1);
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.chart-readout .up { color: var(--pass); }
+.chart-readout .down { color: var(--fail); }
+.chart-readout .vol { color: var(--fg-3); }
+.chart-hint { color: var(--fg-3); }
+
+.price-chart {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.price-chart-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+/* Loading, empty and unavailable are three different things and each says
+   which one it is. None of them draws a chart. */
+.chart-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px;
+  text-align: center;
+  background: var(--bg-1);
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.chart-state.error {
+  position: relative;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  color: var(--fg-1);
+}
+
+.chart-state.error strong { color: var(--fail); }
+.chart-state .chart-note { color: var(--fg-3); max-width: 46ch; }
+
+.chart-provenance {
+  display: flex;
+  gap: 14px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+  font-size: 10px;
+  color: var(--fg-3);
+  flex-wrap: wrap;
+}
+
+.chart-provenance .real { color: var(--pass); letter-spacing: 0.06em; }
+.chart-provenance .fixture { color: var(--warn); letter-spacing: 0.06em; }
+
+.charts-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}

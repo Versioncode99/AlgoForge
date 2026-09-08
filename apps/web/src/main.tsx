@@ -15,6 +15,7 @@ import './styles/pipeline.css'
 import './styles/orchestrator.css'
 import './styles/evidence.css'
 import './styles/storage.css'
+import './styles/chart.css'
 import './styles/workstation.css'
 import './styles/research.css'
 
