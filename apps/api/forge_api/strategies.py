@@ -144,6 +144,26 @@ class ValidationRequest(BaseModel):
     max_trials: int = Field(default=16, ge=2, le=120)
 
 
+class SurfaceSweepRequest(BaseModel):
+    """Two parameters, a grid, and one metric drawn over it.
+
+    `steps` is capped hard: every cell is a full backtest, so a 12x12 grid is
+    144 of them. The cap is what keeps an accidental request from becoming an
+    afternoon, and it is stated rather than silently truncated.
+    """
+
+    x_parameter: str = Field(min_length=1, max_length=64)
+    y_parameter: str = Field(min_length=1, max_length=64)
+    #: Values per axis. 6x6 is 36 backtests, which is a minute or two.
+    x_steps: int = Field(default=6, ge=2, le=12)
+    y_steps: int = Field(default=6, ge=2, le=12)
+    metric: str = Field(default="net_pnl", max_length=32)
+    dataset: str = DEFAULT_DATASET
+    bar_count: int = Field(default=12_000, ge=400, le=60_000)
+    seed: int = 20260901
+    save: bool = True
+
+
 class SweepRequest(BaseModel):
     parameter: str
     dataset: str = DEFAULT_DATASET
@@ -943,6 +963,215 @@ def build_router(
                 "promotable": False,
                 "trials_counted": len(points),
                 "note": "Sweep results are exploratory and can never promote a strategy.",
+            },
+        )
+
+    @router.post(
+        "/strategies/{strategy_id}/sweep-surface",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def sweep_surface(
+        strategy_id: str, body: SurfaceSweepRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """A two-parameter landscape, run as a job.
+
+        The brief's first example of a 3D visualisation is a strategy's own
+        parameter surface. Everything needed to draw one already existed — the
+        surface shape, the WebGL renderer, the artifact store, the provenance
+        chain — and had nothing to draw, because the sweep could only move one
+        parameter at a time.
+
+        Every cell is a real backtest on the development partition. That is
+        in-sample by construction and the result says so; a sweep is exploration
+        and can never promote a strategy. The cell count is the trial count, and
+        it is reported, because that is the number the deflated-Sharpe gate has
+        to be told about.
+        """
+        from forge.research.analyses import make_provenance
+        from forge.research.parameter_surface import METRICS, build_surface
+
+        try:
+            spec = library.get_spec(strategy_id)
+            module = library.load_module(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(404, {"code": "strategy_not_found"}) from exc
+        except GuardViolation as exc:
+            raise HTTPException(422, {"code": "guard_violation", "detail": str(exc)}) from exc
+
+        if body.metric not in METRICS:
+            raise HTTPException(
+                422, {"code": "unknown_metric", "known": sorted(METRICS)}
+            )
+        if body.x_parameter == body.y_parameter:
+            raise HTTPException(
+                422,
+                {
+                    "code": "same_parameter_twice",
+                    "detail": (
+                        "A surface needs two different parameters. Sweeping one "
+                        "against itself is the line the one-parameter sweep draws."
+                    ),
+                },
+            )
+
+        by_name = {p.name: p for p in spec.parameters}
+        for axis, name in (("x", body.x_parameter), ("y", body.y_parameter)):
+            if name not in by_name:
+                raise HTTPException(
+                    404,
+                    {
+                        "code": "parameter_not_found",
+                        "axis": axis,
+                        "parameter": name,
+                        "known": sorted(by_name),
+                    },
+                )
+        x_param = by_name[body.x_parameter]
+        y_param = by_name[body.y_parameter]
+
+        def axis_values(param: Any, steps: int) -> list[float]:
+            """`steps` values across the parameter's own declared range.
+
+            Snapped to the declared step so every value is one the strategy
+            would actually accept, and de-duplicated: a range of 3 with a step
+            of 1 cannot supply six distinct values however many are asked for.
+            """
+            low, high, step = float(param.low), float(param.high), float(param.step or 1.0)
+            if steps == 1 or high <= low:
+                return [low]
+            span = (high - low) / (steps - 1)
+            seen: list[float] = []
+            for index in range(steps):
+                raw = low + span * index
+                snapped = low + round((raw - low) / step) * step if step > 0 else raw
+                snapped = min(high, max(low, round(snapped, 10)))
+                if snapped not in seen:
+                    seen.append(snapped)
+            return seen
+
+        xs = axis_values(x_param, body.x_steps)
+        ys = axis_values(y_param, body.y_steps)
+        if len(xs) < 2 or len(ys) < 2:
+            raise HTTPException(
+                422,
+                {
+                    "code": "range_too_narrow",
+                    "detail": (
+                        f"'{x_param.name}' yields {len(xs)} distinct value(s) and "
+                        f"'{y_param.name}' {len(ys)} across their declared ranges and "
+                        "steps. A surface needs at least two on each axis."
+                    ),
+                },
+            )
+
+        bars, is_real, _ = _bars(body)  # type: ignore[arg-type]
+        split_receipt: ResearchSplitReceipt | None = None
+        if is_real:
+            partitions = chronological_split(bars, warmup_bars=spec.warmup_bars)
+            bars = partitions.development
+            split_receipt = partitions.receipt
+
+        total = len(xs) * len(ys)
+
+        def work(handle: JobHandle) -> dict[str, Any]:
+            points: list[dict[str, Any]] = []
+            done = 0
+            for x in xs:
+                for y in ys:
+                    handle.progress(done, f"{x_param.name}={x:g} {y_param.name}={y:g}")
+                    result = run_backtest(
+                        module,
+                        spec,
+                        bars,
+                        parameters={x_param.name: x, y_param.name: y},
+                        code_hash=library.code_hash(strategy_id),
+                        labels=(
+                            ("REAL_DATA", "DEVELOPMENT_IN_SAMPLE", "SWEEP", "NON_PROMOTABLE")
+                            if is_real
+                            else ("SYNTHETIC_DATA", "SWEEP", "NON_PROMOTABLE")
+                        ),
+                        evidence_tier="DEVELOPMENT_IN_SAMPLE" if is_real else "SYNTHETIC",
+                        dataset_key=body.dataset,
+                        partition_name="DEVELOPMENT" if is_real else None,
+                        split_receipt=split_receipt,
+                    )
+                    points.append(
+                        {
+                            "x": x,
+                            "y": y,
+                            "net_pnl": result.net_pnl,
+                            "trade_count": len(result.trades),
+                            "win_rate": result.win_rate,
+                            "max_drawdown": result.max_drawdown,
+                            "backtest_id": result.backtest_id,
+                        }
+                    )
+                    done += 1
+            handle.progress(done, "building the surface")
+
+            provenance = make_provenance(
+                "parameter_surface",
+                {
+                    "strategy_id": strategy_id,
+                    "dataset_key": body.dataset,
+                    "spec_hash": spec.spec_hash,
+                    "code_hash": library.code_hash(strategy_id),
+                    "evidence_tier": "DEVELOPMENT_IN_SAMPLE" if is_real else "SYNTHETIC",
+                    "partition_name": "DEVELOPMENT" if is_real else None,
+                },
+                # The axes and the metric are part of the identity: two surfaces
+                # over the same sweep with different metrics are different
+                # artifacts and must not collide on one id.
+                parameters={
+                    "x_parameter": x_param.name,
+                    "y_parameter": y_param.name,
+                    "metric": body.metric,
+                    "x_values": xs,
+                    "y_values": ys,
+                    "bar_count": len(bars),
+                },
+                seed=body.seed,
+            )
+            surface = build_surface(
+                points,
+                provenance,
+                x_name=x_param.name,
+                y_name=y_param.name,
+                metric=body.metric,
+            )
+            payload = surface.model_dump(mode="json")
+            payload["artifact_id"] = provenance.artifact_id
+            payload["content_hash"] = surface.content_hash
+            payload["is_evidence"] = False
+            payload["evidence_note"] = (
+                "Every cell is an in-sample backtest on the development partition. "
+                "A sweep is exploration: it produces no verdict, consumes no "
+                "holdout, and can never promote a strategy."
+            )
+            payload["points"] = points
+            payload["trials"] = total
+            return payload
+
+        log.record(
+            "SWEEP",
+            f"{strategy_id} surface over {x_param.name} x {y_param.name}"
+            f" — {total} configurations",
+            "info",
+            strategy_id,
+        )
+        job = REGISTRY.submit(
+            "sweep_surface",
+            f"{x_param.name} x {y_param.name} — {total} backtests",
+            total,
+            work,
+        )
+        return ApiEnvelope(
+            data=job.as_dict(),
+            meta={
+                "tier": "SWEEP",
+                "promotable": False,
+                "trials_counted": total,
+                "is_evidence": False,
             },
         )
 

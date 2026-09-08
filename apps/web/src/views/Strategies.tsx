@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, ArrowLeft, Check, FileCode2, Gavel, Play, Plus, ShieldCheck, Trash2, Waves,
+  AlertTriangle, ArrowLeft, Box, Check, FileCode2, Gavel, Play, Plus, ShieldCheck, Trash2,
+  Waves,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { deleteJson, getJson, postJson, putJson } from '../api'
 import { computeStats, byPeriod, equityFrom, filterSide, type Side, type Stats } from '../analytics'
 import { CurveChart, SweepChart } from '../charts'
+import { AnalysisChart, type AnalysisResult } from '../components/AnalysisChart'
 import { JobBar } from '../components/JobBar'
 import { Empty, PanelHead, Rolling, Stat, TierPill, VerdictPill } from '../components/ui'
 import { useJob } from '../hooks/useJob'
@@ -42,6 +44,10 @@ export function StrategiesView() {
   const [verdict, setVerdict] = useState<Verdict | null>(null)
   const [evidence, setEvidence] = useState<ValidationEvidence | null>(null)
   const [sweep, setSweep] = useState<SweepResult | null>(null)
+  // The two-parameter landscape. Kept separate from the one-parameter sweep
+  // because it is a different claim: a line says how one knob behaves, a
+  // surface says whether the best point is standing on anything.
+  const [surface, setSurface] = useState<AnalysisResult | null>(null)
 
   const job = useJob()
 
@@ -86,7 +92,10 @@ export function StrategiesView() {
   }
   const fail = (e: Error) => setBanner({ kind: 'err', text: e.message })
 
-  const reset = () => { setResult(null); setResultMeta(null); setVerdict(null); setEvidence(null); setSweep(null); job.clear() }
+  const reset = () => {
+    setResult(null); setResultMeta(null); setVerdict(null); setEvidence(null)
+    setSweep(null); setSurface(null); job.clear()
+  }
 
   const create = useMutation({
     mutationFn: (template: string) => postJson<{ strategy_id: string }>('/strategies', { template }),
@@ -135,6 +144,26 @@ export function StrategiesView() {
     onError: fail,
   })
 
+  const surfaceJob = useJob()
+  const runSurface = useMutation({
+    mutationFn: (names: [string, string]) =>
+      postJson<Job>(`/strategies/${selected}/sweep-surface`, {
+        x_parameter: names[0],
+        y_parameter: names[1],
+        x_steps: 6,
+        y_steps: 6,
+        dataset,
+      }),
+    onSuccess: (started) => { setSurface(null); setPane('summary'); surfaceJob.start(started) },
+  })
+
+  useEffect(() => {
+    if (surfaceJob.job?.status === 'DONE' && surfaceJob.job.result) {
+      setSurface(surfaceJob.job.result as AnalysisResult)
+      refresh()
+    }
+  }, [surfaceJob.job?.status, surfaceJob.job?.result])
+
   const runSweep = useMutation({
     mutationFn: (parameter: string) => postJson<SweepResult>(`/strategies/${selected}/sweep`, { parameter, dataset }),
     onSuccess: (data) => { setSweep(data); setPane('summary'); refresh() },
@@ -153,7 +182,12 @@ export function StrategiesView() {
     onError: fail,
   })
 
-  const busy = job.active || validate.isPending || judge.isPending || runSweep.isPending
+  const busy =
+    job.active ||
+    validate.isPending ||
+    judge.isPending ||
+    runSweep.isPending ||
+    surfaceJob.active
   const spec = detail.data?.spec
 
   return (
@@ -221,6 +255,15 @@ export function StrategiesView() {
                     onClick={() => runSweep.mutate(spec.parameters[0].name)}>
                     <Waves />{runSweep.isPending ? 'Sweeping…' : 'Sweep'}
                   </button>
+                  <button className="btn af-press" disabled={busy || spec.parameters.length < 2}
+                    title={spec.parameters.length < 2
+                      ? 'A surface needs two parameters; this strategy declares fewer.'
+                      : 'Every cell is a real in-sample backtest. 36 of them.'}
+                    onClick={() => runSurface.mutate([
+                      spec.parameters[0].name, spec.parameters[1].name,
+                    ])}>
+                    <Box />{surfaceJob.active ? 'Mapping…' : 'Surface'}
+                  </button>
                   <button className="btn danger af-press" aria-label="Delete strategy" onClick={() => remove.mutate(spec.strategy_id)}>
                     <Trash2 />
                   </button>
@@ -237,6 +280,41 @@ export function StrategiesView() {
                 disabled={busy}
               />
 
+              {/* Outside the panes on purpose. A parameter landscape is its own
+                  artifact: it is produced by 36 backtests of its own and says
+                  nothing about whichever run happens to be loaded, so hiding it
+                  behind "no backtest in this session" made it unreachable. */}
+              {surfaceJob.job && (
+                <JobBar job={surfaceJob.job} onCancel={surfaceJob.cancel} onDismiss={surfaceJob.clear} />
+              )}
+
+              {surface && (
+                <div className="panel af-panel-in">
+                  <PanelHead
+                    title={surface.title}
+                    meta={`${surface.cells.length} configurations · exploratory · cannot promote`}
+                  />
+                  <div className="panel-body stack">
+                    {/* The same renderer the research lab uses. A parameter
+                        landscape is the most attractive picture this application
+                        can draw and the most dangerous — a lone peak is what
+                        overfitting looks like from above — so the findings sit
+                        under it rather than beside it. */}
+                    <AnalysisChart result={surface} onPick={() => undefined} height={420} />
+                    {surface.findings.length > 0 && (
+                      <ul className="lab-findings">
+                        {surface.findings.map((finding) => (
+                          <li key={finding}><span>{finding}</span></li>
+                        ))}
+                      </ul>
+                    )}
+                    {surface.warnings.filter(Boolean).map((warning) => (
+                      <p key={warning} className="warning">{warning}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <nav className="panes">
                 {PANES.map((p) => (
                   <button key={p.key} className={pane === p.key ? 'active af-press' : 'af-press'} onClick={() => setPane(p.key)}>
@@ -247,7 +325,14 @@ export function StrategiesView() {
               </nav>
 
               <div className="pane-body">
-                {pane === 'summary' && <SummaryPane result={result} meta={resultMeta} sweep={sweep} history={detail.data?.backtests ?? []} />}
+                {pane === 'summary' && (
+                  <SummaryPane
+                    result={result}
+                    meta={resultMeta}
+                    sweep={sweep}
+                    history={detail.data?.backtests ?? []}
+                  />
+                )}
                 {pane === 'trades' && <TradesPane result={result} />}
                 {pane === 'periods' && <PeriodsPane result={result} />}
                 {pane === 'gates' && <GatesPane verdict={verdict} onJudge={() => judge.mutate()} busy={busy} />}
@@ -420,6 +505,7 @@ function SummaryPane({ result, meta, sweep, history }: {
           <div className="panel-body"><SweepChart points={sweep.points} label={sweep.parameter.name} /></div>
         </div>
       )}
+
     </div>
   )
 }
