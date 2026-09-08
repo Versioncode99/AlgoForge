@@ -41,8 +41,12 @@ from forge.workstation import (
     Panel,
     PanelKind,
     Workspace,
+    WorkspaceProfile,
     WorkspaceStore,
     catalogue,
+    describe,
+    layout_for,
+    markets_for,
     new_panel_id,
     template,
 )
@@ -411,6 +415,7 @@ class Actions:
             self.read_research,
         )
         self._register_workspace()
+        self._register_builder()
 
     # ── implementations ──────────────────────────────────────────────────────
     def search_papers(self, query: str) -> dict[str, Any]:
@@ -1222,6 +1227,104 @@ class Actions:
         ids = tuple(self._panel_id(workspace, item) for item in panel_ids)
         name = _str(group, "group", limit=40, lower=True) if group else None
         return self._save_workspace(workspace.linked(name, ids))
+
+
+    def _register_builder(self) -> None:
+        self._add(
+            "build_workspace",
+            "Build a workspace from a stated purpose: which markets, how they are "
+            "traded, which sessions, what research is wanted. Returns the layout and "
+            "an explanation of why each panel is there. The result is an ordinary "
+            "workspace - every panel can be removed and any other added, and the "
+            "profile is recorded as what was asked for rather than consulted later "
+            "to decide what is allowed.",
+            {
+                "name": {"type": "string", "description": "What to call the workspace."},
+                "purpose": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "e.g. prop_trading, quant_research, strategy_development.",
+                },
+                "markets": {
+                    "type": "array",
+                    "optional": True,
+                    "description": "Instrument roots, e.g. ['NQ', 'ES']. Charts are only "
+                    "created for roots this build holds archives for.",
+                },
+                "style": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "scalp, intraday, swing or position. Sets the timeframe.",
+                },
+                "sessions": {"type": "array", "optional": True},
+                "research": {
+                    "type": "array",
+                    "optional": True,
+                    "description": "Mechanisms of interest, e.g. ['breakout', 'momentum'].",
+                },
+                "risk": {"type": "string", "optional": True, "description": "e.g. prop_firm."},
+                "datasets": {"type": "array", "optional": True},
+                "preferred_export": {"type": "string", "optional": True},
+                "activate": {"type": "boolean", "optional": True},
+            },
+            self.build_workspace,
+            mutating=True,
+        )
+
+    def build_workspace(
+        self,
+        name: str,
+        purpose: str | None = None,
+        markets: list[str] | None = None,
+        style: str | None = None,
+        sessions: list[str] | None = None,
+        research: list[str] | None = None,
+        risk: str | None = None,
+        datasets: list[str] | None = None,
+        preferred_export: str | None = None,
+        activate: bool = True,
+    ) -> dict[str, Any]:
+        """Construct a workspace from a profile.
+
+        The language understanding happens before this call; the construction is
+        deterministic and happens here. That split is what keeps the product
+        usable with no model configured, and what makes the result reproducible:
+        the same profile always builds the same workspace, so "build me another
+        of these for ES" is a sentence with a checkable answer.
+        """
+        profile = WorkspaceProfile(
+            purpose=_str(purpose, "purpose", limit=60) if purpose else "",
+            markets=tuple(_str(m, "markets", limit=24).upper() for m in (markets or [])),
+            style=_str(style, "style", limit=40, lower=True) if style else "",
+            sessions=tuple(_str(s, "sessions", limit=40) for s in (sessions or [])),
+            research=tuple(_str(r, "research", limit=60, lower=True) for r in (research or [])),
+            risk=_str(risk, "risk", limit=40, lower=True) if risk else "",
+            datasets=tuple(_str(d, "datasets", limit=60, lower=True) for d in (datasets or [])),
+            preferred_export=(
+                _str(preferred_export, "preferred_export", limit=40) if preferred_export else ""
+            ),
+        )
+        panels = layout_for(profile)
+        workspace = self.workspaces.create(
+            _str(name, "name", limit=120), panels=panels, profile=profile
+        )
+        if activate:
+            self.workspaces.set_active(workspace.workspace_id)
+
+        unknown = tuple(
+            market
+            for market in profile.markets
+            if market not in markets_for(profile) and market
+        )
+        return {
+            **self._view(workspace),
+            "profile": profile.model_dump(mode="json"),
+            "explanation": describe(profile, panels),
+            # Named rather than dropped in silence: a chart for an instrument
+            # with no archive would have nothing to draw, and the operator
+            # should know which of their markets did not get one.
+            "markets_without_archives": list(unknown),
+        }
 
 
 def _bounded(value: Any, fallback: int, low: int, high: int, field: str) -> int:

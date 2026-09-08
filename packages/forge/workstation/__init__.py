@@ -5,6 +5,14 @@ owns what the operator sees. Deleting everything here costs a screen
 arrangement and nothing else.
 """
 
+from forge.workstation.builder import (
+    KNOWN_ROOTS,
+    STYLE_TIMEFRAMES,
+    describe,
+    layout_for,
+    markets_for,
+    timeframe_for,
+)
 from forge.workstation.models import (
     EXECUTION_PANELS,
     GRID_COLUMNS,
@@ -23,9 +31,11 @@ from forge.workstation.templates import TEMPLATES, WorkspaceTemplate, catalogue,
 __all__ = [
     "EXECUTION_PANELS",
     "GRID_COLUMNS",
+    "KNOWN_ROOTS",
     "MAX_PANELS",
     "MAX_ROWS",
     "SCHEMA_VERSION",
+    "STYLE_TIMEFRAMES",
     "TEMPLATES",
     "Panel",
     "PanelKind",
@@ -34,7 +44,11 @@ __all__ = [
     "WorkspaceStore",
     "WorkspaceTemplate",
     "catalogue",
+    "describe",
+    "layout_for",
+    "markets_for",
     "new_panel_id",
     "new_workspace_id",
     "template",
+    "timeframe_for",
 ]

@@ -139,6 +139,22 @@ class LinkPanelsRequest(BaseModel):
     group: str | None = None
 
 
+class BuildWorkspaceRequest(BaseModel):
+    """What the operator is here to do. Every field is optional except the name:
+    a half-filled profile still builds something, and the parts that were not
+    stated simply do not add panels."""
+
+    name: str = Field(min_length=1, max_length=120)
+    purpose: str | None = None
+    markets: list[str] | None = None
+    style: str | None = None
+    sessions: list[str] | None = None
+    research: list[str] | None = None
+    risk: str | None = None
+    datasets: list[str] | None = None
+    preferred_export: str | None = None
+
+
 class PropMatrixRequest(BaseModel):
     """Run every backtested strategy against every rule set at once."""
 
@@ -952,6 +968,26 @@ def build_control_router(
             data=None if active is None else actions.call("describe_workspace"),
             meta={"count": workspaces.count()},
         )
+
+
+    @router.post("/workspaces/build", response_model=ApiEnvelope[dict[str, Any]])
+    def build_workspace(body: BuildWorkspaceRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Build a workspace from a stated purpose.
+
+        The same action the agent calls. Understanding a sentence is the model's
+        job and happens before this; turning the resulting profile into panels is
+        deterministic and happens here, which is why the feature still works with
+        no model configured and why the operator can reproduce what it built.
+        """
+        arguments = {"name": body.name}
+        for field in (
+            "purpose", "markets", "style", "sessions",
+            "research", "risk", "datasets", "preferred_export",
+        ):
+            value = getattr(body, field)
+            if value:
+                arguments[field] = value
+        return ApiEnvelope(data=_action("build_workspace", arguments))
 
     @router.get("/workspaces/{workspace_id}", response_model=ApiEnvelope[dict[str, Any]])
     def get_workspace(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
