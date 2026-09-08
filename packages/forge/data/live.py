@@ -50,13 +50,27 @@ BINANCE_FUTURES = "https://fapi.binance.com/fapi/v1/klines"
 BINANCE_MAX_ROWS = 1000
 
 # Databento continuous-contract symbols. `.c.0` is the front month rolled on volume.
+# Continuous-contract symbols. The suffix picks *which* expiry the series
+# follows, and the right answer is not the same for every product.
+#
+# `.c.0` rolls on the calendar — the nearest expiry. For the index futures that
+# is also the liquid one, because they trade a quarterly cycle and volume sits
+# in the front month.
+#
+# Gold does not work that way. GC lists monthly but volume concentrates in
+# Feb/Apr/Jun/Aug/Dec, so the nearest expiry is frequently a month almost
+# nobody trades. Measured: `GC.c.0` returns 45 bars per session against 1,388
+# for `GC.v.0`, which follows volume. The calendar series is not wrong data —
+# it is a real, nearly untraded contract — but it is the wrong contract to
+# research, and it is sparse in a way that looks like a data outage rather than
+# a symbology mistake.
 FUTURES_SYMBOLS = {
     "MNQ": "MNQ.c.0",
     "NQ": "NQ.c.0",
     "MES": "MES.c.0",
     "ES": "ES.c.0",
-    "MGC": "MGC.c.0",
-    "GC": "GC.c.0",
+    "MGC": "MGC.v.0",
+    "GC": "GC.v.0",
 }
 
 

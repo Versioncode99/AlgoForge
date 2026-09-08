@@ -73,6 +73,18 @@ DATASETS: dict[str, Dataset] = {
     "gc_1m_5y": Dataset(
         "gc_1m_5y", "GC gold · 1m · 5 years", "GC", "1m", 60, BATCH_PROVIDER, "TRUTH", "imported"
     ),
+    "es_1m_10y": Dataset(
+        "es_1m_10y", "ES · 1m · 10 years", "ES", "1m", 128, BATCH_PROVIDER, "TRUTH", "imported"
+    ),
+    # The micros, over their whole life. They began trading in May 2019, so
+    # there is no more history to have — the span is the contract's, not a
+    # window someone chose.
+    "mnq_1m_7y": Dataset(
+        "mnq_1m_7y", "MNQ · 1m · full history", "MNQ", "1m", 88, BATCH_PROVIDER, "TRUTH", "imported"
+    ),
+    "mes_1m_7y": Dataset(
+        "mes_1m_7y", "MES · 1m · full history", "MES", "1m", 88, BATCH_PROVIDER, "TRUTH", "imported"
+    ),
     # Streaming windows, charged per request.
     "mnq_1m_3mo": Dataset(
         "mnq_1m_3mo", "MNQ · 1m · 3 months", "MNQ", "1m", 3, "databento", "TRUTH", "~$0.33"
