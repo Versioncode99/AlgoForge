@@ -27,8 +27,8 @@
 :root {
   /* ── geometry ─────────────────────────────────────────────────────────── */
   --r-sm: 3px;
-  --r: 5px;
-  --r-lg: 8px;
+  --r: 9px;
+  --r-lg: 14px;
   --r-round: 999px;
 
   /* Spacing — everything is a multiple of 4. Density scales the ones that
@@ -37,7 +37,7 @@
   --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
 
   --rail-w: 232px;
-  --topbar-h: 52px;
+  --topbar-h: 68px;
   --logbar-h: 132px;
   /* Row height and panel padding are what "density" actually means. */
   --row-h: 26px;

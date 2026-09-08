@@ -1,5 +1,11 @@
-/* The workstation: warm graphite, mint light, readable data and restrained depth. */
-:root { --bg-0:var(--bg-0); --bg-1:var(--bg-1); --bg-2:var(--bg-2); --bg-3:var(--bg-3); --fg-0:color-mix(in srgb, var(--warn) 45%, var(--fg-0)); --fg-1:color-mix(in srgb, var(--warn) 45%, var(--fg-0)); --fg-2:var(--fg-3); --line:var(--bg-raised); --brand:color-mix(in srgb, var(--pass) 70%, var(--fg-1)); --brand-wash:color-mix(in srgb, var(--pass) 7%, transparent); --r:9px; --r-lg:14px; --topbar-h:68px; }
+/* The workstation's layout overrides. Colours belong to tokens.css.
+ *
+ * This file used to open with a second `:root` block redefining the whole
+ * palette — background, text, line, brand — loaded after the token file and
+ * therefore winning. That is a second design system pretending to be a
+ * stylesheet, and it is why the token file could be edited with no visible
+ * effect. The three geometry values it also set were the ones actually in
+ * force, so they have moved into tokens.css as the real defaults. */
 .main { padding:28px 36px 36px; background:radial-gradient(ellipse at 90% 0,color-mix(in srgb, var(--pass) 4%, transparent),transparent 55%); }
 .topbar { gap:28px; padding:0 28px; background:color-mix(in srgb, var(--bg-0) 96%, transparent); }
 .brand-name { font-size:13px; letter-spacing:.13em; }

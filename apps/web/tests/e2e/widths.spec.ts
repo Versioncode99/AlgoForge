@@ -99,6 +99,15 @@ test('every theme applies a distinct palette', async ({ page }) => {
       }
     })
 
+  // The dev server injects stylesheets through the module graph, so they are not
+  // present at `load`. Waiting for the token to resolve is the condition that
+  // actually matters and is more honest than a sleep.
+  await page.waitForFunction(
+    () => getComputedStyle(document.documentElement).getPropertyValue('--bg-0').trim() !== '',
+    undefined,
+    { timeout: 15_000 },
+  )
+
   const seen: Record<string, Awaited<ReturnType<typeof read>>> = {}
   for (const theme of ['graphite', 'silver', 'contrast']) {
     await page.evaluate((value) => {

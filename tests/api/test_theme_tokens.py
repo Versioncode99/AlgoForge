@@ -241,3 +241,51 @@ def test_no_chart_component_is_given_glass() -> None:
             if "af-glass" not in line:
                 continue
             assert "chart" not in line.lower(), f"{path.name} puts glass on a chart: {line.strip()}"
+
+
+# ── one palette, in one file ─────────────────────────────────────────────────
+
+
+#: Layout values a stylesheet may legitimately re-declare inside a media query —
+#: a topbar that wraps at 640px genuinely is a different height. Colour is never
+#: on this list.
+LAYOUT_OVERRIDABLE = {"--topbar-h", "--logbar-h", "--rail-w", "--row-h", "--pad-panel"}
+
+
+def declared_tokens(path: Path) -> set[str]:
+    body = strip_comments(path.read_text("utf-8"))
+    return {name for name, _ in re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", body)}
+
+
+@pytest.mark.parametrize("path", STYLESHEETS, ids=lambda p: p.name)
+def test_only_the_token_file_defines_the_palette(path: Path) -> None:
+    """A second `:root` palette is a second design system wearing a stylesheet.
+
+    `command.css` opened with one: background, text, line and brand redefined,
+    loaded after the token file and therefore winning. The token file could be
+    edited with no visible effect, and the detokeniser rewrote that block's
+    literals into `--bg-0: var(--bg-0)` — circular, invalid, and enough to
+    unset the palette for the whole application.
+
+    Layout values may be re-declared, because a topbar that wraps at 640px is
+    genuinely a different height. Colour may not.
+    """
+    offenders = sorted(
+        name
+        for name in declared_tokens(path)
+        if any(name.startswith(prefix) for prefix in COLOUR_PREFIXES)
+        and name not in LAYOUT_OVERRIDABLE
+    )
+    assert not offenders, (
+        f"{path.name} defines palette tokens {offenders}. "
+        "The palette lives in tokens.css; a stylesheet that redefines one is a "
+        "second design system."
+    )
+
+
+def test_no_token_is_defined_in_terms_of_itself() -> None:
+    """`--bg-0: var(--bg-0)` is silently invalid and unsets the whole palette."""
+    for path in STYLES.glob("*.css"):
+        body = strip_comments(path.read_text("utf-8"))
+        for name, value in re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", body):
+            assert f"var({name})" not in value, f"{path.name}: {name} references itself"
