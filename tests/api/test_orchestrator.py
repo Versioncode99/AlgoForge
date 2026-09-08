@@ -173,7 +173,11 @@ def test_a_mission_writes_a_note_into_the_vault(client: TestClient, tmp_path: Pa
         },
     ).json()["data"]
     wait(client, mission["id"])
-    notes = list((tmp_path / "10 AlgoForge" / "Missions").glob("*.md"))
+    # Asked of the workspace rather than of a hard-coded folder name. The note
+    # lands wherever the resolved layout puts notes — which is the application's
+    # own research tree now, and the vault's `10 AlgoForge` only on an
+    # installation that is still on the legacy layout.
+    notes = list(client.app.state.workspace.mission_notes.glob("*.md"))
     assert notes, "the mission should be mirrored as a note"
     assert "Leave a trail in the vault" in notes[0].read_text(encoding="utf-8")
 

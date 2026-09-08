@@ -16,14 +16,31 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from forge.contracts.models import ApiEnvelope
-from forge.vault import VaultMirror, Workspace, inspect, migrate, resolve, write_pointer
+from forge.vault import (
+    LAYOUT_VAULT,
+    VaultMirror,
+    Workspace,
+    default_root,
+    inspect,
+    inventory,
+    migrate,
+    migrate_layout,
+    resolve,
+    write_pointer,
+)
 from pydantic import BaseModel, Field
 
-from forge_api.activity import ActivityLog
+from forge_api.activity import ActivityLog, Level
 
 
 class LocationRequest(BaseModel):
     path: str = Field(min_length=2, max_length=400)
+
+
+class MigrateLayoutRequest(BaseModel):
+    """Where to migrate to. Empty means the OS application-data directory."""
+
+    path: str = Field(default="", max_length=400)
 
 
 class SwitchRequest(BaseModel):
@@ -97,6 +114,62 @@ def build_storage_router(
     def inspect_location(body: LocationRequest) -> ApiEnvelope[dict[str, Any]]:
         """Report on a candidate folder without adopting it."""
         return ApiEnvelope(data=inspect(repo, body.path))
+
+    @router.get("/layout", response_model=ApiEnvelope[dict[str, Any]])
+    def read_layout() -> ApiEnvelope[dict[str, Any]]:
+        """Which storage layout this installation is on, and what it holds."""
+        return ApiEnvelope(
+            data={
+                "layout": workspace.layout,
+                "root": str(workspace.root),
+                "store": str(workspace.store),
+                "application_default": str(default_root()),
+                "obsidian_required": False,
+                "obsidian_export": str(workspace.obsidian_export),
+                "inventory": inventory(workspace),
+                "migration_available": workspace.layout == LAYOUT_VAULT,
+            },
+            meta={
+                "note": (
+                    "AlgoForge owns its data. The vault layout keeps working, but it "
+                    "stores databases and gigabytes of backtest JSON inside a "
+                    "note-taking application's folder. Migrating copies everything to "
+                    "an application-owned location and leaves the original in place."
+                )
+            },
+        )
+
+    @router.post("/migrate-layout", response_model=ApiEnvelope[dict[str, Any]])
+    def migrate_to_app_layout(body: MigrateLayoutRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Move this installation off the Obsidian layout. Copies; never moves.
+
+        The pointer is rewritten only if every counted item arrived. A partial
+        copy that repointed the application at itself would be worse than never
+        having run.
+        """
+        target = Path(body.path).expanduser() if body.path else default_root()
+        if not target.is_absolute():
+            raise HTTPException(422, {"code": "relative_path", "detail": str(target)})
+        report = migrate_layout(repo, workspace, target)
+        level: Level = "pass" if report["migrated"] else "fail"
+        log.record(
+            "STORAGE",
+            f"layout migration to {target} — {'verified' if report['migrated'] else 'refused'}",
+            level,
+        )
+        if not report["migrated"]:
+            raise HTTPException(409, {"code": "migration_not_verified", **report})
+        return ApiEnvelope(
+            data=report,
+            meta={
+                "restart_required_after_change": True,
+                "original_retained": True,
+                "note": (
+                    "The original workspace is untouched and still complete. Delete it "
+                    "only once you are satisfied with the migrated installation."
+                ),
+            },
+        )
 
     @router.post("/switch", response_model=ApiEnvelope[dict[str, Any]])
     def switch_location(body: SwitchRequest) -> ApiEnvelope[dict[str, Any]]:

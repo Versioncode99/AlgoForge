@@ -78,13 +78,23 @@ class DataRequest:
 
 
 def load_keys(env_path: Path | None = None) -> None:
-    """Load credentials into the process. Values are never logged or returned."""
+    """Load credentials into the process. Values are never logged or returned.
+
+    Sources, in order: an explicit path, ``ALGOFORGE_KEYS_FILE``, and the
+    repository's own ``.env``. A previous version also read a hard-coded
+    absolute path on one developer's machine, which is not a credential
+    architecture: it is unportable, invisible to anyone else, and it puts a
+    personal filesystem layout in product source. Point
+    ``ALGOFORGE_KEYS_FILE`` at the file instead.
+
+    An environment variable that is already set always wins, so nothing here
+    can overwrite a credential supplied by the process's launcher.
+    """
+    configured = os.getenv("ALGOFORGE_KEYS_FILE")
     candidates = [
         env_path,
+        Path(configured).expanduser() if configured else None,
         Path(__file__).resolve().parents[3] / ".env",
-        Path(
-            r"F:/Obsidian Vaults/Keslec-Trading/08 Source Material/Trading/Tooling/scripts/keys.env"
-        ),
     ]
     for candidate in candidates:
         if candidate and candidate.exists():
