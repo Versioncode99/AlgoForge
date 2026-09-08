@@ -10,7 +10,7 @@
  * because "nothing was disproven" and "this failed" are different results. */
 import { useQuery } from '@tanstack/react-query'
 import { FlaskConical, GitBranch, Layers } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { getJson } from '../api'
 import { PanelHead, Stat } from '../components/ui'
 import type { ExperimentRecord } from '../types'
@@ -35,6 +35,82 @@ const settings = (row: Experiment) =>
   Object.entries(row.parameters ?? {})
     .map(([name, value]) => `${name}=${value}`)
     .join(' · ')
+
+/* The line of enquiry below one experiment, drawn as the shape it actually has.
+ *
+ * This used to be one flat ordered list: ancestors, then the subject, then its
+ * children, all as sibling <li>s down a single rule. That reads as a sequence,
+ * and a sequence is a claim — it says the third child came after the second and
+ * that both descend from the first. Neither is true. A search that tried four
+ * lookbacks from one parent and then went deeper on the third of them is a
+ * branching structure, and flattening it hides exactly the thing a lineage view
+ * exists to show: where the search widened, and which branch it followed.
+ *
+ * The ancestors genuinely are a chain — one parent each, by construction — so
+ * they stay a list. Only the descendants are a tree. */
+
+export type Node = { row: Experiment; children: Node[] }
+
+/** Group descendants under their parents. Anything whose parent is missing from
+ *  the set is attached to the root rather than dropped: an orphan is a record
+ *  that exists, and hiding it would under-report the search. */
+export function buildTree(rootId: string, descendants: Experiment[]): Node[] {
+  const byParent = new Map<string, Experiment[]>()
+  const present = new Set(descendants.map((row) => row.id))
+  for (const row of descendants) {
+    const parent = row.parent_id && present.has(row.parent_id) ? row.parent_id : rootId
+    const bucket = byParent.get(parent)
+    if (bucket) bucket.push(row)
+    else byParent.set(parent, [row])
+  }
+  const seen = new Set<string>()
+  const build = (id: string): Node[] =>
+    (byParent.get(id) ?? [])
+      .filter((row) => !seen.has(row.id) && seen.add(row.id))
+      .map((row) => ({ row, children: build(row.id) }))
+  const tree = build(rootId)
+
+  // Anything the walk never reached — a parent cycle is the way this happens —
+  // is attached at the top. It is in the wrong place, but it is visible, and a
+  // lineage view that quietly loses records is worse than one that misplaces
+  // them: the reader has no way to know something is missing.
+  const stranded = descendants.filter((row) => !seen.has(row.id))
+  for (const row of stranded) {
+    seen.add(row.id)
+    tree.push({ row, children: [] })
+  }
+  return tree
+}
+
+function TreeNode({
+  node,
+  selected,
+  onSelect,
+}: {
+  node: Node
+  selected: string
+  onSelect: (id: string) => void
+}) {
+  return (
+    <li className={node.row.id === selected ? 'is-selected' : undefined}>
+      <button type="button" className="lineage-node" onClick={() => onSelect(node.row.id)}>
+        <span className="mono">{settings(node.row) || node.row.template}</span>
+        <small>
+          {node.row.policy ?? 'derived'} · {node.row.status ?? 'reserved'}
+          {node.children.length > 0 &&
+            ` · ${node.children.length} branch${node.children.length === 1 ? '' : 'es'}`}
+        </small>
+      </button>
+      {node.children.length > 0 && (
+        <ul className="lineage-branch">
+          {node.children.map((child) => (
+            <TreeNode key={child.row.id} node={child} selected={selected} onSelect={onSelect} />
+          ))}
+        </ul>
+      )}
+    </li>
+  )
+}
 
 function Row({
   row,
@@ -86,6 +162,10 @@ export function ExperimentsView({ mode = 'experiments' }: { mode?: 'experiments'
 
   const rows = experiments.data ?? []
   const line = lineage.data
+  const tree = useMemo(
+    () => (line?.experiment ? buildTree(line.experiment.id, line.descendants) : []),
+    [line],
+  )
   const subject = line?.experiment
 
   const byStatus = rows.reduce<Record<string, number>>((counts, row) => {
@@ -186,21 +266,41 @@ export function ExperimentsView({ mode = 'experiments' }: { mode?: 'experiments'
                 <ol className="evidence-lineage">
                   {[...(line?.ancestors ?? [])].reverse().map(row => (
                     <li key={row.id}>
-                      <span className="mono">{settings(row) || row.template}</span>
-                      <small>{row.policy ?? 'root'} · {row.status ?? 'reserved'}</small>
+                      <button type="button" className="lineage-node"
+                        onClick={() => setSelected(row.id)}>
+                        <span className="mono">{settings(row) || row.template}</span>
+                        <small>{row.policy ?? 'root'} · {row.status ?? 'reserved'}</small>
+                      </button>
                     </li>
                   ))}
                   <li className="is-current">
                     <span className="mono">{settings(subject) || subject.template}</span>
                     <small>this experiment</small>
                   </li>
-                  {(line?.children ?? []).map(row => (
-                    <li key={row.id}>
-                      <span className="mono">{settings(row) || row.template}</span>
-                      <small>derived · {row.status ?? 'reserved'}</small>
-                    </li>
-                  ))}
                 </ol>
+
+                {tree.length > 0 ? (
+                  <div className="lineage-tree-wrap">
+                    <h4 className="lineage-heading">
+                      What followed
+                      <span>
+                        {(line?.descendants.length ?? 0)} derived · {tree.length} immediate
+                        {tree.length === 1 ? ' branch' : ' branches'}
+                      </span>
+                    </h4>
+                    <ul className="lineage-tree">
+                      {tree.map(node => (
+                        <TreeNode key={node.row.id} node={node} selected={selected}
+                          onSelect={setSelected} />
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="experiment-note">
+                    A leaf: nothing was derived from this one. Either the search stopped here or
+                    it has not got to it yet.
+                  </p>
+                )}
 
                 {(line?.ancestors.length ?? 0) === 0 && (
                   <p className="experiment-note">

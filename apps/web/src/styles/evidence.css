@@ -200,3 +200,38 @@
   .evidence-finding-head { flex-wrap: wrap; }
   .evidence-finding-body { padding-left: var(--sp-3); }
 }
+
+/* ── lineage tree ────────────────────────────────────────────────────────────
+   Ancestors are a chain by construction — one parent each — so they stay a
+   list. Descendants branch, and drawing a branch as a line claims an ordering
+   between siblings that does not exist, so they get indentation and a rule per
+   level instead. */
+.lineage-node {
+  display: block; width: 100%; text-align: left;
+  background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer;
+}
+.lineage-node span { display: block; color: var(--fg-1); font-size: var(--fs-xs); }
+.lineage-node small { color: var(--fg-3); font-size: var(--fs-micro); }
+.lineage-node:hover span { color: var(--fg-0); }
+.lineage-node:focus-visible { outline: 1px solid var(--brand); outline-offset: 2px; }
+
+.lineage-tree-wrap { display: grid; gap: var(--sp-2); }
+.lineage-heading {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3);
+  margin: 0; font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3); font-weight: 600;
+}
+.lineage-heading span { text-transform: none; letter-spacing: 0; color: var(--fg-3); }
+
+.lineage-tree, .lineage-branch { list-style: none; margin: 0; padding: 0; display: grid; }
+.lineage-branch { margin-left: var(--sp-4); border-left: 1px solid var(--line); padding-left: var(--sp-3); }
+.lineage-tree > li, .lineage-branch > li {
+  position: relative; padding: var(--sp-2) 0 var(--sp-2) var(--sp-4);
+}
+.lineage-tree > li::before, .lineage-branch > li::before {
+  content: ""; position: absolute; left: 4px; top: 14px;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong);
+}
+.lineage-tree > li.is-selected::before, .lineage-branch > li.is-selected::before { background: var(--brand); }
+.lineage-tree > li.is-selected > .lineage-node span,
+.lineage-branch > li.is-selected > .lineage-node span { color: var(--brand); }
