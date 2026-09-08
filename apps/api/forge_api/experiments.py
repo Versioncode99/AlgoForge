@@ -111,6 +111,20 @@ _FROZEN_AT_RESERVATION = frozenset(
     }
 )
 
+# A claim whose process died. Reservation is a content-derived primary key, so
+# without this a candidate interrupted mid-run stayed claimed forever: the row
+# said "reserved", nothing was ever written against it, and every later attempt
+# to reserve those same parameters was declined as a duplicate. The
+# configuration silently left the search and no restart could bring it back.
+#
+# Held separately from the outcome statuses because it is not an outcome. The
+# experiment did not fail and did not succeed; it never ran.
+_ABANDONED = "abandoned"
+
+# Statuses that mean a worker holds this claim right now. On a fresh `start`
+# nothing does, so anything still wearing one belongs to a process that is gone.
+_IN_FLIGHT = ("reserved", "running")
+
 # Guards the ancestor walk against a cycle. Nothing should be able to create
 # one, but a corrupted parent_id must not hang a worker thread.
 _MAX_LINEAGE_DEPTH = 512
@@ -178,6 +192,10 @@ class Experiments:
             "status": "reserved",
         }
         with closing(self.connect()) as db, db:
+            # Claiming is now a read followed by a write, and eight workers do it
+            # at once, so the write lock is taken up front rather than left to
+            # the INSERT.
+            db.execute("BEGIN IMMEDIATE")
             # Every edge must point at a row that already exists. Together with
             # `parent_id` being frozen after reservation, that makes the lineage
             # acyclic by construction rather than by hoping: a new edge can only
@@ -188,6 +206,17 @@ class Experiments:
                 known = db.execute("SELECT 1 FROM attempts WHERE id=?", (parent_id,)).fetchone()
                 if known is None:
                     raise ValueError(f"parent experiment does not exist: {parent_id}")
+            claimed = db.execute("SELECT status FROM attempts WHERE id=?", (key,)).fetchone()
+            if claimed is not None:
+                if str(claimed[0] or "") != _ABANDONED:
+                    return None
+                # A claim left behind by a process that died. It is the same
+                # experiment -- same identity, same frozen provenance -- so the
+                # record is picked back up rather than written again.
+                db.execute(
+                    "UPDATE attempts SET status='reserved', finished_at=NULL WHERE id=?", (key,)
+                )
+                return key
             inserted = db.execute(
                 "INSERT OR IGNORE INTO attempts "
                 "(id, scope, template, payload, parent_id, policy, family, hypothesis, "
@@ -213,6 +242,27 @@ class Experiments:
                 ),
             ).rowcount
         return key if inserted else None
+
+    def reclaim_abandoned(self, scope: str) -> int:
+        """Release claims held by a process that is no longer running.
+
+        Safe only where nothing is in flight — the engine calls this from
+        `start`, which has already established that none of its workers are
+        alive. Calling it while workers are running would hand their in-progress
+        candidates to somebody else.
+
+        Returns how many claims were released, which is worth logging: a number
+        that is not zero means the last run did not shut down cleanly.
+        """
+        placeholders = ", ".join("?" for _ in _IN_FLIGHT)
+        with closing(self.connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            return int(
+                db.execute(
+                    f"UPDATE attempts SET status=? WHERE scope=? AND status IN ({placeholders})",
+                    (_ABANDONED, scope, *_IN_FLIGHT),
+                ).rowcount
+            )
 
     def finish(self, key: str, **fields: Any) -> None:
         """Merge an outcome into the record.

@@ -212,6 +212,18 @@ class AutonomousEngine:
             self._partitions = None
             self._data_version = "unloaded"
             self._active.clear()
+            # Nothing of ours is alive past the guard above, so any claim still
+            # marked in-flight was left by a process that died or a run that was
+            # stopped mid-candidate. Released here rather than on the way out,
+            # because a crash does not get a chance to tidy up.
+            abandoned = self.experiments.reclaim_abandoned(self._scope())
+            if abandoned:
+                self.log.record(
+                    "ENGINE",
+                    f"released {abandoned} claim(s) left by an interrupted run; "
+                    "those candidates can be searched again",
+                    "warn",
+                )
             self._threads = [
                 threading.Thread(
                     target=self._loop, args=(index,), name=f"algoforge-engine-{index}", daemon=True
