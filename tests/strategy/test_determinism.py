@@ -16,7 +16,7 @@ now makes:
 from __future__ import annotations
 
 from dataclasses import fields
-from typing import Any
+from typing import Any, ClassVar
 
 from forge.judge import Judge, JudgeInput
 from forge.strategy import StrategyLibrary, check_determinism, run_backtest, run_digest
@@ -38,6 +38,16 @@ class FakeTrade:
         self.net_pnl = net
         self.bars_held = 4
         self.exit_reason = "signal"
+        # Mirrors the real `Trade`. `test_the_digest_covers_every_measured_field`
+        # is what stops this stand-in from silently falling behind it again.
+        self.mfe = 12.0
+        self.mae = -3.0
+        self.mfe_index = index + 2
+        self.mae_index = index + 3
+        self.stop_price = 97.0
+        self.target_price = 104.0
+        self.trailing_stop_price = None
+        self.entry_context: dict[str, float] = {"atr14": 1.25}
 
 
 class FakeResult:
@@ -206,3 +216,64 @@ def test_neither_gate_defaults_to_true_any_more() -> None:
     assert defaults["engine_consistent"] is None
     assert defaults["mechanism_aligned"] is None
     assert defaults["implementation_tests_passed"] is None
+
+
+def test_the_digest_covers_every_measured_field_of_a_trade() -> None:
+    """A field added to `Trade` and forgotten here is a determinism hole.
+
+    `run_digest` names the fields it hashes, which is right — a blanket
+    `model_dump` would sweep in `trade_id` and the timestamps and make every
+    check fail for the wrong reason. The cost of naming them is that a new
+    measured field can be added and never checked, so a strategy whose stop
+    depends on wall clock would reproduce its P&L and place its stop somewhere
+    different every run, and G7 would call that consistent.
+
+    So the exclusions are stated, and everything else must be covered.
+    """
+    from forge.strategy.models import Trade
+
+    # Excluded by design: derived from the run rather than from the strategy.
+    excluded = {
+        "trade_id",  # a hash of indices already covered
+        "entry_time",  # derived from entry_index and the bars
+        "exit_time",  # derived from exit_index and the bars
+        "mfe_index",  # positional; the measured value is what must reproduce
+        "mae_index",
+    }
+    covered = _digest_fields()
+    missing = set(Trade.model_fields) - excluded - covered
+    assert not missing, (
+        f"run_digest does not hash {sorted(missing)}. Either hash it, or add it "
+        "to this test's `excluded` set with the reason it cannot differ."
+    )
+
+
+def _digest_fields() -> set[str]:
+    """Which `Trade` attributes `run_digest` actually reads.
+
+    Determined by handing it a trade that records every attribute access, which
+    is more honest than parsing the source and cannot drift from it.
+    """
+    from forge.strategy.determinism import run_digest
+
+    seen: set[str] = set()
+
+    class Recording:
+        def __getattr__(self, name: str) -> object:
+            seen.add(name)
+            return {} if name == "entry_context" else 1.0
+
+    class Result:
+        trades: ClassVar[list[Recording]] = [Recording()]
+        bar_count = 1
+        equity: ClassVar[list[float]] = []
+        parameters: ClassVar[dict[str, float]] = {}
+        net_pnl = 0.0
+        gross_pnl = 0.0
+        total_costs = 0.0
+        win_rate = 0.0
+        max_drawdown = 0.0
+        lookahead_clean = True
+
+    run_digest(Result())
+    return seen

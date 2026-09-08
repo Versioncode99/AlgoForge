@@ -81,6 +81,22 @@ class Window:
     def now(self) -> datetime:
         return self._t[self.index]
 
+    def time_at(self, offset: int = 0) -> datetime | None:
+        """The timestamp `offset` closed bars back, or None before the start.
+
+        `offset` is unsigned by contract: a negative one is the only way this
+        accessor could reach a bar the strategy has not been shown, so it is
+        refused rather than clamped. Reading a bar before the array starts is a
+        different thing — that is history the run does not have, and None says
+        so without inventing a time.
+        """
+        if offset < 0:
+            raise LookaheadError(
+                f"time_at({offset}) would read {abs(offset)} bar(s) into the future"
+            )
+        position = self.index - offset
+        return self._t[position] if position >= 0 else None
+
     # ── session awareness ────────────────────────────────────────────────────
     # Real intraday strategies are anchored to the session, not to bar counts:
     # an opening range, a killzone, a VWAP that resets at the open.
@@ -179,6 +195,27 @@ class StrategyModule(Protocol):
     def exit_signal(self, w: Window, p: dict[str, ParamValue], pos: Position) -> str | None: ...
 
 
+def _reported(module: object, name: str) -> dict[str, float]:
+    """Ask a module for optional per-trade detail, tolerating its absence.
+
+    Hand-written Python strategies implement two functions and nothing else, and
+    they must keep working exactly as they did. A compiled `StrategyDefinition`
+    additionally knows where its stop was and what its features read at the
+    decision bar, and that detail is worth recording when it exists. A module
+    that does not offer it gets an empty mapping, never a fabricated one.
+    """
+    hook = getattr(module, name, None)
+    if not callable(hook):
+        return {}
+    try:
+        value = hook()
+    except Exception:  # a reporting hook must never fail a run
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): float(v) for k, v in value.items() if isinstance(v, int | float)}
+
+
 # Reporting every bar would cost more than the work it measures. At 15k bars
 # per second this is roughly three updates a second, which is as often as a
 # progress bar can usefully move.
@@ -258,6 +295,24 @@ def run_backtest(
                 gross = (exit_price - position.entry_price) * position.direction * point_value
                 net = gross - round_trip_cost
                 running += net
+                # Excursion over the bars the position was actually open,
+                # inclusive of both the entry bar and the exit bar. In the same
+                # currency as net_pnl and gross of costs, so MFE and gross_pnl
+                # are directly comparable: "it reached +$612 and gave back all
+                # but $487" is one subtraction, not a unit conversion.
+                span = slice(position.entry_index, fill_index + 1)
+                if position.direction == 1:
+                    best_at = int(np.argmax(h[span]))
+                    worst_at = int(np.argmin(lo[span]))
+                    best = (float(h[span][best_at]) - position.entry_price) * point_value
+                    worst = (float(lo[span][worst_at]) - position.entry_price) * point_value
+                else:
+                    best_at = int(np.argmin(lo[span]))
+                    worst_at = int(np.argmax(h[span]))
+                    best = (position.entry_price - float(lo[span][best_at])) * point_value
+                    worst = (position.entry_price - float(h[span][worst_at])) * point_value
+                levels = _reported(module, "position_levels")
+                context = _reported(module, "entry_context")
                 trades.append(
                     Trade(
                         trade_id=stable_id("trade", {"e": position.entry_index, "x": fill_index}),
@@ -275,6 +330,17 @@ def run_backtest(
                         net_pnl=round(net, 6),
                         bars_held=fill_index - position.entry_index,
                         exit_reason=reason,  # type: ignore[arg-type]
+                        # MFE is bounded below at zero and MAE above at zero:
+                        # a position that never traded in your favour has an MFE
+                        # of zero, not a negative "best".
+                        mfe=round(max(0.0, best), 6),
+                        mae=round(min(0.0, worst), 6),
+                        mfe_index=position.entry_index + best_at,
+                        mae_index=position.entry_index + worst_at,
+                        stop_price=levels.get("stop"),
+                        target_price=levels.get("target"),
+                        trailing_stop_price=levels.get("trailing_stop"),
+                        entry_context=context,
                     )
                 )
                 position = None

@@ -91,6 +91,35 @@ class Trade(FrozenModel):
     bars_held: int
     exit_reason: Literal["signal", "stop", "max_bars", "end_of_data"]
 
+    # ── what the trade did while it was open ─────────────────────────────────
+    # Measured from the bars the trade actually spanned, in the same currency as
+    # `net_pnl`, so "it was up $612 before it gave it back" is a fact from the
+    # ledger rather than something re-derived later against different bars.
+    #
+    # Optional because artifacts written before these fields existed do not
+    # carry them, and a missing measurement must read as absent rather than as
+    # zero — an MFE of 0.0 and an unrecorded MFE are different claims.
+    mfe: float | None = None
+    mae: float | None = None
+    mfe_index: int | None = None
+    mae_index: int | None = None
+
+    # ── the levels the trade ran under ───────────────────────────────────────
+    # Frozen at the bar after the fill by the strategy that set them, not
+    # recomputed. A chart drawing a stop recomputed from today's ATR would be
+    # drawing a line that never existed.
+    stop_price: float | None = None
+    target_price: float | None = None
+    trailing_stop_price: float | None = None
+
+    #: Feature values at the decision bar, so "why did it enter?" can be
+    #: answered without the bars. Empty when the strategy did not report any.
+    entry_context: dict[str, float] = Field(default_factory=dict)
+
+    @property
+    def holding_seconds(self) -> float:
+        return (self.exit_time - self.entry_time).total_seconds()
+
 
 class BacktestResult(FrozenModel):
     calculation_version: str = "legacy-price-points"

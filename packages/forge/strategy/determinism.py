@@ -113,6 +113,17 @@ def run_digest(result: Any) -> str:
                     trade.net_pnl,
                     trade.bars_held,
                     trade.exit_reason,
+                    # Measured excursion and the levels the trade ran under are
+                    # part of what a re-run has to reproduce. Leaving them out
+                    # would let a strategy whose stop depends on wall clock or
+                    # unseeded state pass G7 while placing its stop somewhere
+                    # different every time.
+                    trade.mfe,
+                    trade.mae,
+                    trade.stop_price,
+                    trade.target_price,
+                    trade.trailing_stop_price,
+                    sorted(trade.entry_context.items()),
                 ]
                 for trade in result.trades
             ],
