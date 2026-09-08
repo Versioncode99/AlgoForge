@@ -4,18 +4,33 @@ on:
   push:
   pull_request:
 
+# A branch that is pushed twice in quick succession does not need the first run
+# finished. Only the newest commit on a ref is ever the one being asked about.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   python:
     runs-on: ${{ matrix.os }}
     strategy:
+      # Without this, the first OS to fail cancels the other one mid-run, and
+      # the log shows "cancelled" where the answer to "does this break on
+      # Windows too?" should be.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
+          # The dependency set is pinned by uv.lock, so it is safe to cache and
+          # the cache key can be that file. Previously every run resolved and
+          # downloaded the whole environment from scratch.
+          enable-cache: true
+          cache-dependency-glob: uv.lock
       - run: uv sync --dev
       - run: uv run python scripts/check_wave_prompts.py
       - run: uv run ruff check .
@@ -25,11 +40,20 @@ jobs:
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+          # Required. There is no lockfile at the repository root -- the root
+          # package.json is a script shim with no dependencies of its own -- and
+          # without this the cache step failed with "Dependencies lock file is
+          # not found", which took the whole job down before it installed
+          # anything. The build and the tests below had not run since.
+          cache-dependency-path: apps/web/package-lock.json
+      # For the same reason this cannot be a bare `npm ci`: the lockfile it
+      # needs is the one in apps/web.
+      - run: npm ci --prefix apps/web
+      - run: npm run typecheck:web
       - run: npm run build:web
       - run: npm run test:web
