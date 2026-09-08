@@ -160,6 +160,10 @@ class MarketService:
         # 16-year dataset as cheap to open as a 3-month one; materialising all
         # of them costs minutes and gigabytes for no benefit.
         self._frames: dict[str, pd.DataFrame] = {}
+        # Row counts read from parquet footers. Separate from `_frames` because
+        # the count is wanted far more often than the bars, and is thousands of
+        # times cheaper to get.
+        self._row_counts: dict[str, int] = {}
 
     @staticmethod
     def window(dataset: Dataset, today: date | None = None) -> tuple[str, str]:
@@ -202,7 +206,17 @@ class MarketService:
         return (bars[-limit:] if limit and limit < len(bars) else bars), dataset
 
     def available_rows(self, key: str) -> int:
-        """How many bars an imported dataset holds, without materialising them."""
+        """How many bars an imported dataset holds, without materialising them.
+
+        From the parquet footer, which already records the row count, rather
+        than by reading a column. Reading `event_time` out of five archives to
+        count them meant decoding 15.3 million timestamps on every
+        `GET /datasets` -- measured at 3.0 seconds, on a request that renders a
+        dropdown. The footer answers the same question in constant time.
+
+        Cached because these archives are immutable: an imported dataset is
+        bought, written once, and never appended to.
+        """
         dataset = DATASETS.get(key)
         if dataset is None or not dataset.is_imported:
             return 0
@@ -211,7 +225,11 @@ class MarketService:
             return 0
         if key in self._frames:
             return len(self._frames[key])
-        return int(_pd().read_parquet(path, columns=["event_time"]).shape[0])
+        if key not in self._row_counts:
+            import pyarrow.parquet as pq
+
+            self._row_counts[key] = int(pq.ParquetFile(path).metadata.num_rows)
+        return self._row_counts[key]
 
     def bars_per_year(self, key: str) -> float:
         """Bars per calendar year, measured from the archive rather than assumed.
