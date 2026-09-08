@@ -84,6 +84,25 @@ export function CommandPalette({
   const flat = results.flat
   const active = flat[Math.min(cursor, flat.length - 1)]
 
+  /* Keep the keyboard cursor on screen.
+   *
+   * Arrowing moves a highlight, not focus, so the browser does nothing to
+   * follow it. Six rows per group across six groups is thirty-six results in a
+   * 420px list: pressing Down past the tenth moved the selection somewhere the
+   * reader could not see, and Enter then opened a record that had never been
+   * on screen. `nearest` so a cursor already visible does not scroll. */
+  const list = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open || !active) return
+    const row = list.current?.querySelector(`[data-key="${CSS.escape(active.key)}"]`)
+    // jsdom has no layout, so it does not implement `scrollIntoView`. Keeping
+    // the cursor visible is a nicety; throwing out of an effect and taking the
+    // palette down with it is not.
+    if (row instanceof HTMLElement && typeof row.scrollIntoView === 'function') {
+      row.scrollIntoView({ block: 'nearest' })
+    }
+  }, [open, active])
+
   useEffect(() => {
     if (!open) return
     const keys = (event: KeyboardEvent) => {
@@ -118,13 +137,14 @@ export function CommandPalette({
           />
           <kbd>ESC</kbd>
         </label>
-        <div className="palette-results">
+        <div className="palette-results" ref={list}>
           {results.grouped.map(section => (
             <div className="palette-group" key={section.group}>
               <h3>{section.group}</h3>
               {section.items.map(item => (
                 <button
                   key={item.key}
+                  data-key={item.key}
                   data-active={item.key === active?.key ? 'yes' : undefined}
                   onMouseEnter={() => setCursor(flat.findIndex(row => row.key === item.key))}
                   onClick={() => { onRoute(item.route); onClose() }}
