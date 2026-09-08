@@ -311,6 +311,10 @@ export function ResearchLabWorkbench() {
                           className="lab-remember"
                           disabled={kept || remember.isPending}
                           onClick={() => remember.mutate(finding)}
+                          /* Five buttons all reading "Remember" tell a screen
+                             reader nothing about which sentence each keeps, so
+                             the label carries the finding. */
+                          aria-label={`${kept ? 'Already remembered' : 'Remember'}: ${finding}`}
                           title={kept
                             ? 'Already in research memory'
                             : 'Keep this in research memory. Knowledge, not evidence.'}
@@ -373,6 +377,7 @@ export function ResearchLabWorkbench() {
                     <button
                       type="button"
                       className="lab-retract"
+                      aria-label={`Retract: ${item.statement}`}
                       disabled={retract.isPending}
                       onClick={() => {
                         const reason = window.prompt(

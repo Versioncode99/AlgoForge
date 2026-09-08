@@ -42,7 +42,16 @@ class PropSimulation(FrozenModel):
     terminal_histogram: tuple[DistributionBin, ...]
     return_drawdown_map: tuple[ReturnDrawdownPoint, ...]
     tail_risk: TailRiskSummary
+    #: Why the failing accounts failed, counted over **every** path. This has to
+    #: be summarised here rather than by a caller, because `outcomes` below is a
+    #: sample: a consumer tallying reasons from it reported 100 failures out of a
+    #: thousand and displayed the tally under the full count.
+    failure_reasons: dict[str, int]
+    #: A sample of the paths, kept so a reader can look at individual accounts.
+    #: `outcome_sample_size` says how many, so nothing has to infer it from the
+    #: length and nothing can mistake the sample for the population.
     outcomes: tuple[PathOutcome, ...]
+    outcome_sample_size: int
     equity_paths: tuple[tuple[float, ...], ...]
     #: What this simulation actually rests on. Three of these always hold and
     #: describe the method; the rest are supplied by the caller and describe the
@@ -403,6 +412,11 @@ def _target_curve(outcomes: list[PathOutcome], timeout_days: int) -> tuple[Targe
     return tuple(points)
 
 
+#: How many individual accounts are kept for inspection. Every *statistic* is
+#: computed over all paths; this only bounds what is carried back for a reader
+#: to look at one at a time.
+OUTCOME_SAMPLE = 100
+
 #: Assumptions of the method itself. They hold for every simulation this
 #: function produces, whatever it is fed.
 METHOD_LABELS: tuple[str, ...] = (
@@ -484,6 +498,10 @@ def simulate_prop_paths(
             terminal_pnl[:500], drawdowns[:500], outcomes[:500], strict=True
         )
     )
+    reasons: dict[str, int] = {}
+    for item in outcomes:
+        if item.failure_reason:
+            reasons[item.failure_reason] = reasons.get(item.failure_reason, 0) + 1
     # The interval must reflect how few days were observed, not just how many
     # paths were drawn. A Wilson interval over paths alone reports near-certainty
     # from a five-day sample, which is exactly the false confidence to avoid.
@@ -508,8 +526,10 @@ def simulate_prop_paths(
         terminal_histogram=_histogram(terminal_pnl),
         return_drawdown_map=return_drawdown,
         tail_risk=_tail_summary(terminal_pnl),
-        outcomes=tuple(outcomes[:100]),
-        equity_paths=tuple(equities[:100]),
+        failure_reasons=reasons,
+        outcomes=tuple(outcomes[:OUTCOME_SAMPLE]),
+        outcome_sample_size=min(len(outcomes), OUTCOME_SAMPLE),
+        equity_paths=tuple(equities[:OUTCOME_SAMPLE]),
         labels=(
             *METHOD_LABELS,
             *(() if rule.verified else ("UNVERIFIED_RULES",)),

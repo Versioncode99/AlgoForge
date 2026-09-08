@@ -161,3 +161,34 @@ def test_the_method_assumptions_are_stated_on_every_simulation() -> None:
     )
     for label in ("RESEARCH_ONLY", "BLOCK_BOOTSTRAP", "DAILY_SETTLEMENT_APPROXIMATION"):
         assert label in simulation.labels
+
+
+def test_reason_counts_cover_every_path_not_just_the_sample() -> None:
+    """The tally has to be over the population, because `outcomes` is not.
+
+    A thousand accounts all failing on maximum loss were displayed as
+    "maximum loss - 100 - 10.0%", because the caller counted reasons from the
+    hundred paths kept for inspection and printed the result under the full
+    failure count. Summarising in the engine is what makes that impossible.
+    """
+    rule = rules()["topstep-50k-challenge-sample-v1"]
+    # A losing series, so every path fails and the total is unambiguous.
+    losing = tuple(-400.0 for _ in range(40))
+    simulation = simulate_prop_paths(
+        "run_demo", rule, losing, paths=500, allow_unverified=True, source_labels=("REAL_DATA",)
+    )
+    assert simulation.fail_count == 500
+    assert sum(simulation.failure_reasons.values()) == simulation.fail_count
+    assert len(simulation.outcomes) < simulation.fail_count, "the sample is meant to be smaller"
+    assert simulation.outcome_sample_size == len(simulation.outcomes)
+
+
+def test_the_sample_is_labelled_as_one() -> None:
+    rule = rules()["topstep-50k-challenge-sample-v1"]
+    simulation = simulate_prop_paths(
+        "run_demo", rule, _series(), paths=250, allow_unverified=True, source_labels=("REAL_DATA",)
+    )
+    assert simulation.outcome_sample_size == len(simulation.outcomes) <= simulation.path_count
+    assert len(simulation.equity_paths) == simulation.outcome_sample_size
+    # Every statistic is over the population, so none of them is bounded by it.
+    assert simulation.pass_count + simulation.fail_count + simulation.timeout_count == 250

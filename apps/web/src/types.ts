@@ -158,8 +158,11 @@ export type PropResult = {
   path_count: number; pass_count: number; fail_count: number; timeout_count: number
   pass_rate: number; interval_low: number; interval_high: number; mean_payout: number
   equity_paths: number[][]; trading_days: number; daily_pnl: number[]
-  avg_days_to_pass: number | null; avg_days_to_fail: number | null
-  failure_reasons: Record<string, number>; terminal_balances: number[]; median_terminal: number
+  failure_reasons: Record<string, number>
+  /* A sample of the paths, kept so individual accounts can be inspected. Every
+     statistic on this object is computed over all of them; this is not. */
+  sampled_terminal_balances: number[]; outcome_sample_size: number
+  median_terminal: number
   risk_of_ruin: number
   boundary_race: {
     target_first_probability: number; loss_first_probability: number; timeout_probability: number

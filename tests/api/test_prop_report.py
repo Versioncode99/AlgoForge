@@ -159,3 +159,28 @@ def test_days_to_pass_is_absent_rather_than_zero_when_nothing_passed(
         assert race["target_days_median"] is not None and race["target_days_median"] > 0
     if simulated[0]["fail_count"] == 0:
         assert race["loss_days_median"] is None
+
+
+def test_the_failure_tally_covers_every_account_it_is_reported_against(
+    simulated: tuple[dict[str, Any], list[dict[str, Any]]],
+) -> None:
+    """The panel says "N accounts" and the rows have to add up to N.
+
+    They did not: the route counted reasons over `outcomes`, which the engine
+    truncates to a sample, and rendered the tally under `fail_count`. A thousand
+    accounts failing on maximum loss showed as 100.
+    """
+    result, _ = simulated
+    if result["fail_count"] == 0:
+        pytest.skip("this sample produced no failures to tally")
+    assert sum(result["failure_reasons"].values()) == result["fail_count"]
+
+
+def test_the_inspection_sample_is_named_as_a_sample(
+    simulated: tuple[dict[str, Any], list[dict[str, Any]]],
+) -> None:
+    result, _ = simulated
+    assert result["outcome_sample_size"] == len(result["sampled_terminal_balances"])
+    assert result["outcome_sample_size"] <= result["path_count"]
+    # The middle outcome is over every path, not over the sample.
+    assert result["median_terminal"] == result["tail_risk"]["terminal_median"]

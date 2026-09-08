@@ -942,13 +942,12 @@ def build_control_router(
             source_labels=_source_labels(latest),
         )
 
+        # `simulation.outcomes` is a sample of the paths, not all of them. Every
+        # aggregate here used to be computed from it and reported against the
+        # full path count: a thousand accounts all failing on maximum loss
+        # displayed as "maximum loss - 100 - 10.0%". The engine now summarises
+        # the population, and this reads those summaries.
         terminal = [outcome.terminal_balance for outcome in simulation.outcomes]
-        pass_days = [o.days for o in simulation.outcomes if o.outcome in {"PASS", "SURVIVED"}]
-        fail_days = [o.days for o in simulation.outcomes if o.outcome == "FAIL"]
-        reasons: dict[str, int] = defaultdict(int)
-        for outcome in simulation.outcomes:
-            if outcome.failure_reason:
-                reasons[outcome.failure_reason] += 1
 
         log.record(
             "PROP",
@@ -964,15 +963,15 @@ def build_control_router(
                 "strategy_id": strategy_id,
                 "trading_days": len(daily),
                 "daily_pnl": list(daily),
-                "avg_days_to_pass": round(sum(pass_days) / len(pass_days), 1)
-                if pass_days
-                else None,
-                "avg_days_to_fail": round(sum(fail_days) / len(fail_days), 1)
-                if fail_days
-                else None,
-                "failure_reasons": dict(reasons),
-                "terminal_balances": terminal,
-                "median_terminal": sorted(terminal)[len(terminal) // 2] if terminal else 0.0,
+                # Days-to-pass and days-to-fail come from `boundary_race`, which
+                # the engine computes over every path with p10/median/p90. The
+                # means that used to sit here were taken from the sample.
+                "failure_reasons": dict(simulation.failure_reasons),
+                # Explicitly a sample, and it says how large. The middle outcome
+                # across *all* paths is `tail_risk.terminal_median`.
+                "sampled_terminal_balances": terminal,
+                "outcome_sample_size": simulation.outcome_sample_size,
+                "median_terminal": simulation.tail_risk.terminal_median,
                 "days_required": MIN_TRADING_DAYS,
                 "resample_ratio": round(rule.timeout_days / len(daily), 2),
                 "interval_width": round(simulation.interval_high - simulation.interval_low, 4),

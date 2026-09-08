@@ -96,7 +96,9 @@ function PropReport({ result }: { result: PropResult }) {
       </div>
 
       <div className="panel">
-        <PanelHead title="Account equity, path by path" meta={`${Math.min(result.equity_paths.length, 48)} of ${result.path_count.toLocaleString()} shown`} />
+        {/* A sample, and it says so. The statistics above are over every path. */}
+        <PanelHead title="Account equity, path by path"
+          meta={`${Math.min(result.equity_paths.length, 48)} of ${result.path_count.toLocaleString()} drawn`} />
         <div className="panel-body"><EquityChart paths={result.equity_paths} start={result.rule.starting_balance} /></div>
       </div>
 
@@ -118,7 +120,8 @@ function PropReport({ result }: { result: PropResult }) {
 
       {Object.keys(result.failure_reasons).length > 0 && (
         <div className="panel">
-          <PanelHead title="Why the failures failed" meta={`${result.fail_count.toLocaleString()} accounts`} />
+          <PanelHead title="Why the failures failed"
+            meta={`${result.fail_count.toLocaleString()} accounts`} />
           <ul className="prop-reasons">
             {Object.entries(result.failure_reasons)
               .sort((a, b) => b[1] - a[1])
