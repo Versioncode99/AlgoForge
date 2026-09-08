@@ -10,6 +10,8 @@ import { getJson } from './api'
 import { CommandPalette, type PaletteRoute } from './components/CommandPalette'
 import { Wordmark } from './components/Logo'
 import { ViewErrorBoundary } from './components/ViewErrorBoundary'
+import { sound } from './sound'
+import { loadAppearance } from './theme'
 import type { ActivityEvent, StrategyListItem, Summary } from './types'
 import { OverviewView } from './views/Overview'
 
@@ -102,6 +104,23 @@ export function App() {
     return () => window.removeEventListener('keydown', shortcut)
   }, [])
   const navigate = useCallback((id: string) => { window.location.hash = id }, [])
+
+  /* The appearance is loaded here rather than in Settings.
+   *
+   * `main.tsx` applies a cached copy before the first paint so the theme does
+   * not flash, but a cache is not the record. Loading it only when the Settings
+   * screen happened to be open meant every other page ran on whatever the
+   * browser last remembered — change the theme, navigate away, and the old one
+   * came back. */
+  const appearance = useQuery({ queryKey: ['appearance'], queryFn: loadAppearance })
+  useEffect(() => {
+    if (appearance.data) {
+      sound.configure({
+        enabled: appearance.data.sound_enabled,
+        volume: appearance.data.sound_volume,
+      })
+    }
+  }, [appearance.data])
 
   const health = useQuery({ queryKey: ['health'], refetchInterval: 15_000, queryFn: () => getJson<{ status: string; data_gate: string; engine_running: boolean }>('/health') })
   const summary = useQuery({ queryKey: ['summary'], queryFn: () => getJson<Summary>('/summary') })

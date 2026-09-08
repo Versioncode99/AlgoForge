@@ -116,7 +116,7 @@ export function TradeInspector({
   const context = Object.entries(trade.entry_context)
 
   return (
-    <aside className="trade-inspector" aria-label={`Trade ${trade.sequence}`}>
+    <aside className="trade-inspector af-glass" aria-label={`Trade ${trade.sequence}`}>
       <header className="ti-head">
         <div>
           <span className="ti-eyebrow mono">TRADE #{trade.sequence}</span>

@@ -34,20 +34,68 @@ button { cursor: pointer; }
   border-radius: var(--r-sm);
 }
 
-::selection { background: var(--brand-dim); color: #fff; }
+::selection { background: var(--brand-dim); color: var(--bg-0); }
 
 /* Scrollbars — thin, part of the chrome rather than an OS intrusion. */
 * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 *::-webkit-scrollbar { width: 9px; height: 9px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 6px; border: 2px solid var(--bg-0); }
-*::-webkit-scrollbar-thumb:hover { background: #3d4650; }
+*::-webkit-scrollbar-thumb:hover { background: var(--line-glow); }
 
-/* Motion is information. Nothing decorative moves. */
+/* ── liquid glass, as a material ─────────────────────────────────────────────
+   One class, so every translucent surface in the application is auditable in
+   one grep. It belongs on things that float over the workspace and are about to
+   go away again — a command palette, a context menu, a transient inspector —
+   where seeing what is underneath tells you what the surface is acting on.
+
+   It does not belong on a docked panel, where it costs contrast and buys
+   nothing, and it must never go near a chart: legibility is the one thing a
+   chart cannot spend. The high-contrast theme reduces the blur to almost
+   nothing and strengthens the edge instead, because a floating surface still
+   has to read as floating when translucency is not affordable. */
+.af-glass {
+  background: var(--glass-tint);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--shadow-3);
+  backdrop-filter: blur(var(--blur-2)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--blur-2)) saturate(140%);
+  position: relative;
+}
+
+/* The one-pixel highlight along the top edge is what reads as a material rather
+   than as opacity. It is the whole of the "liquid" part. */
+.af-glass::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glass-sheen), transparent);
+  pointer-events: none;
+}
+
+/* Where the browser cannot blur, translucency alone would leave text sitting on
+   top of the workspace. Fall back to the opaque raised surface. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .af-glass { background: var(--bg-raised); border-color: var(--line-strong); }
+}
+
+/* Motion is information. Nothing decorative moves.
+   The tokens already collapse under `[data-motion="reduced"]` and under the OS
+   preference, so anything reading `--t` needs no help. This catches the
+   keyframe animations, which have their own durations. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
 }

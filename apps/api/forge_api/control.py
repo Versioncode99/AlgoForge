@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any, Literal
 
@@ -53,9 +53,14 @@ from forge_api.providers import (
 )
 from forge_api.research_lab import ArtifactStore, LabError, ResearchLab
 from forge_api.settings_store import (
+    ACCENTS,
+    DENSITIES,
     KNOWN_MODELS,
+    MOTIONS,
     ROLES,
+    THEMES,
     AISettings,
+    AppearanceSettings,
     BudgetSettings,
     ResearchLoopSettings,
     Settings,
@@ -150,6 +155,17 @@ class PanelSettingRequest(BaseModel):
 class LinkPanelsRequest(BaseModel):
     panel_ids: list[str] = Field(min_length=1)
     group: str | None = None
+
+
+class AppearancePatch(BaseModel):
+    """A partial update. Anything omitted keeps the value it already had."""
+
+    theme: str | None = Field(default=None, max_length=32)
+    accent: str | None = Field(default=None, max_length=32)
+    density: str | None = Field(default=None, max_length=32)
+    motion: str | None = Field(default=None, max_length=32)
+    sound_enabled: bool | None = None
+    sound_volume: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class LabQuestionRequest(BaseModel):
@@ -406,6 +422,15 @@ def build_control_router(
                 "providers": list(PROVIDERS),
                 "roles": ROLES,
                 "credentials": SettingsStore.credential_status(),
+                "appearance": vars(current.appearance),
+                # The options travel with the value, so the interface never has
+                # its own list of themes to fall out of step with the server's.
+                "appearance_options": {
+                    "themes": THEMES,
+                    "accents": ACCENTS,
+                    "densities": DENSITIES,
+                    "motions": MOTIONS,
+                },
             },
             meta={"secrets_returned": False},
         )
@@ -437,6 +462,9 @@ def build_control_router(
 
         budget = BudgetSettings(**{**vars(current.ai.budget), **(body.budget or {})})
         updated = Settings(
+            # Carried through explicitly: `Settings` is rebuilt wholesale here,
+            # so anything not named would silently revert to its default.
+            appearance=current.appearance,
             ai=AISettings(
                 enabled=current.ai.enabled if body.ai_enabled is None else body.ai_enabled,
                 provider=provider,
@@ -467,6 +495,70 @@ def build_control_router(
         settings_store.save(updated)
         log.record("SETTINGS", "updated", "info")
         return read_settings()
+
+    @router.get("/settings/appearance", response_model=ApiEnvelope[dict[str, Any]])
+    def read_appearance() -> ApiEnvelope[dict[str, Any]]:
+        """How the workstation should look and sound, and what the options are.
+
+        Server-side for the same reason model routing is: these are operator
+        settings, and an operator opening AlgoForge on a second machine should
+        find the workstation they configured rather than a default one. It also
+        keeps them out of a scattering of localStorage keys written by whichever
+        component happened to need one.
+        """
+        current = settings_store.load()
+        return ApiEnvelope(
+            data={
+                **vars(current.appearance),
+                "options": {
+                    "themes": THEMES,
+                    "accents": ACCENTS,
+                    "densities": DENSITIES,
+                    "motions": MOTIONS,
+                },
+            }
+        )
+
+    @router.patch("/settings/appearance", response_model=ApiEnvelope[dict[str, Any]])
+    def update_appearance(body: AppearancePatch) -> ApiEnvelope[dict[str, Any]]:
+        """Change one or more appearance settings.
+
+        A value the stylesheet has no palette for is refused rather than stored:
+        a theme key that persisted but did not exist would leave the application
+        unstyled with nothing on screen to say why.
+        """
+        current = settings_store.load()
+        existing = current.appearance
+        proposed = AppearanceSettings(
+            theme=body.theme if body.theme is not None else existing.theme,
+            accent=body.accent if body.accent is not None else existing.accent,
+            density=body.density if body.density is not None else existing.density,
+            motion=body.motion if body.motion is not None else existing.motion,
+            sound_enabled=(
+                existing.sound_enabled if body.sound_enabled is None else body.sound_enabled
+            ),
+            sound_volume=(
+                existing.sound_volume if body.sound_volume is None else body.sound_volume
+            ),
+        )
+        for field_name, options in (
+            ("theme", THEMES),
+            ("accent", ACCENTS),
+            ("density", DENSITIES),
+            ("motion", MOTIONS),
+        ):
+            value = getattr(proposed, field_name)
+            if value not in {item["key"] for item in options}:
+                raise HTTPException(
+                    422,
+                    {
+                        "code": f"unknown_{field_name}",
+                        "value": value,
+                        "known": [item["key"] for item in options],
+                    },
+                )
+        settings_store.save(replace(current, appearance=proposed))
+        return read_appearance()
 
     @router.get("/ai/status", response_model=ApiEnvelope[dict[str, Any]])
     def ai_status() -> ApiEnvelope[dict[str, Any]]:

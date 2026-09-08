@@ -1,57 +1,60 @@
 /* AlgoForge design tokens.
-   Structure follows vault doc 08-Frontend-Architecture; the plasma-green primary
-   is the product's existing brand and is retained. One accent is reserved for
-   "a human must act", per the one-earned-accent rule. */
+ *
+ * Every colour, radius, spacing step, duration and blur level in the
+ * application resolves through this file. A component that reaches for a
+ * literal is a component that cannot be themed, and `tests/api/test_theme.py`
+ * refuses one.
+ *
+ * ── how a theme is applied ───────────────────────────────────────────────────
+ * `:root` carries everything structural — the scales, the type, the geometry —
+ * plus the default (Premium Graphite) palette. A theme is a block that
+ * *redefines colours only*: `[data-theme="silver"]`, `[data-theme="contrast"]`.
+ * Nothing outside this file has to know a theme changed, because nothing
+ * outside this file names a colour.
+ *
+ * Density is the same shape on its own attribute, because it is orthogonal:
+ * `[data-density="comfortable"]` moves spacing and row heights and touches no
+ * colour at all. Somebody reading in a bright room at arm's length wants the
+ * light theme *and* looser rows; coupling them would force a choice.
+ *
+ * ── the accent ───────────────────────────────────────────────────────────────
+ * One accent, and it means "a human must act". P&L already owns green and red,
+ * and the verdict states own a third pair, so an accent with any real chroma
+ * competes with colours that carry meaning. All three accent options are
+ * deliberately low-chroma for that reason.
+ */
+
 :root {
-  /* Surfaces. Never pure black — it crushes chart antialiasing. */
-  --bg-0: #0a0a0a;
-  --bg-1: #100f0e;
-  --bg-2: #161513;
-  --bg-3: #1d1b19;
-  --bg-raised: #232220;
+  /* ── geometry ─────────────────────────────────────────────────────────── */
+  --r-sm: 3px;
+  --r: 5px;
+  --r-lg: 8px;
+  --r-round: 999px;
 
-  --line: #292724;
-  --line-strong: #3a3732;
-  --line-glow: #67513f;
+  /* Spacing — everything is a multiple of 4. Density scales the ones that
+     control breathing room, not the ones that control alignment. */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
 
-  /* Text */
-  --fg-0: #f4f2ed;
-  --fg-1: #cbc6bc;
-  --fg-2: #8b857a;
-  --fg-3: #625d55;
+  --rail-w: 232px;
+  --topbar-h: 52px;
+  --logbar-h: 132px;
+  /* Row height and panel padding are what "density" actually means. */
+  --row-h: 26px;
+  --pad-panel: var(--sp-3);
 
-  /* Brand + semantic */
-  --brand: #c58a5a;
-  --brand-dim: #765039;
-  --brand-wash: rgba(197, 138, 90, 0.1);
-
-  --pass: #8fce6a;
-  --fail: #c1503f;
-  --warn: #e8c069;
-  --info: #7fc4b4;
-  --neutral: #8b857a;
-
-  /* The single accent — reserved for "needs your attention now" */
-  --accent: #ff7b39;
-  --accent-wash: rgba(255, 123, 57, 0.1);
-
-  /* Categorical series, checked for deuteranopia separation */
-  --s1: #58a6ff; --s2: #bc8cff; --s3: #39c5cf; --s4: #ffa657;
-  --s5: #7ee787; --s6: #f778ba; --s7: #a5a5a5; --s8: #e3b341;
-
-  /* Type — two faces, split by job rather than by mood.
-     Inter carries the interface: it is engineered for dense UI at 11-14px,
-     which is the range almost every label in this application lives in.
-     Plex Mono carries data only — figures, hashes, ids, timestamps, code.
-     The previous build ran labels through the mono face at 9px, which is what
-     made a research workstation read as a terminal emulator. */
+  /* ── type ─────────────────────────────────────────────────────────────────
+     Two faces, split by job rather than by mood. Inter carries the interface:
+     it is engineered for dense UI at 11-14px, which is the range almost every
+     label here lives in. Plex Mono carries data only — figures, hashes, ids,
+     timestamps, code. An earlier build ran labels through the mono face at 9px,
+     which is what made a research workstation read as a terminal emulator. */
   --font-ui: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
-  /* Small caps-style labels. Sans, not mono: tracking does the work. */
   --font-label: var(--font-ui);
 
   /* 9px was below the floor at which a label can be read at arm's length on a
-     1440p panel. Everything shifts up one step; density is held by tighter
+     1440p panel. Everything sits one step up; density is held by tighter
      line-height and padding instead of smaller glyphs. */
   --fs-nano: 10px;
   --fs-micro: 11px;
@@ -63,39 +66,311 @@
   --fs-2xl: 22px;
   --fs-hero: 28px;
 
-  /* Spacing — everything is a multiple of 4 */
-  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
-  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+  --lh-tight: 1.3;
+  --lh: 1.5;
+  --lh-loose: 1.65;
 
-  --r-sm: 3px;
-  --r: 5px;
-  --r-lg: 8px;
-
-  --rail-w: 232px;
-  --topbar-h: 52px;
-  --logbar-h: 132px;
-
+  /* ── motion ───────────────────────────────────────────────────────────────
+     100-250ms for anything a person is waiting through. An animation is here to
+     say a state changed, never to make the application look alive. */
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
-  /* Out-quint for things arriving, a softer curve for things resizing. */
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);   /* things arriving */
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);   /* things resizing */
   --t-fast: 110ms;
   --t: 190ms;
   --t-slow: 340ms;
 
+  /* ── depth ────────────────────────────────────────────────────────────────
+     Three steps, and the third is only for things that float over the
+     workspace. A shadow on a docked panel is decoration; on a floating one it
+     is the only thing saying it is above. */
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.24);
+  --shadow-2: 0 4px 14px rgb(0 0 0 / 0.32);
+  --shadow-3: 0 18px 48px rgb(0 0 0 / 0.46);
+
+  /* ── glass ────────────────────────────────────────────────────────────────
+     Translucency is a material for *transient* surfaces — a command palette, a
+     context menu, a floating inspector — where seeing the workspace underneath
+     tells you what the surface is acting on. It is not a theme. Applied to a
+     docked panel it costs contrast and gains nothing, and applied to a chart it
+     costs legibility, which is the one thing a chart cannot spend.
+
+     These are used only through `.af-glass`, so the whole of the application's
+     translucency is auditable in one grep. */
+  --blur-1: 6px;
+  --blur-2: 14px;
+  --blur-3: 28px;
+  --glass-tint: rgb(24 24 26 / 0.72);
+  --glass-line: rgb(255 255 255 / 0.09);
+  --glass-sheen: rgb(255 255 255 / 0.045);
+
+  /* ── Premium Graphite (default) ───────────────────────────────────────────
+     Never pure black: it crushes chart antialiasing and makes every border look
+     like a scratch. The steps between surfaces are small on purpose — a
+     workstation reads as one instrument, not a stack of cards. */
+  --bg-0: #0c0c0d;
+  --bg-1: #131314;
+  --bg-2: #191919;
+  --bg-3: #202021;
+  --bg-raised: #262627;
+
+  --line: #262628;
+  --line-strong: #35353a;
+  --line-glow: #4a4a52;
+
+  --fg-0: #f2f3f5;
+  --fg-1: #c3c5ca;
+  --fg-2: #8a8d94;
+  --fg-3: #5f6269;
+
+  --brand: #b9bec7;
+  --brand-dim: #6d717a;
+  --brand-wash: rgb(185 190 199 / 0.09);
+
+  /* Semantic states. Green and red carry P&L and are never used for anything
+     else, which is why the accent below has to stay neutral. */
+  --pass: #6fbf8b;
+  --fail: #d8695f;
+  --warn: #d6ab5e;
+  --info: #7aa9c2;
+  --neutral: #8a8d94;
+
+  /* The single accent — "needs your attention now". */
+  --accent: #d6d9df;
+  --accent-wash: rgb(214 217 223 / 0.11);
+
+  /* Categorical series, checked for deuteranopia separation. */
+  --s1: #7fa7d4; --s2: #a892c9; --s3: #6fb3ad; --s4: #cfa06b;
+  --s5: #8fbf88; --s6: #c98fa8; --s7: #9a9da4; --s8: #c7b06f;
+
   /* Verdict states. INCONCLUSIVE must never read as FAIL: the judge's whole
-     design rests on "not measured" being different from "measured and failed",
-     and painting both red made the gate ladder unreadable. */
-  --verdict-pass: #3ddc97;
-  --verdict-fail: #f2615c;
-  --verdict-unknown: #e0a942;
-  --verdict-pass-wash: rgba(61, 220, 151, 0.09);
-  --verdict-fail-wash: rgba(242, 97, 92, 0.09);
-  --verdict-unknown-wash: rgba(224, 169, 66, 0.1);
+     design rests on "not measured" differing from "measured and failed", and
+     painting both red made the gate ladder unreadable. */
+  --verdict-pass: #6fbf8b;
+  --verdict-fail: #d8695f;
+  --verdict-unknown: #cfa457;
+  --verdict-pass-wash: rgb(111 191 139 / 0.10);
+  --verdict-fail-wash: rgb(216 105 95 / 0.10);
+  --verdict-unknown-wash: rgb(207 164 87 / 0.11);
 
   /* Evidence tier is ranked, so it is a colour before it is a word. */
-  --tier-holdout: #bc8cff;
-  --tier-oos: #3ddc97;
-  --tier-insample: #58a6ff;
-  --tier-synthetic: #6e7681;
+  --tier-holdout: #a892c9;
+  --tier-oos: #6fbf8b;
+  --tier-insample: #7fa7d4;
+  --tier-synthetic: #6e7178;
+
+  /* ── chart ────────────────────────────────────────────────────────────────
+     Named separately from the interface surfaces because a chart is read, not
+     glanced at: its grid has to be present enough to measure against and quiet
+     enough to disappear behind the data. Tying it to `--line` directly made one
+     or the other wrong in every theme. */
+  --chart-bg: transparent;
+  --chart-grid: #1e1e20;
+  --chart-axis: #34343a;
+  --chart-text: #7c7f86;
+  --chart-crosshair: #6b6e76;
+  --chart-up: #6fbf8b;
+  --chart-down: #d8695f;
+  --chart-volume: #34343a;
+}
+
+/* ── Light / Silver ─────────────────────────────────────────────────────────
+   The same structure on a light ground. Not an inversion: text goes to a dark
+   graphite rather than to black, and the surfaces stay off-white, because a
+   pure #fff panel next to a chart is a glare source in the middle of the one
+   thing being looked at. */
+:root[data-theme="silver"] {
+  --bg-0: #eceded;
+  --bg-1: #f4f5f6;
+  --bg-2: #fafafb;
+  --bg-3: #ffffff;
+  --bg-raised: #ffffff;
+
+  --line: #d9dade;
+  --line-strong: #bcbec4;
+  --line-glow: #9ea1a8;
+
+  --fg-0: #16171a;
+  --fg-1: #3b3d43;
+  --fg-2: #62656d;
+  --fg-3: #8c8f97;
+
+  --brand: #4d525b;
+  --brand-dim: #9a9ea6;
+  --brand-wash: rgb(77 82 91 / 0.08);
+
+  --pass: #1f7a4b;
+  --fail: #b03328;
+  --warn: #8a6414;
+  --info: #2c6787;
+  --neutral: #62656d;
+
+  --accent: #3d424b;
+  --accent-wash: rgb(61 66 75 / 0.09);
+
+  --s1: #2f6ea8; --s2: #6a4f9c; --s3: #1f7a72; --s4: #96622a;
+  --s5: #3d7a37; --s6: #a1436c; --s7: #5c5f66; --s8: #8a7220;
+
+  --verdict-pass: #1f7a4b;
+  --verdict-fail: #b03328;
+  --verdict-unknown: #8a6414;
+  --verdict-pass-wash: rgb(31 122 75 / 0.10);
+  --verdict-fail-wash: rgb(176 51 40 / 0.09);
+  --verdict-unknown-wash: rgb(138 100 20 / 0.10);
+
+  --tier-holdout: #6a4f9c;
+  --tier-oos: #1f7a4b;
+  --tier-insample: #2f6ea8;
+  --tier-synthetic: #7d8087;
+
+  --shadow-1: 0 1px 2px rgb(20 22 26 / 0.10);
+  --shadow-2: 0 4px 14px rgb(20 22 26 / 0.14);
+  --shadow-3: 0 18px 48px rgb(20 22 26 / 0.20);
+
+  --glass-tint: rgb(250 250 251 / 0.76);
+  --glass-line: rgb(20 22 26 / 0.10);
+  --glass-sheen: rgb(255 255 255 / 0.55);
+
+  --chart-bg: transparent;
+  --chart-grid: #e4e5e8;
+  --chart-axis: #bcbec4;
+  --chart-text: #62656d;
+  --chart-crosshair: #8c8f97;
+  --chart-up: #1f7a4b;
+  --chart-down: #b03328;
+  --chart-volume: #cfd1d6;
+}
+
+/* ── Dark / High Contrast ───────────────────────────────────────────────────
+   Fewer tonal steps and wider gaps between them. Graphite's surfaces sit within
+   a few percent of each other, which is what makes it calm and what makes it
+   hard to use at low brightness or with reduced acuity. Here every boundary is
+   a border rather than a tonal shift, so nothing depends on distinguishing
+   #191919 from #202021. */
+:root[data-theme="contrast"] {
+  --bg-0: #000000;
+  --bg-1: #0a0a0b;
+  --bg-2: #141416;
+  --bg-3: #1c1c1f;
+  --bg-raised: #232327;
+
+  --line: #45454d;
+  --line-strong: #6b6b76;
+  --line-glow: #9a9aa6;
+
+  --fg-0: #ffffff;
+  --fg-1: #e4e5e9;
+  --fg-2: #b4b6bd;
+  --fg-3: #8d9098;
+
+  --brand: #e8eaee;
+  --brand-dim: #9a9da5;
+  --brand-wash: rgb(232 234 238 / 0.14);
+
+  --pass: #4ee08a;
+  --fail: #ff6b60;
+  --warn: #ffc85c;
+  --info: #6fc6ea;
+  --neutral: #b4b6bd;
+
+  --accent: #ffffff;
+  --accent-wash: rgb(255 255 255 / 0.16);
+
+  --s1: #66b4ff; --s2: #c79bff; --s3: #4fd8cf; --s4: #ffb15c;
+  --s5: #7ee787; --s6: #ff8ec0; --s7: #c9ccd3; --s8: #ffd75e;
+
+  --verdict-pass: #4ee08a;
+  --verdict-fail: #ff6b60;
+  --verdict-unknown: #ffc85c;
+  --verdict-pass-wash: rgb(78 224 138 / 0.16);
+  --verdict-fail-wash: rgb(255 107 96 / 0.16);
+  --verdict-unknown-wash: rgb(255 200 92 / 0.16);
+
+  --tier-holdout: #c79bff;
+  --tier-oos: #4ee08a;
+  --tier-insample: #66b4ff;
+  --tier-synthetic: #9a9da5;
+
+  /* Glass costs contrast, which is the one thing this theme exists to protect.
+     It is reduced to a near-opaque tint with a strong edge, so a floating
+     surface still reads as floating without any text losing separation. */
+  --blur-1: 2px;
+  --blur-2: 4px;
+  --blur-3: 6px;
+  --glass-tint: rgb(20 20 22 / 0.97);
+  --glass-line: rgb(255 255 255 / 0.34);
+  --glass-sheen: rgb(255 255 255 / 0.05);
+
+  --chart-bg: transparent;
+  --chart-grid: #2c2c31;
+  --chart-axis: #6b6b76;
+  --chart-text: #b4b6bd;
+  --chart-crosshair: #ffffff;
+  --chart-up: #4ee08a;
+  --chart-down: #ff6b60;
+  --chart-volume: #45454d;
+}
+
+/* ── accents ────────────────────────────────────────────────────────────────
+   Only the accent moves. Everything else about a theme stays where it is, which
+   is the whole reason accent and theme are separate attributes. */
+:root[data-accent="amber"] {
+  --accent: #d9a56a;
+  --accent-wash: rgb(217 165 106 / 0.13);
+  --brand: #c9a077;
+  --brand-dim: #7d6449;
+  --brand-wash: rgb(201 160 119 / 0.10);
+}
+:root[data-accent="ice"] {
+  --accent: #8fb4c9;
+  --accent-wash: rgb(143 180 201 / 0.13);
+  --brand: #8fa8b8;
+  --brand-dim: #56656f;
+  --brand-wash: rgb(143 168 184 / 0.10);
+}
+:root[data-theme="silver"][data-accent="amber"] {
+  --accent: #8a5f21;
+  --accent-wash: rgb(138 95 33 / 0.11);
+  --brand: #7a5623;
+  --brand-dim: #b09468;
+  --brand-wash: rgb(122 86 35 / 0.09);
+}
+:root[data-theme="silver"][data-accent="ice"] {
+  --accent: #2f5d75;
+  --accent-wash: rgb(47 93 117 / 0.11);
+  --brand: #33607a;
+  --brand-dim: #8ba7b6;
+  --brand-wash: rgb(51 96 122 / 0.09);
+}
+
+/* ── density ────────────────────────────────────────────────────────────────
+   Comfortable moves the values that control breathing room. It does not change
+   the type scale: making a workstation's labels larger is how a dense interface
+   becomes a spreadsheet with fewer rows on it. */
+:root[data-density="comfortable"] {
+  --sp-1: 5px;  --sp-2: 10px; --sp-3: 15px; --sp-4: 20px;
+  --sp-5: 25px; --sp-6: 30px; --sp-8: 40px; --sp-10: 50px;
+  --row-h: 32px;
+  --pad-panel: var(--sp-4);
+  --lh: 1.6;
+}
+
+/* ── reduced motion ─────────────────────────────────────────────────────────
+   Both an explicit setting and the OS preference collapse the durations to
+   nothing. Zeroing the tokens is deliberate: a component that reads `--t` gets
+   the right behaviour without knowing the setting exists, so nothing can be
+   forgotten. `0.01ms` rather than `0` so `transitionend` still fires and any
+   handler waiting on it still runs. */
+:root[data-motion="reduced"] {
+  --t-fast: 0.01ms;
+  --t: 0.01ms;
+  --t-slow: 0.01ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 0.01ms;
+    --t: 0.01ms;
+    --t-slow: 0.01ms;
+  }
 }

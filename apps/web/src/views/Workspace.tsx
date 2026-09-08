@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2, X } from 'lucide-react'
 import { API, getJson } from '../api'
+import { playSound } from '../sound'
 import { PanelBody } from '../components/PanelBody'
 import type { DatasetInfo } from '../types'
 
@@ -101,7 +102,13 @@ export function WorkspaceView() {
   const mutate = useMutation({
     mutationFn: (job: { path: string; method: string; body?: unknown }) =>
       send<Workspace>(job.path, job.method, job.body),
-    onSuccess: refresh,
+    // The layout is now what the server holds. That is the state change worth
+    // confirming, which is why the sound is here and not on pointer-down.
+    onSuccess: () => {
+      playSound('workspace.save')
+      refresh()
+    },
+    onError: () => playSound('error'),
   })
 
   const create = useMutation({
@@ -111,7 +118,11 @@ export function WorkspaceView() {
         template_key,
         activate: true,
       }),
-    onSuccess: refresh,
+    onSuccess: () => {
+      playSound('workspace.switch')
+      refresh()
+    },
+    onError: () => playSound('error'),
   })
 
   // Geometry is committed on drop, not on every pointer move: one action per

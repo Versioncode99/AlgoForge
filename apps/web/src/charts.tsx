@@ -5,27 +5,51 @@ import { GridComponent, TooltipComponent, MarkLineComponent } from 'echarts/comp
 import { CanvasRenderer } from 'echarts/renderers'
 import type { ComponentProps } from 'react'
 
+import { token, useAppearanceVersion } from './theme'
+
 echarts.use([BarChart, LineChart, ScatterChart, GridComponent, TooltipComponent, MarkLineComponent, CanvasRenderer])
+/* `key` on the appearance is what makes a theme change repaint a canvas. An
+ * echarts instance keeps the option object it was built with; setting a new
+ * one merges rather than replaces, which left old colours behind. */
 function ReactECharts(props: Omit<ComponentProps<typeof ReactEChartsCore>, 'echarts'>) {
-  return <ReactEChartsCore {...props} echarts={echarts} />
+  const appearance = useAppearanceVersion()
+  return <ReactEChartsCore key={appearance} {...props} echarts={echarts} />
 }
 
-const AXIS = {
-  axisLine: { lineStyle: { color: '#2a3037' } },
-  axisTick: { show: false },
-  axisLabel: { color: '#616a73', fontFamily: 'IBM Plex Mono', fontSize: 9 },
-  splitLine: { lineStyle: { color: '#1a1e22' } },
+/* These were module constants, evaluated once when the bundle loaded. That made
+ * every chart in the application permanently the colour of whichever theme
+ * happened to be compiled in — changing the theme repainted the interface
+ * around a chart that stayed dark. They are functions now, called on each
+ * render, and the components carry the appearance in their React `key` so a
+ * theme change rebuilds them. */
+function axis() {
+  return {
+    axisLine: { lineStyle: { color: token('--chart-axis', '#2a3037') } },
+    axisTick: { show: false },
+    axisLabel: {
+      color: token('--chart-text', '#616a73'),
+      fontFamily: 'IBM Plex Mono',
+      fontSize: 9,
+    },
+    splitLine: { lineStyle: { color: token('--chart-grid', '#1a1e22') } },
+  }
 }
 
-const BASE = {
-  animation: false,
-  backgroundColor: 'transparent',
-  tooltip: {
-    trigger: 'axis' as const,
-    backgroundColor: '#131619',
-    borderColor: '#303740',
-    textStyle: { color: '#e6eaee', fontFamily: 'IBM Plex Mono', fontSize: 11 },
-  },
+function base() {
+  return {
+    animation: false,
+    backgroundColor: token('--chart-bg', 'transparent'),
+    tooltip: {
+      trigger: 'axis' as const,
+      backgroundColor: token('--bg-3', '#131619'),
+      borderColor: token('--line-strong', '#303740'),
+      textStyle: {
+        color: token('--fg-0', '#e6eaee'),
+        fontFamily: 'IBM Plex Mono',
+        fontSize: 11,
+      },
+    },
+  }
 }
 
 export function EquityChart({ paths, start = 0 }: { paths: number[][]; start?: number }) {
@@ -37,17 +61,22 @@ export function EquityChart({ paths, start = 0 }: { paths: number[][]; start?: n
     lineStyle: {
       width: index === 0 ? 1.6 : 0.6,
       opacity: index === 0 ? 1 : 0.26,
-      color: index === 0 ? '#3ddc97' : index % 4 === 0 ? '#f2615c' : '#39c5cf',
+      color:
+        index === 0
+          ? token('--chart-up', '#3ddc97')
+          : index % 4 === 0
+            ? token('--chart-down', '#f2615c')
+            : token('--s3', '#39c5cf'),
     },
   }))
   return (
     <ReactECharts
       style={{ height: 300 }}
       option={{
-        ...BASE,
+        ...base(),
         grid: { left: 58, right: 18, top: 16, bottom: 32 },
-        xAxis: { type: 'category', ...AXIS },
-        yAxis: { type: 'value', ...AXIS },
+        xAxis: { type: 'category', ...axis() },
+        yAxis: { type: 'value', ...axis() },
         series,
       }}
     />
@@ -59,10 +88,10 @@ export function RegimeChart({ items }: { items: { name: string; net_pnl: number 
     <ReactECharts
       style={{ height: 240 }}
       option={{
-        ...BASE,
+        ...base(),
         grid: { left: 54, right: 12, top: 14, bottom: 34 },
-        xAxis: { type: 'category', data: items.map((x) => x.name), ...AXIS },
-        yAxis: { type: 'value', ...AXIS },
+        xAxis: { type: 'category', data: items.map((x) => x.name), ...axis() },
+        yAxis: { type: 'value', ...axis() },
         series: [
           {
             type: 'bar',
@@ -87,10 +116,10 @@ export function CurveChart({ equity, height = 230 }: { equity: number[]; height?
     <ReactECharts
       style={{ height }}
       option={{
-        ...BASE,
+        ...base(),
         grid: { left: 58, right: 18, top: 16, bottom: 32 },
-        xAxis: { type: 'category', data: equity.map((_, i) => i), ...AXIS },
-        yAxis: { type: 'value', ...AXIS },
+        xAxis: { type: 'category', data: equity.map((_, i) => i), ...axis() },
+        yAxis: { type: 'value', ...axis() },
         series: [
           {
             type: 'line',
@@ -124,7 +153,7 @@ export function SweepChart({
     <ReactECharts
       style={{ height: 240 }}
       option={{
-        ...BASE,
+        ...base(),
         grid: { left: 58, right: 18, top: 16, bottom: 40 },
         xAxis: {
           type: 'category',
@@ -133,9 +162,9 @@ export function SweepChart({
           nameGap: 24,
           nameTextStyle: { color: '#444c54', fontFamily: 'IBM Plex Mono', fontSize: 9 },
           data: points.map((p) => p.value),
-          ...AXIS,
+          ...axis(),
         },
-        yAxis: { type: 'value', ...AXIS },
+        yAxis: { type: 'value', ...axis() },
         series: [
           {
             type: 'bar',
@@ -156,17 +185,17 @@ export function TargetReachChart({ points }: { points: { day: number; probabilit
     <ReactECharts
       style={{ height: 230 }}
       option={{
-        ...BASE,
+        ...base(),
         grid: { left: 58, right: 18, top: 16, bottom: 34 },
-        xAxis: { type: 'category', data: points.map((p) => p.day), name: 'day', ...AXIS },
+        xAxis: { type: 'category', data: points.map((p) => p.day), name: 'day', ...axis() },
         yAxis: {
-          type: 'value', min: 0, max: 1, ...AXIS,
-          axisLabel: { ...AXIS.axisLabel, formatter: (value: number) => `${Math.round(value * 100)}%` },
+          type: 'value', min: 0, max: 1, ...axis(),
+          axisLabel: { ...axis().axisLabel, formatter: (value: number) => `${Math.round(value * 100)}%` },
         },
         series: [{
           type: 'line', data: points.map((p) => p.probability), showSymbol: false,
-          lineStyle: { width: 1.8, color: '#3ddc97' },
-          areaStyle: { color: 'rgba(61,220,151,.12)' },
+          lineStyle: { width: 1.8, color: token('--chart-up', '#3ddc97') },
+          areaStyle: { color: `color-mix(in srgb, ${token('--chart-up', '#3ddc97')} 12%, transparent)` },
         }],
       }}
     />
@@ -178,18 +207,23 @@ export function TerminalHistogram({ bins }: { bins: { lower: number; upper: numb
     <ReactECharts
       style={{ height: 230 }}
       option={{
-        ...BASE,
+        ...base(),
         grid: { left: 58, right: 18, top: 16, bottom: 48 },
         xAxis: {
           type: 'category', data: bins.map((b) => Math.round((b.lower + b.upper) / 2)),
-          name: 'terminal P&L', nameLocation: 'middle', nameGap: 32, ...AXIS,
+          name: 'terminal P&L', nameLocation: 'middle', nameGap: 32, ...axis(),
         },
-        yAxis: { type: 'value', ...AXIS },
+        yAxis: { type: 'value', ...axis() },
         series: [{
           type: 'bar', barWidth: '88%',
           data: bins.map((b) => ({
             value: b.count,
-            itemStyle: { color: (b.lower + b.upper) / 2 >= 0 ? '#3ddc97' : '#f2615c' },
+            itemStyle: {
+              color:
+                (b.lower + b.upper) / 2 >= 0
+                  ? token('--chart-up', '#3ddc97')
+                  : token('--chart-down', '#f2615c'),
+            },
           })),
         }],
       }}
@@ -204,21 +238,26 @@ export function ReturnDrawdownChart({ points }: {
     <ReactECharts
       style={{ height: 280 }}
       option={{
-        ...BASE,
+        ...base(),
         tooltip: {
-          ...BASE.tooltip, trigger: 'item',
+          ...base().tooltip, trigger: 'item',
           formatter: (item: { data: [number, number, string] }) =>
             `${item.data[2]}<br/>terminal ${item.data[0].toFixed(0)}<br/>drawdown ${item.data[1].toFixed(0)}`,
         },
         grid: { left: 62, right: 18, top: 18, bottom: 48 },
-        xAxis: { type: 'value', name: 'terminal P&L', nameLocation: 'middle', nameGap: 30, ...AXIS },
-        yAxis: { type: 'value', name: 'max drawdown', ...AXIS },
+        xAxis: { type: 'value', name: 'terminal P&L', nameLocation: 'middle', nameGap: 30, ...axis() },
+        yAxis: { type: 'value', name: 'max drawdown', ...axis() },
         series: [{
           type: 'scatter', symbolSize: 5,
           data: points.slice(0, 1200).map((p) => ({
             value: [p.terminal_pnl, p.max_drawdown, p.outcome],
             itemStyle: {
-              color: p.outcome === 'PASS' ? '#3ddc97' : p.outcome === 'FAIL' ? '#f2615c' : '#d5a84b',
+              color:
+                p.outcome === 'PASS'
+                  ? token('--chart-up', '#3ddc97')
+                  : p.outcome === 'FAIL'
+                    ? token('--chart-down', '#f2615c')
+                    : token('--warn', '#d5a84b'),
               opacity: .55,
             },
           })),

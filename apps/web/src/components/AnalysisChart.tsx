@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+
+import { token, useAppearanceVersion } from '../theme'
 import ReactECharts from 'echarts-for-react'
 import * as echarts from 'echarts'
 
@@ -59,12 +61,6 @@ export type AnalysisResult = {
   is_evidence: boolean
   evidence_note: string
   provenance: Record<string, unknown>
-}
-
-function token(name: string, fallback: string) {
-  if (typeof window === 'undefined') return fallback
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-  return value || fallback
 }
 
 /** echarts-gl is loaded on demand and only for surfaces.
@@ -129,6 +125,7 @@ export function AnalysisChart({
   onPick: (cell: Cell) => void
   height?: number
 }) {
+  const appearance = useAppearanceVersion()
   const [glReady, setGlReady] = useState(glState === 'ready')
   const [glFailed, setGlFailed] = useState(glState === 'failed')
   const mounted = useRef(true)
@@ -155,7 +152,7 @@ export function AnalysisChart({
       dim: token('--fg-3', '#5f5a52'),
       bg: token('--bg-1', '#100f0e'),
     }),
-    [],
+    [appearance],
   )
 
   const byCoord = useMemo(() => {
@@ -385,7 +382,13 @@ export function AnalysisChart({
           will not draw into — the option applies, nothing appears, and there is
           no error to notice. Remounting is the honest fix. */}
       <ReactECharts
-        key={`${result.artifact_id}:${result.shape === 'surface' && glReady ? '3d' : '2d'}`}
+        /* The appearance is in the key so a theme change rebuilds the chart.
+           An echarts instance keeps the option it was constructed with, and
+           setting a new one merges rather than replaces — the old palette
+           survived otherwise. */
+        key={`${result.artifact_id}:${
+          result.shape === 'surface' && glReady ? '3d' : '2d'
+        }:${appearance}`}
         echarts={echarts}
         option={option}
         style={{ height, width: '100%' }}

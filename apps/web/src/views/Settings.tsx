@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bot, Check, KeyRound, Pause, RefreshCw, Send, Server, X } from 'lucide-react'
 import { useState } from 'react'
 import { getJson, patchJson, postJson } from '../api'
+import { AppearancePanel } from '../components/AppearancePanel'
 import { StoragePanel } from '../components/StoragePanel'
 import { PanelHead, Stat } from '../components/ui'
 import type { AskResult, Evolution, OracleInfo, SettingsPayload } from '../types'
@@ -36,6 +37,8 @@ export function SettingsView() {
       </div>
 
       {error && <p className="warning bad">{error}</p>}
+
+      <AppearancePanel />
 
       <StoragePanel />
 

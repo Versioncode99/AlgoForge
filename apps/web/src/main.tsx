@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { applyAppearance, cachedAppearance } from './theme'
 // Self-hosted so the workstation renders identically offline.
 import '@fontsource-variable/inter'
 import '@fontsource/ibm-plex-mono/400.css'
@@ -21,6 +22,13 @@ import './styles/workstation.css'
 import './styles/research.css'
 import './styles/trades.css'
 import './styles/lab.css'
+
+/* Before React mounts. The appearance is stored on the server, and the
+ * request for it is in flight while the first frame paints — applying the
+ * last known value here is what stops the default theme flashing to the
+ * chosen one. It is a cache of a server value, corrected the moment the
+ * real one arrives. */
+applyAppearance(cachedAppearance())
 
 const queryClient = new QueryClient({defaultOptions: {queries: {retry: 1, staleTime: 30_000}}})
 

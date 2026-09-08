@@ -29,7 +29,7 @@
   overflow-x: auto; padding-bottom: var(--sp-3);
   border: 1px solid var(--line); border-radius: var(--r-lg);
   background:
-    linear-gradient(180deg, rgba(61, 220, 151, .03), transparent 40%),
+    linear-gradient(180deg, color-mix(in srgb, var(--pass) 3%, transparent), transparent 40%),
     var(--bg-1);
   padding: var(--sp-4);
 }
@@ -99,7 +99,7 @@
 .pipe-node[data-live="yes"] { border-color: var(--brand-dim); animation: af-halo 2.4s var(--ease-soft) infinite; }
 .pipe-node[data-live="yes"]::after {
   content: ""; position: absolute; inset: 0 auto 0 0; width: 34%;
-  background: linear-gradient(90deg, transparent, rgba(61, 220, 151, .1), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--pass) 10%, transparent), transparent);
   animation: af-sweep 1.7s var(--ease-soft) infinite;
   pointer-events: none;
 }
@@ -171,7 +171,7 @@
 .family-card footer .muted { margin-left: auto; }
 
 .chip.good { color: var(--brand); border-color: var(--line-glow); background: var(--brand-wash); }
-.chip.warn { color: var(--warn); border-color: #3d3524; background: #16130d; }
+.chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 25%, var(--line)); background: color-mix(in srgb, var(--warn) 9%, var(--bg-1)); }
 
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;

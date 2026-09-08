@@ -3,6 +3,7 @@ import { Search } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getJson } from '../api'
 import type { DatasetInfo, ExperimentRecord, ResearchMemoryPayload, Run, StrategyListItem } from '../types'
+import { playSound } from '../sound'
 
 export type PaletteRoute = { id: string; label: string; group: string; detail: string }
 
@@ -89,7 +90,14 @@ export function CommandPalette({
       if (event.key === 'Escape') { onClose(); return }
       if (event.key === 'ArrowDown') { event.preventDefault(); setCursor(c => Math.min(c + 1, flat.length - 1)) }
       if (event.key === 'ArrowUp') { event.preventDefault(); setCursor(c => Math.max(c - 1, 0)) }
-      if (event.key === 'Enter' && active) { event.preventDefault(); onRoute(active.route); onClose() }
+      if (event.key === 'Enter' && active) {
+        event.preventDefault()
+        // A command ran. Not a keystroke sound — this fires once, on the
+        // Enter that actually executes something.
+        playSound('command.success')
+        onRoute(active.route)
+        onClose()
+      }
     }
     window.addEventListener('keydown', keys)
     return () => window.removeEventListener('keydown', keys)
@@ -98,7 +106,7 @@ export function CommandPalette({
   if (!open) return null
   return (
     <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="command-palette" role="dialog" aria-modal="true" aria-label="Navigate AlgoForge" onMouseDown={event => event.stopPropagation()}>
+      <section className="command-palette af-glass" role="dialog" aria-modal="true" aria-label="Navigate AlgoForge" onMouseDown={event => event.stopPropagation()}>
         <label className="palette-search">
           <Search aria-hidden="true" />
           <span className="sr-only">Search views, strategies, experiments, runs, constraints and datasets</span>

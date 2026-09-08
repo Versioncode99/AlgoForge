@@ -117,9 +117,77 @@ class ResearchLoopSettings:
     )
 
 
+#: The themes the interface ships with. Stated here rather than only in CSS so
+#: the server can refuse a value the stylesheet has no palette for — a theme
+#: name that persisted but did not exist would leave the application unstyled
+#: with nothing to say why.
+THEMES: list[dict[str, str]] = [
+    {
+        "key": "graphite",
+        "label": "Premium Graphite",
+        "detail": "Deep graphite surfaces, silver type, restrained accent. The default.",
+    },
+    {
+        "key": "silver",
+        "label": "Light / Silver",
+        "detail": "The same structure on a light ground, for bright rooms and printing.",
+    },
+    {
+        "key": "contrast",
+        "label": "Dark / High Contrast",
+        "detail": "Maximum separation between surfaces and type. Fewer tonal steps.",
+    },
+]
+
+#: Accents are deliberately few and all low-chroma. The accent marks "a human
+#: must act"; a saturated one competes with the P&L colours, which carry meaning
+#: the accent does not.
+ACCENTS: list[dict[str, str]] = [
+    {"key": "silver", "label": "Silver", "detail": "Neutral. Nothing competes with the data."},
+    {"key": "amber", "label": "Amber", "detail": "Warm. The existing AlgoForge accent."},
+    {"key": "ice", "label": "Ice", "detail": "Cool blue-grey."},
+]
+
+DENSITIES: list[dict[str, str]] = [
+    {"key": "compact", "label": "Compact", "detail": "Workstation default. More on screen."},
+    {"key": "comfortable", "label": "Comfortable", "detail": "Looser rows and padding."},
+]
+
+MOTIONS: list[dict[str, str]] = [
+    {"key": "standard", "label": "Standard", "detail": "Short transitions on state changes."},
+    {
+        "key": "reduced",
+        "label": "Reduced",
+        "detail": "No transitions. Also applied automatically when the OS asks for it.",
+    },
+]
+
+
+@dataclass
+class AppearanceSettings:
+    """How the workstation looks and sounds.
+
+    Server-side rather than in the browser, for the same reason model routing
+    is: these are operator settings, and an operator opening the application on
+    a second machine should find the workstation they configured. It also keeps
+    them out of a scattering of localStorage keys written by whichever component
+    happened to need one.
+    """
+
+    theme: str = "graphite"
+    accent: str = "silver"
+    density: str = "compact"
+    motion: str = "standard"
+    sound_enabled: bool = False
+    #: Quiet by default. A sound the operator did not ask for is worse than no
+    #: sound at all, and this is a room where people concentrate.
+    sound_volume: float = 0.35
+
+
 @dataclass
 class Settings:
     ai: AISettings = field(default_factory=AISettings)
+    appearance: AppearanceSettings = field(default_factory=AppearanceSettings)
     research_loop: ResearchLoopSettings = field(default_factory=ResearchLoopSettings)
     default_dataset: str = "nq_1m_16y"
     engine_cycle_seconds: float = 6.0
@@ -132,6 +200,35 @@ CREDENTIALS = [
     ("FRED_API_KEY", "FRED", "Macro series. Free."),
     ("BINANCE_TESTNET_KEY", "Binance testnet", "Optional. Crypto data needs no key."),
 ]
+
+
+def _one_of(value: Any, options: list[dict[str, str]], fallback: str) -> str:
+    """A stored value that no longer names anything falls back rather than sticking.
+
+    A theme key that survives a rename would leave the interface with no palette
+    and no explanation, so an unknown value is treated as absent.
+    """
+    keys = {item["key"] for item in options}
+    text = str(value or "")
+    return text if text in keys else fallback
+
+
+def _appearance(raw: Any) -> AppearanceSettings:
+    if not isinstance(raw, dict):
+        return AppearanceSettings()
+    defaults = AppearanceSettings()
+    try:
+        volume = float(raw.get("sound_volume", defaults.sound_volume))
+    except (TypeError, ValueError):
+        volume = defaults.sound_volume
+    return AppearanceSettings(
+        theme=_one_of(raw.get("theme"), THEMES, defaults.theme),
+        accent=_one_of(raw.get("accent"), ACCENTS, defaults.accent),
+        density=_one_of(raw.get("density"), DENSITIES, defaults.density),
+        motion=_one_of(raw.get("motion"), MOTIONS, defaults.motion),
+        sound_enabled=bool(raw.get("sound_enabled", defaults.sound_enabled)),
+        sound_volume=min(1.0, max(0.0, volume)),
+    )
 
 
 class SettingsStore:
@@ -177,6 +274,7 @@ class SettingsStore:
             topics = defaults.topics
         return Settings(
             ai=ai,
+            appearance=_appearance(raw.get("appearance", {})),
             research_loop=ResearchLoopSettings(
                 enabled=bool(loop_raw.get("enabled", defaults.enabled)),
                 interval_minutes=max(

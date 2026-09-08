@@ -57,7 +57,7 @@
 .orch-plan {
   display: flex; flex-direction: column; gap: var(--sp-3);
   border: 1px solid var(--brand-dim); border-radius: var(--r-lg);
-  background: linear-gradient(180deg, rgba(61, 220, 151, .05), transparent 30%), var(--bg-1);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--pass) 5%, transparent), transparent 30%), var(--bg-1);
   padding: var(--sp-4);
 }
 .orch-plan > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); }
@@ -104,8 +104,8 @@
   border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 3px var(--sp-2);
 }
 .mission-status.tone-good { color: var(--pass); border-color: var(--line-glow); background: var(--verdict-pass-wash); }
-.mission-status.tone-bad { color: var(--fail); border-color: #3a2523; background: var(--verdict-fail-wash); }
-.mission-status.tone-warn { color: var(--warn); border-color: #3d3524; background: var(--verdict-unknown-wash); }
+.mission-status.tone-bad { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 24%, var(--line)); background: var(--verdict-fail-wash); }
+.mission-status.tone-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 25%, var(--line)); background: var(--verdict-unknown-wash); }
 .mission-status.tone-live { color: var(--brand); border-color: var(--brand-dim); background: var(--brand-wash); animation: af-blink 1.6s var(--ease-soft) infinite; }
 
 .mission-body {

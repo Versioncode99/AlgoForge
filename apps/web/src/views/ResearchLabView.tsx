@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, getJson, postJson } from '../api'
+import { playSound } from '../sound'
 import { AnalysisChart, type AnalysisResult, type Cell } from '../components/AnalysisChart'
 
 /* Ask a question about a strategy's trades, and get back to the trades.
@@ -134,6 +135,7 @@ export function ResearchLabWorkbench() {
       setUnrouted(null)
     },
     onSuccess: (data) => {
+      playSound('research.complete')
       setResult(data)
       queryClient.invalidateQueries({ queryKey: ['lab-artifacts'] })
     },
@@ -157,10 +159,16 @@ export function ResearchLabWorkbench() {
       setPicked(null)
     },
     onSuccess: (data) => {
+      // Research finished. This one earns a sound: the operator asked a
+      // question, waited, and an answer arrived.
+      playSound('research.complete')
       setResult(data)
       queryClient.invalidateQueries({ queryKey: ['lab-artifacts'] })
     },
-    onError: (err) => setError(err instanceof Error ? err.message : 'Analysis failed'),
+    onError: (err) => {
+      playSound('error')
+      setError(err instanceof Error ? err.message : 'Analysis failed')
+    },
   })
 
   const open = useMutation({
@@ -526,7 +534,7 @@ export function ResearchLabWorkbench() {
         </div>
 
         {picked && result && (
-          <aside className="lab-drill" aria-label="Trades behind this cell">
+          <aside className="lab-drill af-glass" aria-label="Trades behind this cell">
             <header>
               <div>
                 <span className="lab-eyebrow mono">{picked.labels.join(' · ')}</span>

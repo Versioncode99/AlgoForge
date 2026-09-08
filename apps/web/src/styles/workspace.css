@@ -27,7 +27,7 @@
 /* The sweep only exists while work is genuinely in flight. */
 .jobbar-sweep {
   position: absolute; inset: 0; width: 30%;
-  background: linear-gradient(90deg, transparent, rgba(61, 220, 151, 0.16), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--pass) 16%, transparent), transparent);
   animation: af-sweep 1.5s var(--ease-soft) infinite;
 }
 .jobbar[data-status="done"] .jobbar-fill { background: var(--verdict-pass-wash); }
@@ -86,7 +86,7 @@
   padding: 5px 11px; font-size: var(--fs-xs); white-space: nowrap;
 }
 .range-buttons button:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-0); }
-.range-buttons button.active { background: var(--brand-dim); color: #fff; }
+.range-buttons button.active { background: var(--brand-dim); color: var(--fg-0); }
 .range-buttons button:disabled { color: var(--fg-3); cursor: not-allowed; }
 
 .ctl-readout { display: grid; gap: 2px; margin-left: auto; text-align: right; }
@@ -213,7 +213,7 @@
   color: var(--fg-1); font-weight: 400; border-bottom: 1px solid var(--line);
   width: 40%;
 }
-.stats-table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.012); }
+.stats-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--fg-0) 1%, transparent); }
 .stats-table .hint {
   display: inline-block; margin-left: 5px; width: 12px; height: 12px;
   border: 1px solid var(--line-strong); border-radius: 50%;
@@ -226,7 +226,7 @@
   padding: 1px 5px; border-radius: 2px; letter-spacing: .06em;
 }
 .side-tag.long { color: var(--tier-oos); background: var(--verdict-pass-wash); }
-.side-tag.short { color: var(--s4); background: rgba(255, 166, 87, 0.1); }
+.side-tag.short { color: var(--s4); background: color-mix(in srgb, var(--warn) 10%, transparent); }
 
 .period-bar { position: relative; height: 9px; width: 100%; min-width: 110px; background: var(--bg-2); border-radius: 1px; }
 /* A period that made almost nothing still has to be visible as a period, so
@@ -372,7 +372,7 @@
 /* The pulse marks the stage a worker is actually in. It is the only moving
    thing here, so movement always means work. */
 .lane-step[data-state="active"] {
-  color: #fff; background: var(--brand-dim);
+  color: var(--fg-0); background: var(--brand-dim);
   animation: af-blink 1.6s var(--ease-soft) infinite;
 }
 .lane-step[data-state="ahead"] { opacity: .45; }
