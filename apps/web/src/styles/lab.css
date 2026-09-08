@@ -305,3 +305,83 @@
 
 .lab-view .up { color: var(--pass); }
 .lab-view .down { color: var(--fail); }
+
+/* ── research memory ──────────────────────────────────────────────────────────
+   A finding kept from an analysis. Styled next to the artifact history because
+   that is the pairing that matters: an artifact is derived and can be deleted,
+   a finding is a record that somebody judged a sentence worth keeping — so the
+   two live beside each other and never merge. */
+.lab-findings li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2, 8px);
+}
+.lab-findings li > span { flex: 1 1 auto; }
+
+.lab-remember {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--fs-nano);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.lab-remember:hover:not(:disabled) { color: var(--fg-0); border-color: var(--brand); }
+.lab-remember:disabled { color: var(--fg-3); cursor: default; border-style: dashed; }
+.lab-remember:focus-visible { outline: 1px solid var(--brand); outline-offset: 1px; }
+
+.lab-memory {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-1);
+  padding: var(--sp-3, 12px);
+  max-height: 18rem;
+  overflow: auto;
+}
+.lab-memory > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2, 8px);
+  margin-bottom: var(--sp-2, 8px);
+}
+.lab-memory h4 {
+  margin: 0;
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  font-weight: 600;
+}
+.lab-memory-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2, 8px); }
+.lab-memory-list li { padding-left: 10px; border-left: 2px solid var(--brand-dim); }
+.lab-memory-statement { margin: 0; font-size: var(--fs-xs); line-height: 1.55; color: var(--fg-1); }
+.lab-memory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2, 8px);
+  margin-top: 3px;
+  font-size: var(--fs-nano);
+  color: var(--fg-3);
+}
+.lab-retract {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: var(--fs-nano);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.lab-retract:hover:not(:disabled) { color: var(--fail); }
+.lab-retract:focus-visible { outline: 1px solid var(--brand); outline-offset: 1px; }

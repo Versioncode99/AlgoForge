@@ -16,6 +16,13 @@ from forge.data.live import ProviderError
 from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
 from forge.prop.engine import MAX_BACKTEST_BARS, MIN_TRADING_DAYS
 from forge.research import ResearchLedger
+from forge.research.knowledge import (
+    NOT_EVIDENCE_NOTE,
+    FindingStatus,
+    KnowledgeError,
+    KnowledgeStore,
+    as_payload,
+)
 from forge.strategy import FamilyRegistry, StrategyLibrary, TemplateStore
 
 # `Workspace` here is the storage location, not the screen layout. The two are
@@ -142,6 +149,28 @@ class PanelSettingRequest(BaseModel):
 class LinkPanelsRequest(BaseModel):
     panel_ids: list[str] = Field(min_length=1)
     group: str | None = None
+
+
+class PromoteFindingRequest(BaseModel):
+    """Keep one sentence an analysis produced.
+
+    `statement` is checked against the artifact and must match verbatim. There
+    is deliberately no way to submit a claim of your own: the point of the store
+    is that everything in it was computed, and a typed sentence with a
+    provenance block attached would be indistinguishable from one that was.
+    """
+
+    artifact_id: str = Field(min_length=1, max_length=120)
+    statement: str = Field(min_length=1, max_length=600)
+    note: str = Field(default="", max_length=600)
+
+
+class RetractFindingRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=600)
+
+
+class SupersedeFindingRequest(BaseModel):
+    by_finding_id: str = Field(min_length=1, max_length=120)
 
 
 class AnalysisRequest(BaseModel):
@@ -291,6 +320,7 @@ def build_control_router(
     # recomputed from the backtest it cites. They live in the app-owned data
     # root beside the other databases.
     research_lab = ResearchLab(ledger_view, ArtifactStore(workspace.data / "analyses.db"))
+    knowledge = KnowledgeStore(workspace.data / "knowledge.db")
     # Handed to the registry so the agent reads trades through the same service
     # the interface does, rather than through a second implementation.
     actions.ledger = ledger_view
@@ -1266,6 +1296,87 @@ def build_control_router(
             return ApiEnvelope(data=research_lab.drilldown(artifact_id, parsed, limit=limit))
         except LabError as exc:
             raise HTTPException(404, {"code": "cell_not_found", "reason": str(exc)}) from exc
+
+    # ── research memory ──────────────────────────────────────────────────────
+    # What the search has learned, kept with the artifact that said it. Never
+    # evidence: the gate ladder does not read this, and there is no route from
+    # a finding into a verdict.
+
+    @router.post("/lab/findings", response_model=ApiEnvelope[dict[str, Any]])
+    def promote_finding(body: PromoteFindingRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Promote one of an artifact's own findings into durable memory."""
+        artifact = research_lab.store.get(body.artifact_id)
+        if artifact is None:
+            raise HTTPException(404, {"code": "artifact_not_found"})
+        try:
+            finding = knowledge.promote(
+                artifact, body.statement, note=body.note, created_by="operator"
+            )
+        except KnowledgeError as exc:
+            raise HTTPException(
+                422, {"code": "not_a_computed_finding", "reason": str(exc)}
+            ) from exc
+        log.record(
+            "MEMORY",
+            f"remembered: {finding.statement[:90]}",
+            "info",
+            finding.finding_id,
+        )
+        return ApiEnvelope(
+            data=finding.model_dump(mode="json"),
+            meta={"is_evidence": False, "note": NOT_EVIDENCE_NOTE},
+        )
+
+    @router.get("/lab/findings", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def list_findings(
+        strategy_id: str = "",
+        q: str = "",
+        include_withdrawn: bool = False,
+        limit: int = 100,
+    ) -> ApiEnvelope[list[dict[str, Any]]]:
+        """What is known. Standing findings only, unless an audit asks for all."""
+        rows = knowledge.recall(
+            strategy_id=strategy_id,
+            query=q,
+            status=None if include_withdrawn else FindingStatus.STANDING,
+            limit=limit,
+        )
+        return ApiEnvelope(
+            data=as_payload(rows),
+            meta={
+                "total": len(rows),
+                "counts": knowledge.counts(),
+                "is_evidence": False,
+                "note": NOT_EVIDENCE_NOTE,
+            },
+        )
+
+    @router.post("/lab/findings/{finding_id}/retract", response_model=ApiEnvelope[dict[str, Any]])
+    def retract_finding(
+        finding_id: str, body: RetractFindingRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """Withdraw a finding, keeping it readable with the reason attached.
+
+        Deliberately not a delete. A finding that vanished would leave a later
+        reader unable to tell it from one nobody ever made.
+        """
+        try:
+            finding = knowledge.retract(finding_id, body.reason)
+        except KnowledgeError as exc:
+            raise HTTPException(404, {"code": "finding_not_found", "reason": str(exc)}) from exc
+        return ApiEnvelope(data=finding.model_dump(mode="json"), meta={"is_evidence": False})
+
+    @router.post(
+        "/lab/findings/{finding_id}/supersede", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def supersede_finding(
+        finding_id: str, body: SupersedeFindingRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            finding = knowledge.supersede(finding_id, body.by_finding_id)
+        except KnowledgeError as exc:
+            raise HTTPException(422, {"code": "cannot_supersede", "reason": str(exc)}) from exc
+        return ApiEnvelope(data=finding.model_dump(mode="json"), meta={"is_evidence": False})
 
     # ── workspaces ───────────────────────────────────────────────────────────
     # Thin by design. Every one of these delegates to the same action the agent

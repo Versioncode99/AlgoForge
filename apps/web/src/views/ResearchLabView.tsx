@@ -55,6 +55,24 @@ type Drilldown = {
   note: string
 }
 
+type Finding = {
+  finding_id: string
+  statement: string
+  note: string
+  analysis: string
+  artifact_id: string
+  strategy_id: string
+  backtest_id: string
+  dataset_key: string
+  evidence_tier: string
+  covered_trades: number
+  total_trades: number
+  status: 'STANDING' | 'SUPERSEDED' | 'RETRACTED'
+  retraction_reason: string
+  created_at: string
+  is_evidence: false
+}
+
 const MEASURES = [
   { key: 'average_trade', label: 'Average trade' },
   { key: 'net_pnl', label: 'Net P&L' },
@@ -115,6 +133,42 @@ export function ResearchLabWorkbench() {
       setError(null)
     },
   })
+
+  // What the search already knows about this strategy. Read separately from
+  // the analysis because it outlives it: an artifact is derived and can be
+  // deleted, a finding is a record that somebody judged a sentence worth
+  // keeping.
+  const memory = useQuery({
+    queryKey: ['lab-findings', active],
+    queryFn: () => getJson<Finding[]>(`/lab/findings?strategy_id=${active}&limit=60`),
+    enabled: Boolean(active),
+  })
+
+  const remember = useMutation({
+    mutationFn: (statement: string) =>
+      postJson<Finding>('/lab/findings', {
+        artifact_id: result?.artifact_id ?? '',
+        statement,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['lab-findings'] })
+    },
+  })
+
+  const retract = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      postJson<Finding>(`/lab/findings/${id}/retract`, { reason }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['lab-findings'] })
+    },
+  })
+
+  // Statements already kept, so the button can say so rather than letting the
+  // same sentence be pressed twice.
+  const remembered = useMemo(
+    () => new Set((memory.data ?? []).map((item) => item.statement)),
+    [memory.data],
+  )
 
   const drill = useQuery({
     queryKey: ['lab-drill', result?.artifact_id, picked?.coords.join(',')],
@@ -241,12 +295,38 @@ export function ResearchLabWorkbench() {
 
               <AnalysisChart result={result} onPick={onPick} height={400} />
 
+              {/* Each sentence can be kept. Only these sentences can — the
+                  route checks the statement against what the analysis actually
+                  computed, so there is no way to write a finding by hand and
+                  have it stored with a real provenance chain attached. */}
               {result.findings.length > 0 && (
                 <ul className="lab-findings">
-                  {result.findings.map((finding) => (
-                    <li key={finding}>{finding}</li>
-                  ))}
+                  {result.findings.map((finding) => {
+                    const kept = remembered.has(finding)
+                    return (
+                      <li key={finding}>
+                        <span>{finding}</span>
+                        <button
+                          type="button"
+                          className="lab-remember"
+                          disabled={kept || remember.isPending}
+                          onClick={() => remember.mutate(finding)}
+                          title={kept
+                            ? 'Already in research memory'
+                            : 'Keep this in research memory. Knowledge, not evidence.'}
+                        >
+                          {kept ? 'Remembered' : 'Remember'}
+                        </button>
+                      </li>
+                    )
+                  })}
                 </ul>
+              )}
+
+              {remember.isError && (
+                <p className="lab-warning" role="status">
+                  {(remember.error as Error).message}
+                </p>
               )}
 
               {result.warnings.filter(Boolean).map((warning) => (
@@ -266,6 +346,50 @@ export function ResearchLabWorkbench() {
               </footer>
             </section>
           )}
+
+          <section className="lab-memory">
+            <header>
+              <h4>What the search knows</h4>
+              <span className="lab-badge" title="A finding is knowledge, not proof. No verdict reads it.">
+                NOT EVIDENCE
+              </span>
+            </header>
+            {memory.isPending && <p className="lab-empty">Loading…</p>}
+            {memory.data?.length === 0 && (
+              <p className="lab-empty">
+                Nothing kept for this strategy yet. Findings can only be kept from what an
+                analysis computed, so ask a question first.
+              </p>
+            )}
+            <ul className="lab-memory-list">
+              {(memory.data ?? []).map((item) => (
+                <li key={item.finding_id}>
+                  <p className="lab-memory-statement">{item.statement}</p>
+                  <div className="lab-memory-meta mono">
+                    <span>{item.analysis}</span>
+                    <span>{item.covered_trades.toLocaleString()} trades</span>
+                    <span>{item.evidence_tier || '—'}</span>
+                    <span>{item.created_at.slice(0, 10)}</span>
+                    <button
+                      type="button"
+                      className="lab-retract"
+                      disabled={retract.isPending}
+                      onClick={() => {
+                        const reason = window.prompt(
+                          'Why is this no longer true? The finding is kept with the reason attached, not deleted.',
+                        )
+                        if (reason && reason.trim()) {
+                          retract.mutate({ id: item.finding_id, reason: reason.trim() })
+                        }
+                      }}
+                    >
+                      Retract
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
 
           <section className="lab-history">
             <h4>Questions already asked</h4>
