@@ -248,6 +248,13 @@ class ResearchMemory:
             created_at=timestamp,
         )
         with closing(self._connect()) as db, db:
+            # One write transaction around the read *and* the write. Reading the
+            # tail outside it lets the engine's eight workers all see the same
+            # last row and commit siblings that each claim it as predecessor:
+            # the chain then forks, and `verify_chain` reports tampering that
+            # never happened. BEGIN IMMEDIATE takes the write lock up front, so
+            # writers serialise and each one links to the row actually before it.
+            db.execute("BEGIN IMMEDIATE")
             previous = db.execute(
                 "SELECT entry_hash FROM failures ORDER BY rowid DESC LIMIT 1"
             ).fetchone()
@@ -434,9 +441,42 @@ def classify_gate(gate: str, status: str, *, lookahead: bool = False) -> Failure
     return _GATE_CLASS.get(gate)
 
 
+# Text that names a broken machine or an absent dataset rather than a property
+# of the parameters. Checked before the pruning classes, because the classifier
+# matches substrings and the pruning classes are the destructive answer: a
+# vendor outage phrased as "dataset unavailable: no trades could be loaded"
+# otherwise reads as NO_TRADES and deletes a parameter region on the strength of
+# an infrastructure failure.
+_NEVER_PRUNE_MARKERS = (
+    "unavailable",
+    "dataset",
+    "disk",
+    "i/o",
+    "ioerror",
+    "timeout",
+    "timed out",
+    "connection",
+    "network",
+    "crash",
+    "out of memory",
+    "permission",
+    "not found",
+    "missing",
+    "corrupt",
+)
+
+
 def classify_reason(reason: str) -> FailureClass:
-    """Fallback for engine-level stops that never reached the judge."""
+    """Fallback for engine-level stops that never reached the judge.
+
+    Ambiguity resolves toward the class that does *not* prune. A message can
+    only be read for keywords, and a wrong guess in the pruning direction
+    silently deletes candidates that were never tested; a wrong guess the other
+    way only costs the compute of re-running one.
+    """
     text = reason.casefold()
+    if any(marker in text for marker in _NEVER_PRUNE_MARKERS):
+        return FailureClass.INFRASTRUCTURE
     if "no trades" in text:
         return FailureClass.NO_TRADES
     if "holdout already consumed" in text or "lineage" in text:
