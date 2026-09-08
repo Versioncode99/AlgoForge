@@ -283,6 +283,45 @@ def test_only_the_token_file_defines_the_palette(path: Path) -> None:
     )
 
 
+# ── the shell's geometry is tokenised too ────────────────────────────────────
+
+
+#: A pixel radius written into a rule, e.g. `border-radius: 7px`. Percentages
+#: and `50%` are fine -- a circle is a shape, not a scale step -- and so is a
+#: `var()`, which is the whole point.
+PIXEL_RADIUS = re.compile(r"border-radius\s*:\s*[^;]*?\d+px")
+
+#: The shell stylesheet. Held to the same rule as colour for the same reason:
+#: a radius written into a rule is one that density and future themes cannot
+#: reach, and the shell is where the four-step scale has to be legible because
+#: it is the file every other stylesheet is read against.
+#:
+#: The view stylesheets still carry literal radii and are deliberately not in
+#: scope here -- converting them is a separate change, and a test that fails on
+#: work nobody has started is a test that gets deleted.
+SHELL = STYLES / "workstation.css"
+
+
+def test_the_shell_names_no_literal_radius() -> None:
+    body = strip_comments(SHELL.read_text("utf-8"))
+    offenders = sorted(set(PIXEL_RADIUS.findall(body)))
+    assert not offenders, (
+        f"{SHELL.name} writes radii as literals: {offenders}. "
+        "Use one of --r-sm / --r / --r-lg / --r-round; a literal is a corner "
+        "that no density or theme can move."
+    )
+
+
+def test_the_shell_actually_rounds_things() -> None:
+    """So the rule above cannot pass by the shell having no corners at all.
+
+    Before the overhaul this file declared exactly one radius in sixty-nine
+    lines, which is how a workstation ends up reading as a terminal emulator.
+    """
+    body = strip_comments(SHELL.read_text("utf-8"))
+    assert body.count("border-radius") >= 15
+
+
 def test_no_token_is_defined_in_terms_of_itself() -> None:
     """`--bg-0: var(--bg-0)` is silently invalid and unsets the whole palette."""
     for path in STYLES.glob("*.css"):

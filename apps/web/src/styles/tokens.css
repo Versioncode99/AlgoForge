@@ -25,10 +25,29 @@
  */
 
 :root {
-  /* ── geometry ─────────────────────────────────────────────────────────── */
-  --r-sm: 3px;
-  --r: 9px;
-  --r-lg: 14px;
+  /* ── geometry ─────────────────────────────────────────────────────────────
+     Four radii, and each one has a job. A component that cannot say which of
+     the four it is has not been designed yet.
+
+       --r-sm    things that sit *inside* something else: chips, pills, inline
+                 badges, table affordances, keycaps.
+       --r       the ordinary docked surface: panels, cards, rail rows,
+                 inputs, buttons. This is the default; reach for it first.
+       --r-lg    surfaces that float *above* the workspace: the command
+                 palette, the event drawer, the trade inspector.
+       --r-round status dots and count bubbles, and nothing else.
+
+     Nesting rule: a child's radius is smaller than its parent's, and the gap
+     between them should be about the padding between them. A chip at the same
+     radius as the panel holding it makes both corners look like they are
+     peeling.
+
+     The earlier values (3 / 9 / 14) were set when the shell was a tab strip
+     over a hairline grid, and at 3px a chip is a rectangle with the corners
+     filed off rather than a rounded object. */
+  --r-sm: 6px;
+  --r: 10px;
+  --r-lg: 16px;
   --r-round: 999px;
 
   /* Spacing — everything is a multiple of 4. Density scales the ones that
@@ -36,9 +55,21 @@
   --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
   --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
 
-  --rail-w: 232px;
-  --topbar-h: 68px;
-  --logbar-h: 132px;
+  /* ── shell ────────────────────────────────────────────────────────────────
+     The shell used to hardcode all of these inside its own stylesheet, which
+     is why `--topbar-h` said 68px while the context bar was 48px tall and the
+     event drawer had to be told the rail width twice at two breakpoints. They
+     are tokens so one value moves the whole chrome, and so a media query can
+     move them rather than restating the geometry that depends on them. */
+  --rail-w: 244px;
+  --rail-w-collapsed: 60px;
+  --rail-row-h: 34px;
+  --topbar-h: 52px;
+  --statusbar-h: 34px;
+  /* The gap between the shell's chrome and the rounded surfaces inside it.
+     One value, so the rail, the context bar and the status bar inset by the
+     same amount and the rounding reads as one system. */
+  --shell-gap: 8px;
   /* Row height and panel padding are what "density" actually means. */
   --row-h: 26px;
   --pad-panel: var(--sp-3);
