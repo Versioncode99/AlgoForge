@@ -10,7 +10,7 @@
  * showing zeroes: "never measured" and "measured as zero" are different facts
  * and the reader has to be able to tell them apart. */
 import { useQuery } from '@tanstack/react-query'
-import { CircleSlash, FileText, GitBranch, Scale, ShieldAlert, Users } from 'lucide-react'
+import { CircleSlash, FileText, GitBranch, ListChecks, Scale, ShieldAlert, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getJson } from '../api'
 import { PanelHead, Stat } from '../components/ui'
@@ -23,6 +23,7 @@ type Dossier = {
   strategy: Section
   backtests: Section
   verdict: Section
+  findings: Section
   validation: Section
   provenance: Section
   research_memory: Section
@@ -46,6 +47,54 @@ function Absent({ reason }: { reason?: string }) {
       <p>{reason ?? 'No reason recorded.'}</p>
     </div>
   </div>
+}
+
+type Finding = {
+  gate: string; name: string; dimension: string; severity: string
+  status: string; headline: string; rule: string; observed: string | number
+  why_it_matters: string; what_would_help: string
+}
+
+/* Ordered by how much it should change what you do next, which is not the same
+ * as ordered by how bad it sounds. NOT_MEASURED sits below every real shortfall
+ * and above nothing at all: a gate that measured nothing has found nothing
+ * wrong, and painting it like a failure is exactly how INCONCLUSIVE stops
+ * meaning what the architecture needs it to mean. */
+const SEVERITY_LABEL: Record<string, string> = {
+  CRITICAL: 'Decides it',
+  HIGH: 'Real shortfall',
+  NOT_MEASURED: 'Not measured',
+  INFO: 'For information',
+}
+
+function Findings({ findings }: { findings: Finding[] }) {
+  const [open, setOpen] = useState<string | null>(findings[0]?.gate ?? null)
+  return <ol className="evidence-findings">
+    {findings.map(item => {
+      const expanded = open === item.gate
+      return <li key={item.gate} className={`evidence-finding is-${item.severity.toLowerCase()}`}>
+        <button
+          type="button"
+          className="evidence-finding-head"
+          aria-expanded={expanded}
+          onClick={() => setOpen(expanded ? null : item.gate)}
+        >
+          <span className="evidence-finding-sev">{SEVERITY_LABEL[item.severity] ?? item.severity}</span>
+          <strong className="mono">{item.gate}</strong>
+          <span className="evidence-finding-headline">{item.headline}</span>
+          <em>{item.dimension.replace(/_/g, ' ')}</em>
+        </button>
+        {expanded && <div className="evidence-finding-body">
+          <p><span>Why it matters</span>{item.why_it_matters}</p>
+          {item.what_would_help && <p>
+            <span>{item.status === 'INCONCLUSIVE' ? 'What would measure it' : 'What would help'}</span>
+            {item.what_would_help}
+          </p>}
+          <small className="mono">{item.rule}</small>
+        </div>}
+      </li>
+    })}
+  </ol>
 }
 
 function Gates({ gates }: { gates: Array<Record<string, unknown>> }) {
@@ -83,6 +132,7 @@ export function EvidenceView() {
 
   const d = dossier.data
   const verdict = d?.verdict
+  const findings = d?.findings
   const provenance = d?.provenance
   const dissent = d?.dissent
   const claims = (dissent?.claims ?? []) as Array<Record<string, unknown>>
@@ -122,6 +172,27 @@ export function EvidenceView() {
           </div>
         : <div className="panel"><PanelHead title="Verdict" meta="not available"><Scale /></PanelHead>
             <Absent reason={verdict?.reason} /></div>}
+
+      <div className="panel">
+        <PanelHead
+          title="What decides it"
+          meta={findings?.available
+            ? `${String(findings.failed)} failed · ${String(findings.unmeasured)} unmeasured`
+            : 'not available'}
+        ><ListChecks /></PanelHead>
+        {findings?.available
+          ? <div className="panel-body stack">
+              {/* The judge's own sentence, copied. Nothing on this screen
+                  recomputes a decision, so nothing on it can be softer than
+                  the gate ladder below. */}
+              <p className="evidence-headline">{String(findings.headline)}</p>
+              {(findings.findings as Finding[]).length
+                ? <Findings findings={findings.findings as Finding[]} />
+                : <p className="evidence-none">Every gate was measured and every one held. The
+                    limitations below still apply.</p>}
+            </div>
+          : <Absent reason={findings?.reason} />}
+      </div>
 
       <div className="grid-2">
         <div className="panel">

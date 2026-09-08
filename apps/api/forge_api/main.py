@@ -8,19 +8,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from forge.agents import DebateReport, build_debate
 from forge.contracts.hashing import content_hash
 from forge.contracts.models import ApiEnvelope, Preregistration, RunRecord
 from forge.data.live import load_keys
 from forge.forgekeeper import ForgeKeeper, classify_candidate
-from forge.judge import Judge, JudgeInput, Verdict
 from forge.ledger import LedgerDatabase
-from forge.prop import PropRuleSet, PropSimulation, load_rules, simulate_prop_paths
+from forge.prop import PropRuleSet, load_rules
 from forge.research import ResearchLedger
 from forge.strategy import TEMPLATES, FamilyRegistry, StrategyLibrary, TemplateStore
 from forge.vault import VaultMirror
@@ -158,24 +155,45 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail={"code": "run_not_found"})
         return ApiEnvelope(data=item)
 
-    @app.get("/api/v1/verdicts/{run_id}", response_model=ApiEnvelope[Verdict])
-    def verdict(run_id: str) -> ApiEnvelope[Verdict]:
+    @app.get("/api/v1/verdicts/{run_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def verdict(run_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Refuses, for the same reason `/analysis/{run_id}` refuses.
+
+        This route used to build a twelve-value P&L series in the handler,
+        repeat it three times, and run it through the real judge — then answer
+        with a real `Verdict`, for any run id that existed, asserting
+        `data_gate_passed`, `preregistered` and `implementation_tests_passed`
+        without reading any of them. Every gate in that response was decided
+        from invented trades and three hard-coded `True`s.
+
+        The sibling route was fixed and this one was not, which is worse than
+        either being wrong on its own: a caller comparing them would find the
+        refusal on one and conclude the other was answering from evidence.
+
+        A `RunRecord` carries provenance and no trades, so there is nothing here
+        to judge. The verdict a caller wants is over a *strategy*, whose
+        backtests carry a real ledger, and it lives in the dossier.
+        """
         item = app.state.ledger.get_run(run_id)
         if item is None:
             raise HTTPException(status_code=404, detail={"code": "run_not_found"})
-        demo_pnl = (80, -25, 95, -30, 70, -20, 110, -35, 60, 45, -15, 85) * 3
-        result = Judge().evaluate(
-            JudgeInput(
-                run_id=item.run_id,
-                tier=item.tier,
-                pnl=demo_pnl,
-                trial_count=4,
-                data_gate_passed=True,
-                preregistered=True,
-                implementation_tests_passed=True,
-            )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "no_judgeable_evidence",
+                "reason": (
+                    "A run record carries provenance, not trades, so there is nothing "
+                    "here to judge. This route previously answered with a hard-coded "
+                    "P&L series and a real judge verdict over it."
+                ),
+                "run_id": item.run_id,
+                "tier": item.tier,
+                "judge_instead": [
+                    "/api/v1/strategies/{strategy_id}/dossier",
+                    "/api/v1/strategies/{strategy_id}/findings",
+                ],
+            },
         )
-        return ApiEnvelope(data=result)
 
     @app.get("/api/v1/analysis/{run_id}", response_model=ApiEnvelope[dict[str, Any]])
     def analysis(run_id: str) -> ApiEnvelope[dict[str, Any]]:
@@ -220,8 +238,9 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         items = load_rules(ROOT / "rules")
         return ApiEnvelope(data=items, meta={"total": len(items), "runnable": 0})
 
-    @app.get("/api/v1/prop/simulations/{run_id}", response_model=ApiEnvelope[PropSimulation])
-    def prop_simulation(run_id: str, rule_id: str) -> ApiEnvelope[PropSimulation]:
+    @app.get("/api/v1/prop/simulations/{run_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def prop_simulation(run_id: str, rule_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Refuses. A prop simulation needs a real daily P&L series."""
         run = app.state.ledger.get_run(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail={"code": "run_not_found"})
@@ -231,37 +250,62 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         rule = rules.get(rule_id)
         if rule is None:
             raise HTTPException(status_code=404, detail={"code": "rule_not_found"})
-        # A prop evaluation cannot be estimated from a handful of days, so the
-        # fixture carries a realistic-length daily series.
-        demo_pnl = tuple(float(v) for v in np.random.default_rng(20260901).normal(35.0, 320.0, 90))
-        result = simulate_prop_paths(run.run_id, rule, demo_pnl, paths=300, allow_unverified=True)
-        return ApiEnvelope(data=result, meta={"rule_locked": True, "research_override": True})
+        # This route used to draw ninety daily P&L figures from a seeded normal
+        # distribution and run them through the real prop simulator, returning a
+        # pass rate, a risk of ruin and a drawdown distribution — for a run that
+        # has no trades at all. The numbers were invented; the machinery that
+        # turned them into probabilities was not, which is what made the output
+        # indistinguishable from a result.
+        #
+        # `POST /api/v1/strategies/{id}/prop` does this properly: it reads the
+        # strategy's actual trade ledger, derives daily P&L from it, and refuses
+        # when the ledger does not span enough trading days.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "no_trades_to_simulate",
+                "reason": (
+                    "A run record carries provenance, not trades, so there is no daily "
+                    "P&L series here to simulate against a prop rule set. This route "
+                    "previously answered with ninety normally-distributed figures."
+                ),
+                "run_id": run.run_id,
+                "rule_id": rule.rule_id,
+                "simulate_instead": [
+                    "/api/v1/strategies/{strategy_id}/prop",
+                    "/api/v1/prop/matrix",
+                ],
+            },
+        )
 
-    @app.get("/api/v1/agents/{run_id}", response_model=ApiEnvelope[DebateReport])
-    def agents(run_id: str) -> ApiEnvelope[DebateReport]:
+    @app.get("/api/v1/agents/{run_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def agents(run_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Refuses. A debate needs a verdict, and a verdict needs trades."""
         item = app.state.ledger.get_run(run_id)
         if item is None:
             raise HTTPException(status_code=404, detail={"code": "run_not_found"})
-        judged = Judge().evaluate(
-            JudgeInput(
-                run_id=item.run_id,
-                tier=item.tier,
-                pnl=(80, -25, 95, -30, 70, -20, 110, -35, 60, 45, -15, 85) * 3,
-                trial_count=4,
-                data_gate_passed=True,
-                preregistered=True,
-                implementation_tests_passed=True,
-            )
-        )
-        return ApiEnvelope(
-            data=build_debate(judged),
-            meta={
-                "narrative_can_change_verdict": False,
-                # The ledger stores run contracts, not trade series, so the
-                # seeded sample run is judged on the sample P&L above. The
-                # specialist positions below are derived from that verdict.
-                "verdict_source": "sample_series",
+        # The specialists argue about a verdict, and a verdict needs trades. This
+        # route used to manufacture them: the same twelve-value series repeated
+        # three times, judged with `data_gate_passed`, `preregistered` and
+        # `implementation_tests_passed` all asserted rather than read. The
+        # resulting debate was a real `DebateReport` — role by role, stance by
+        # stance, with confidences — about a run that had never traded. A
+        # `verdict_source: "sample_series"` note in the metadata does not make
+        # the body of the response any less a fabrication, because it is the
+        # body that gets read.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "no_verdict_to_review",
+                "reason": (
+                    "A run record carries provenance, not trades, so there is no "
+                    "verdict for the specialists to take positions on. This route "
+                    "previously answered with a debate over a hard-coded P&L series."
+                ),
+                "run_id": item.run_id,
+                "tier": item.tier,
                 "labels": list(item.labels),
+                "review_instead": ["/api/v1/strategies/{strategy_id}/dossier"],
             },
         )
 

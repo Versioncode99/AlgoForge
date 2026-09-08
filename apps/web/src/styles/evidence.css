@@ -145,3 +145,58 @@
 .experiment-failure { color: var(--fail) !important; font-size: 10px !important; letter-spacing: .05em; }
 .experiment-toggle { display: flex; align-items: center; gap: var(--sp-2); color: var(--fg-1); font-size: 13px; }
 .experiment-note { color: var(--fg-2); font-size: 12px; margin: 0; }
+
+/* ── findings ────────────────────────────────────────────────────────────────
+   Severity is carried by a left rule and a word, never by colour alone: the
+   whole point of the layer is that "not measured" reads differently from
+   "failed", and a reader who cannot separate two hues would lose exactly that
+   distinction. NOT_MEASURED is deliberately neutral rather than a paler red. */
+.evidence-headline {
+  margin: 0; color: var(--fg-0); font-size: var(--fs-base); line-height: 1.5; max-width: 90ch;
+}
+.evidence-none { margin: 0; color: var(--fg-2); font-size: var(--fs-xs); max-width: 82ch; }
+
+.evidence-findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; background: var(--line); }
+.evidence-finding { background: var(--bg-1); border-left: 2px solid var(--line-strong); }
+.evidence-finding.is-critical { border-left-color: var(--verdict-fail); }
+.evidence-finding.is-high { border-left-color: var(--warn); }
+.evidence-finding.is-not_measured { border-left-color: var(--fg-3); }
+.evidence-finding.is-info { border-left-color: var(--verdict-pass); }
+
+.evidence-finding-head {
+  display: flex; align-items: baseline; gap: var(--sp-2); width: 100%;
+  padding: var(--sp-2) var(--sp-3); background: none; border: 0; text-align: left;
+  font: inherit; color: inherit; cursor: pointer;
+}
+.evidence-finding-head:hover { background: var(--bg-2); }
+.evidence-finding-head:focus-visible { outline: 1px solid var(--brand); outline-offset: -1px; }
+
+.evidence-finding-sev {
+  flex: 0 0 auto; min-width: 96px; font-size: var(--fs-nano); letter-spacing: .06em;
+  text-transform: uppercase; color: var(--fg-2);
+}
+.is-critical > .evidence-finding-head .evidence-finding-sev { color: var(--verdict-fail); }
+.is-high > .evidence-finding-head .evidence-finding-sev { color: var(--warn); }
+.evidence-finding-head strong { flex: 0 0 auto; color: var(--fg-1); font-size: var(--fs-micro); }
+.evidence-finding-headline {
+  flex: 1 1 auto; color: var(--fg-0); font-size: var(--fs-xs); line-height: 1.45;
+}
+.evidence-finding-head em {
+  flex: 0 0 auto; font-style: normal; color: var(--fg-3); font-size: var(--fs-nano);
+  letter-spacing: .05em; text-transform: uppercase;
+}
+
+.evidence-finding-body {
+  display: grid; gap: var(--sp-2); padding: 0 var(--sp-3) var(--sp-3) calc(96px + var(--sp-4));
+}
+.evidence-finding-body p { margin: 0; color: var(--fg-1); font-size: var(--fs-xs); line-height: 1.55; max-width: 88ch; }
+.evidence-finding-body p span {
+  display: block; color: var(--fg-3); font-size: var(--fs-nano); letter-spacing: .06em;
+  text-transform: uppercase; margin-bottom: 2px;
+}
+.evidence-finding-body small { color: var(--fg-3); font-size: var(--fs-nano); }
+
+@media (max-width: 900px) {
+  .evidence-finding-head { flex-wrap: wrap; }
+  .evidence-finding-body { padding-left: var(--sp-3); }
+}

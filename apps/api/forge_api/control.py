@@ -409,7 +409,8 @@ def build_control_router(
                     [topic.strip()[:240] for topic in body.research_topics if topic.strip()]
                     or current.research_loop.topics
                 )
-                if body.research_topics is not None else current.research_loop.topics,
+                if body.research_topics is not None
+                else current.research_loop.topics,
             ),
             default_dataset=body.default_dataset or current.default_dataset,
             engine_cycle_seconds=body.engine_cycle_seconds or current.engine_cycle_seconds,
@@ -560,9 +561,7 @@ def build_control_router(
             },
         )
 
-    @router.get(
-        "/strategies/{strategy_id}/dossier", response_model=ApiEnvelope[dict[str, Any]]
-    )
+    @router.get("/strategies/{strategy_id}/dossier", response_model=ApiEnvelope[dict[str, Any]])
     def strategy_dossier(strategy_id: str) -> ApiEnvelope[dict[str, Any]]:
         """Everything known about one candidate, assembled from existing records."""
         from forge_api.dossier import build_dossier
@@ -579,9 +578,7 @@ def build_control_router(
                 strategy_id=strategy_id,
             )
         except KeyError as exc:
-            raise HTTPException(
-                status_code=404, detail=f"No strategy '{strategy_id}'."
-            ) from exc
+            raise HTTPException(status_code=404, detail=f"No strategy '{strategy_id}'.") from exc
         return ApiEnvelope(
             data=data,
             meta={
@@ -590,6 +587,48 @@ def build_control_router(
                     for name, value in data.items()
                     if isinstance(value, dict) and value.get("available")
                 )
+            },
+        )
+
+    @router.get(
+        "/strategies/{strategy_id}/findings",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def strategy_findings(strategy_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """The verdict's gate ladder, ranked and explained.
+
+        Presentation only. `forge.judge.explain` copies the decision, the grade
+        and every gate status through untouched and cannot alter any of them, so
+        this route can never disagree with the dossier it reads. It exists
+        because `G5 INCONCLUSIVE DSR_NOT_MEASURABLE` is correct and nearly
+        useless to somebody deciding whether to keep working on a strategy.
+        """
+        from forge_api.dossier import build_dossier
+
+        try:
+            data = build_dossier(
+                root=root,
+                library=library,
+                store=store,
+                experiments=engine.experiments,
+                memory=engine.memory,
+                snapshots=engine.snapshots,
+                scope=engine._scope(),
+                strategy_id=strategy_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"No strategy '{strategy_id}'.") from exc
+        section: dict[str, Any] = data["findings"]
+        return ApiEnvelope(
+            data=section,
+            meta={
+                # Counts, so a caller can see the shape of the answer without
+                # reading it. Never a score: the verdict already carries a grade
+                # and a second one would invite quoting the kinder of the two.
+                "critical": sum(
+                    1 for item in section.get("findings", []) if item["severity"] == "CRITICAL"
+                ),
+                "unmeasured": section.get("unmeasured", 0),
             },
         )
 
@@ -900,10 +939,7 @@ def build_control_router(
             },
         )
 
-
-    def _action(
-        name: str, arguments: dict[str, Any], *, confirmed: bool = False
-    ) -> dict[str, Any]:
+    def _action(name: str, arguments: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
         """Call an action and turn its refusal into the right HTTP status.
 
         An ActionError is a refusal with a reason written for a person, so it is
@@ -916,9 +952,6 @@ def build_control_router(
             return actions.call(name, arguments, confirmed=confirmed)
         except ActionError as exc:
             raise HTTPException(409, {"code": "action_refused", "reason": str(exc)}) from exc
-
-
-
 
     @router.get("/data-health", response_model=ApiEnvelope[list[dict[str, Any]]])
     def data_health() -> ApiEnvelope[list[dict[str, Any]]]:
@@ -936,9 +969,7 @@ def build_control_router(
         try:
             return ApiEnvelope(data=market.health(dataset, rebuild=rebuild))
         except ProviderError as exc:
-            raise HTTPException(
-                404, {"code": "unknown_dataset", "reason": str(exc)}
-            ) from exc
+            raise HTTPException(404, {"code": "unknown_dataset", "reason": str(exc)}) from exc
 
     # ── charting ─────────────────────────────────────────────────────────────
     @router.get("/timeframes", response_model=ApiEnvelope[list[dict[str, Any]]])
@@ -1031,9 +1062,9 @@ def build_control_router(
     ) -> ApiEnvelope[dict[str, Any]]:
         """One trade, with the chain back to the run that produced it."""
         try:
-            return ApiEnvelope(data=ledger_view.inspect(
-                strategy_id, trade_id, backtest_id=backtest_id
-            ))
+            return ApiEnvelope(
+                data=ledger_view.inspect(strategy_id, trade_id, backtest_id=backtest_id)
+            )
         except LedgerError as exc:
             raise HTTPException(404, {"code": "trade_not_found", "reason": str(exc)}) from exc
 
@@ -1097,9 +1128,7 @@ def build_control_router(
                 attribution=attribution,
             )
         except (LedgerError, ValueError) as exc:
-            raise HTTPException(
-                409, {"code": "resample_unavailable", "reason": str(exc)}
-            ) from exc
+            raise HTTPException(409, {"code": "resample_unavailable", "reason": str(exc)}) from exc
         return ApiEnvelope(
             data={
                 **comparison.model_dump(mode="json"),
@@ -1148,9 +1177,7 @@ def build_control_router(
                 note=body.note,
             )
         except LabError as exc:
-            raise HTTPException(
-                422, {"code": "analysis_unavailable", "reason": str(exc)}
-            ) from exc
+            raise HTTPException(422, {"code": "analysis_unavailable", "reason": str(exc)}) from exc
         return ApiEnvelope(
             data=payload,
             meta={
@@ -1160,9 +1187,7 @@ def build_control_router(
         )
 
     @router.get("/lab/artifacts", response_model=ApiEnvelope[list[dict[str, Any]]])
-    def lab_artifacts(
-        strategy_id: str = "", limit: int = 100
-    ) -> ApiEnvelope[list[dict[str, Any]]]:
+    def lab_artifacts(strategy_id: str = "", limit: int = 100) -> ApiEnvelope[list[dict[str, Any]]]:
         """Questions that have been asked, newest first."""
         rows = research_lab.store.list(strategy_id, limit)
         return ApiEnvelope(
@@ -1177,9 +1202,7 @@ def build_control_router(
             raise HTTPException(404, {"code": "artifact_not_found"})
         return ApiEnvelope(data=payload, meta={"is_evidence": False})
 
-    @router.delete(
-        "/lab/artifacts/{artifact_id}", response_model=ApiEnvelope[dict[str, Any]]
-    )
+    @router.delete("/lab/artifacts/{artifact_id}", response_model=ApiEnvelope[dict[str, Any]])
     def lab_delete(artifact_id: str) -> ApiEnvelope[dict[str, Any]]:
         """Discard a stored analysis.
 
@@ -1198,9 +1221,7 @@ def build_control_router(
             },
         )
 
-    @router.get(
-        "/lab/artifacts/{artifact_id}/trades", response_model=ApiEnvelope[dict[str, Any]]
-    )
+    @router.get("/lab/artifacts/{artifact_id}/trades", response_model=ApiEnvelope[dict[str, Any]])
     def lab_drilldown(
         artifact_id: str, coords: str, limit: int = 500
     ) -> ApiEnvelope[dict[str, Any]]:
@@ -1255,7 +1276,6 @@ def build_control_router(
             meta={"count": workspaces.count()},
         )
 
-
     @router.post("/workspaces/build", response_model=ApiEnvelope[dict[str, Any]])
     def build_workspace(body: BuildWorkspaceRequest) -> ApiEnvelope[dict[str, Any]]:
         """Build a workspace from a stated purpose.
@@ -1267,8 +1287,14 @@ def build_control_router(
         """
         arguments = {"name": body.name}
         for field in (
-            "purpose", "markets", "style", "sessions",
-            "research", "risk", "datasets", "preferred_export",
+            "purpose",
+            "markets",
+            "style",
+            "sessions",
+            "research",
+            "risk",
+            "datasets",
+            "preferred_export",
         ):
             value = getattr(body, field)
             if value:

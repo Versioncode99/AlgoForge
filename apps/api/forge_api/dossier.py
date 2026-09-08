@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from forge.agents import build_debate
-from forge.judge import Judge, JudgeInput
+from forge.judge import Judge, JudgeInput, explain
 from forge.judge.models import Verdict
 
 
@@ -113,6 +113,20 @@ def _verdict_section(verdict: Verdict | None, reason: str) -> dict[str, Any]:
             "unmeasured_gates": [g.gate for g in verdict.gates if g.status == "INCONCLUSIVE"],
         }
     )
+
+
+def _findings_section(verdict: Verdict | None, reason: str) -> dict[str, Any]:
+    """The same verdict, ranked and explained. Adds nothing and decides nothing.
+
+    `forge.judge.explain` is a pure function of a finished verdict: it cannot
+    move a decision, a grade or a gate status, and it never converts an
+    unmeasured gate into a shortfall. That constraint is what makes it safe to
+    put a readable summary next to the gate ladder — the ladder stays the
+    record, and this is a reading of it.
+    """
+    if verdict is None:
+        return _absent(reason)
+    return _section(explain(verdict).model_dump(mode="json"))
 
 
 def _limitations(verdict: Verdict | None) -> list[str]:
@@ -313,6 +327,7 @@ def build_dossier(
         "strategy": _strategy_section(spec),
         "backtests": _runs_section(runs),
         "verdict": _verdict_section(verdict, verdict_absent),
+        "findings": _findings_section(verdict, verdict_absent),
         "validation": _evidence_section(load_evidence(root, strategy_id)),
         "provenance": _experiment_section(experiments, spec, scope),
         "research_memory": _memory_section(memory, scope, spec.template),
