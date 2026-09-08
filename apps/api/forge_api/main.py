@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import uvicorn
@@ -13,7 +14,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from forge.agents import DebateReport, build_debate
-from forge.analytics import NormalAnalysis, build_normal_analysis
 from forge.contracts.hashing import content_hash
 from forge.contracts.models import ApiEnvelope, Preregistration, RunRecord
 from forge.data.live import load_keys
@@ -148,24 +148,43 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         )
         return ApiEnvelope(data=result)
 
-    @app.get("/api/v1/analysis/{run_id}", response_model=ApiEnvelope[NormalAnalysis])
-    def analysis(run_id: str) -> ApiEnvelope[NormalAnalysis]:
+    @app.get("/api/v1/analysis/{run_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def analysis(run_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Refuses, and says where the real analysis lives.
+
+        This route used to build a `NormalAnalysis` from a hard-coded twelve-value
+        P&L series repeated three times, run it through the judge, and return the
+        verdict — over HTTP, for any run id that existed. Every number in the
+        response was invented, and the verdict attached to them was a real
+        judge verdict, which made the invention indistinguishable from evidence.
+
+        A `RunRecord` carries provenance — hashes, tier, timestamps — and no P&L
+        at all, so there is genuinely nothing here to analyse. The analysis a
+        caller wants is over a *backtest*, which does carry trades, and lives at
+        the routes named below.
+        """
         item = app.state.ledger.get_run(run_id)
         if item is None:
             raise HTTPException(status_code=404, detail={"code": "run_not_found"})
-        demo_pnl = (80, -25, 95, -30, 70, -20, 110, -35, 60, 45, -15, 85) * 3
-        judged = Judge().evaluate(
-            JudgeInput(
-                run_id=item.run_id,
-                tier=item.tier,
-                pnl=demo_pnl,
-                trial_count=4,
-                data_gate_passed=True,
-                preregistered=True,
-                implementation_tests_passed=True,
-            )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "no_analysable_evidence",
+                "reason": (
+                    "A run record carries provenance, not a P&L series, so there is "
+                    "nothing here to analyse. This route previously answered with a "
+                    "hard-coded series and a real judge verdict over it."
+                ),
+                "run_id": item.run_id,
+                "tier": item.tier,
+                "analyse_instead": [
+                    "/api/v1/strategies/{strategy_id}/trades",
+                    "/api/v1/strategies/{strategy_id}/regimes",
+                    "/api/v1/strategies/{strategy_id}/resample",
+                    "/api/v1/strategies/{strategy_id}/dossier",
+                ],
+            },
         )
-        return ApiEnvelope(data=build_normal_analysis(item.run_id, judged, demo_pnl))
 
     @app.get("/api/v1/prop/rules", response_model=ApiEnvelope[list[PropRuleSet]])
     def prop_rules() -> ApiEnvelope[list[PropRuleSet]]:

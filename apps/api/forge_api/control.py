@@ -8,6 +8,9 @@ from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
+from forge.analytics.regime import RegimeSettings
+from forge.analytics.regime import attribute as attribute_trades
+from forge.analytics.resample import compare as compare_resamples
 from forge.capabilities import nautilus_capability
 from forge.contracts.models import ApiEnvelope
 from forge.data.live import ProviderError
@@ -30,6 +33,8 @@ from forge_api.agent_service import AgentService
 from forge_api.assistant import Assistant
 from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.jobs import REGISTRY, JobHandle
+from forge_api.ledger_view import LedgerError, TradeLedgerService
+from forge_api.ledger_view import _TradeShim as _Shim
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
 from forge_api.opencode import OPENCODE_GO_DEFAULT_URL
 from forge_api.orchestrator import Orchestrator
@@ -265,6 +270,10 @@ def build_control_router(
         workspace.data / "missions.db", actions, agents, settings_store, log, mirror
     )
     assistant = Assistant(root, library, store, log, settings_store, actions)
+    # The trade ledger view: the strategy's own trades, keyed to timestamps so a
+    # chart can place them at any timeframe. Holds the regime cache, because
+    # classifying millions of bars per request would make the inspector unusable.
+    ledger_view = TradeLedgerService(market, store, library)
     agents.context = lambda: {
         "running": engine.state.running,
         "dataset": engine.state.config.dataset,
@@ -938,6 +947,155 @@ def build_control_router(
         return ApiEnvelope(
             data=payload,
             meta={"convention": payload["convention"], "authority": payload["authority"]},
+        )
+
+    # ── strategy trades on the chart ─────────────────────────────────────────
+    # The feature this whole layer exists for: open a strategy, see what it
+    # actually did, over the actual candles. Everything served here is read from
+    # a backtest artifact — no value is recomputed, and none is invented.
+
+    @router.get("/strategies/{strategy_id}/trades", response_model=ApiEnvelope[dict[str, Any]])
+    def strategy_trades(
+        strategy_id: str,
+        backtest_id: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        side: str = "all",
+        outcome: str = "all",
+        regime: str = "all",
+        exit_reason: str = "all",
+        limit: int = 4000,
+        with_regimes: bool = True,
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """The strategy's historical trades, as chart markers.
+
+        Timestamps rather than bar indices, so the markers land correctly at any
+        timeframe. A run written before excursion and levels were recorded
+        reports them as null, and the chart draws nothing for them rather than
+        drawing a zero.
+        """
+        try:
+            payload = ledger_view.ledger(
+                strategy_id,
+                backtest_id=backtest_id,
+                start=start,
+                end=end,
+                side=side,
+                outcome=outcome,
+                regime=regime,
+                exit_reason=exit_reason,
+                limit=max(1, min(int(limit), 20_000)),
+                with_regimes=with_regimes,
+            )
+        except LedgerError as exc:
+            raise HTTPException(404, {"code": "ledger_unavailable", "reason": str(exc)}) from exc
+        return ApiEnvelope(
+            data=payload,
+            meta={
+                "source": "backtest artifact",
+                "note": (
+                    "Every marker is a trade the backtest recorded. Levels are the "
+                    "ones frozen when the position opened, not recomputed."
+                ),
+            },
+        )
+
+    @router.get(
+        "/strategies/{strategy_id}/trades/{trade_id}",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def trade_detail(
+        strategy_id: str, trade_id: str, backtest_id: str | None = None
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """One trade, with the chain back to the run that produced it."""
+        try:
+            return ApiEnvelope(data=ledger_view.inspect(
+                strategy_id, trade_id, backtest_id=backtest_id
+            ))
+        except LedgerError as exc:
+            raise HTTPException(404, {"code": "trade_not_found", "reason": str(exc)}) from exc
+
+    @router.get("/strategies/{strategy_id}/regimes", response_model=ApiEnvelope[dict[str, Any]])
+    def strategy_regimes(
+        strategy_id: str,
+        backtest_id: str | None = None,
+        attribution: str = "entry",
+        descriptive: bool = False,
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """Where this strategy's P&L actually came from, by market regime.
+
+        `descriptive=true` takes volatility thresholds from the whole series,
+        which uses information later than the bars it labels. It is available
+        for slicing results already produced and is marked in every response
+        that uses it; it is never the default.
+        """
+        if attribution not in ("entry", "dominant", "exit"):
+            raise HTTPException(
+                422,
+                {"code": "bad_attribution", "reason": "one of entry, dominant, exit"},
+            )
+        try:
+            payload = ledger_view.regime_report(
+                strategy_id,
+                backtest_id=backtest_id,
+                attribution=attribution,
+                descriptive=descriptive,
+            )
+        except LedgerError as exc:
+            raise HTTPException(404, {"code": "regimes_unavailable", "reason": str(exc)}) from exc
+        return ApiEnvelope(data=payload, meta={"attribution": attribution})
+
+    @router.get("/strategies/{strategy_id}/resample", response_model=ApiEnvelope[dict[str, Any]])
+    def strategy_resample(
+        strategy_id: str,
+        backtest_id: str | None = None,
+        paths: int = 2000,
+        seed: int = 20260908,
+        attribution: str = "entry",
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """One backtest turned into a distribution, twice over.
+
+        IID and regime-aware, side by side. The gap between them is the point:
+        losses cluster because the conditions that cause them persist, and an
+        IID study of a regime-dependent strategy understates its drawdown.
+        """
+        try:
+            payload = ledger_view.resolve(strategy_id, backtest_id)
+            dataset = str(payload.get("dataset_key") or "")
+            if not dataset:
+                raise LedgerError(
+                    "this backtest does not record which dataset it ran on, so its "
+                    "regimes cannot be classified"
+                )
+            series, _ = ledger_view.regimes.get(dataset, RegimeSettings())
+            trades = _Shim.many(payload)
+            if len(trades) < 2:
+                raise LedgerError("resampling needs at least two trades")
+            marks = attribute_trades(trades, series)
+            comparison = compare_resamples(
+                trades,
+                marks,
+                series,
+                paths=max(100, min(int(paths), 20_000)),
+                seed=int(seed),
+                attribution=attribution,
+            )
+        except (LedgerError, ValueError) as exc:
+            raise HTTPException(
+                409, {"code": "resample_unavailable", "reason": str(exc)}
+            ) from exc
+        return ApiEnvelope(
+            data={
+                **comparison.model_dump(mode="json"),
+                "strategy_id": strategy_id,
+                "backtest_id": payload.get("backtest_id"),
+            },
+            meta={
+                "note": (
+                    "Resampling reorders the strategy's own realised trades. No "
+                    "value here was invented."
+                )
+            },
         )
 
     # ── workspaces ───────────────────────────────────────────────────────────

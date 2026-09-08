@@ -10,10 +10,28 @@ from forge.judge import Verdict
 
 
 class RegimeSummary(FrozenModel):
+    """A slice of the P&L series, named for what it is.
+
+    This used to carry `name` values of "TREND", "HIGH_VOL", "RANGE" and
+    "LOW_VOL" over four equal chronological chunks of the trade list. Nothing
+    measured trend and nothing measured volatility — the first quarter of the
+    trades was called TREND because it came first — so a reader was shown a
+    claim about the market that had never been made about the market.
+
+    Real regime attribution needs the *bars*, which a P&L series does not carry.
+    It lives in `forge.analytics.regime`, which measures trend and volatility
+    from price and refuses to label a bar it has too little history for. What
+    survives here is what a P&L series can honestly support: performance across
+    equal parts of the run, in order, which answers "did this decay?" and
+    nothing else.
+    """
+
     name: str
     trade_count: int
     net_pnl: float
     confidence: str
+    #: What the slice actually is, so no caller can read a market claim into it.
+    basis: str = "chronological_quarter"
 
 
 class RiskAnalysis(FrozenModel):
@@ -102,7 +120,10 @@ def build_normal_analysis(
         longest_losing_streak=_longest_losing_streak(pnl),
         warnings=tuple(warnings),
     )
-    labels = ("TREND", "HIGH_VOL", "RANGE", "LOW_VOL")
+    # Four equal parts of the run, in order, named for what they are. See
+    # RegimeSummary: these were previously labelled with market regimes they had
+    # never been measured against.
+    labels = ("Q1 (earliest)", "Q2", "Q3", "Q4 (latest)")
     chunks = np.array_split(pnl, len(labels))
     regimes = tuple(
         RegimeSummary(

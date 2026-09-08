@@ -1,0 +1,528 @@
+/* Strategy trades over the candles they happened on.
+
+   Density is the point. This surface has a chart, a regime breakdown, a ledger
+   and an inspector on screen at once, and a research workstation is judged on
+   how much of that a person can hold in view — so padding is measured in single
+   steps, tables are compact, and nothing is given a card it did not earn.
+
+   Colour carries exactly two meanings: direction (long/short) and outcome
+   (up/down). Regime is carried by text, not by a fifth and sixth hue, because
+   four regimes plus two outcomes in colour is a chart nobody can read. */
+
+.strategy-chart-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3, 12px);
+  min-height: 0;
+}
+
+/* ── the filter bar ─────────────────────────────────────────────────────── */
+
+.scv-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3, 12px);
+  padding: var(--sp-2, 8px) var(--sp-3, 12px);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.scv-bar .ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.scv-bar .ctl > span {
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.scv-bar select {
+  background: var(--bg-1);
+  color: var(--fg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  min-width: 8rem;
+}
+
+.scv-bar .chip {
+  background: var(--bg-1);
+  color: var(--fg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  padding: 5px 10px;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.scv-bar .chip.active {
+  background: var(--brand-wash);
+  border-color: var(--brand-dim);
+  color: var(--fg-0);
+}
+
+.scv-warning {
+  margin: 0;
+  padding: var(--sp-2, 8px) var(--sp-3, 12px);
+  background: var(--bg-2);
+  border-left: 2px solid var(--warn);
+  color: var(--fg-1);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.scv-note {
+  margin: var(--sp-2, 8px) 0 0;
+  color: var(--fg-3);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+/* ── layout ────────────────────────────────────────────────────────────── */
+
+.scv-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-3, 12px);
+  min-height: 0;
+}
+
+.scv-body.with-inspector {
+  grid-template-columns: minmax(0, 1fr) 22rem;
+}
+
+@media (max-width: 1360px) {
+  .scv-body.with-inspector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.scv-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3, 12px);
+  min-width: 0;
+}
+
+.strategy-chart {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* ── the trade table ───────────────────────────────────────────────────── */
+
+.scv-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-1);
+  max-height: 26rem;
+  overflow: auto;
+}
+
+.scv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+
+.scv-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line-strong);
+  padding: 5px 8px;
+  text-align: left;
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  font-weight: 600;
+}
+
+.scv-table tbody td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-1);
+  white-space: nowrap;
+}
+
+.scv-table tbody tr {
+  cursor: pointer;
+}
+
+.scv-table tbody tr:hover {
+  background: var(--bg-2);
+}
+
+.scv-table tbody tr.is-selected {
+  background: var(--brand-wash);
+  box-shadow: inset 2px 0 0 var(--brand);
+}
+
+.scv-table tbody tr:focus-visible {
+  outline: 1px solid var(--brand);
+  outline-offset: -1px;
+}
+
+.scv-table .num,
+.scv-table th.num {
+  text-align: right;
+}
+
+.scv-table td.long { color: var(--info); }
+.scv-table td.short { color: var(--s4); }
+
+/* ── regime breakdown ──────────────────────────────────────────────────── */
+
+.regime-panel {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-1);
+  padding: var(--sp-3, 12px);
+}
+
+.regime-panel > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2, 8px);
+  margin-bottom: var(--sp-3, 12px);
+}
+
+.regime-panel h3 {
+  margin: 0;
+  font-size: var(--fs-base);
+  color: var(--fg-0);
+}
+
+.regime-panel > header > span {
+  font-size: var(--fs-micro);
+  color: var(--fg-3);
+}
+
+.regime-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--sp-2, 8px);
+}
+
+.regime-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  padding: var(--sp-2, 8px) 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+  color: inherit;
+}
+
+.regime-cell:hover {
+  border-color: var(--line-strong);
+}
+
+/* A cell with too few trades to estimate from is dimmed, not hidden: the
+   strategy went there, and hiding that would overstate what was measured. */
+.regime-cell.thin {
+  opacity: 0.62;
+  border-style: dashed;
+}
+
+.rc-label {
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.rc-pnl {
+  font-size: var(--fs-lg, 16px);
+  font-weight: 600;
+}
+
+.rc-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 10px;
+  margin: 0;
+}
+
+.rc-stats div {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.rc-stats dt {
+  font-size: var(--fs-nano);
+  color: var(--fg-3);
+}
+
+.rc-stats dd {
+  margin: 0;
+  font-size: var(--fs-micro);
+  color: var(--fg-1);
+}
+
+.rc-note {
+  font-size: var(--fs-nano);
+  line-height: 1.45;
+  color: var(--fg-3);
+}
+
+.regime-matrix {
+  margin-top: var(--sp-4, 16px);
+}
+
+.regime-matrix h4 {
+  margin: 0 0 var(--sp-2, 8px);
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  font-weight: 600;
+}
+
+.regime-matrix table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+
+.regime-matrix th,
+.regime-matrix td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  color: var(--fg-1);
+}
+
+.regime-matrix th[scope='row'],
+.regime-matrix thead th:first-child {
+  text-align: left;
+  color: var(--fg-2);
+}
+
+/* The observation count sits under its percentage rather than beside it: a
+   33% built on three observations and a 33% built on three thousand are
+   different claims, and only the count separates them. */
+.regime-matrix .obs {
+  display: block;
+  font-size: var(--fs-nano);
+  color: var(--fg-3);
+}
+
+/* ── the inspector ─────────────────────────────────────────────────────── */
+
+.trade-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3, 12px);
+  padding: var(--sp-3, 12px);
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  max-height: calc(100vh - 12rem);
+  overflow: auto;
+  align-self: start;
+}
+
+.ti-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2, 8px);
+}
+
+.ti-eyebrow {
+  display: block;
+  font-size: var(--fs-nano);
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+
+.ti-head h3 {
+  margin: 2px 0 0;
+  font-size: var(--fs-base);
+  color: var(--fg-0);
+}
+
+.ti-head h3.long { color: var(--info); }
+.ti-head h3.short { color: var(--s4); }
+
+.ti-step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-micro);
+  color: var(--fg-3);
+}
+
+.ti-step button {
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  color: var(--fg-1);
+  width: 1.4rem;
+  height: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ti-step button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ti-pnl {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: var(--sp-2, 8px);
+  border-bottom: 1px solid var(--line);
+}
+
+.ti-pnl > span:first-child {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.ti-sub {
+  font-size: var(--fs-micro);
+  color: var(--fg-3);
+}
+
+.ti-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: var(--sp-2, 8px) var(--sp-3, 12px);
+}
+
+.ti-field {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ti-label {
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.ti-value {
+  font-size: var(--fs-xs);
+  color: var(--fg-0);
+  overflow-wrap: anywhere;
+}
+
+/* An unrecorded measurement and a measurement of zero are different claims. */
+.ti-value.absent {
+  color: var(--fg-3);
+  font-style: italic;
+}
+
+.ti-hint {
+  font-size: var(--fs-nano);
+  color: var(--fg-3);
+  line-height: 1.4;
+}
+
+.ti-section h4 {
+  margin: 0 0 var(--sp-2, 8px);
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  font-weight: 600;
+}
+
+.ti-note {
+  margin: var(--sp-2, 8px) 0 0;
+  font-size: var(--fs-nano);
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+
+.ti-note.warn { color: var(--warn); }
+
+.ti-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-micro);
+}
+
+.ti-table td {
+  padding: 2px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-1);
+}
+
+.ti-table td.num { text-align: right; }
+
+.ti-provenance dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--sp-2, 8px);
+  margin: 0;
+}
+
+.ti-provenance dl > div {
+  display: contents;
+}
+
+.ti-provenance dt {
+  font-size: var(--fs-nano);
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ti-provenance dd {
+  margin: 0;
+  font-size: var(--fs-nano);
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+
+.ti-close {
+  margin-left: 4px;
+  font-size: var(--fs-base);
+}
+
+/* ── shared tone classes ───────────────────────────────────────────────── */
+
+.strategy-chart-view .up,
+.trade-inspector .up { color: var(--pass); }
+
+.strategy-chart-view .down,
+.trade-inspector .down { color: var(--fail); }
+
+.strategy-chart .chart-provenance .warn { color: var(--warn); }

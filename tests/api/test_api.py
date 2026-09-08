@@ -21,9 +21,15 @@ def test_health_capabilities_and_seeded_run(tmp_path) -> None:
         assert verdict["decision"] == "FAIL"
         assert any(gate["gate"] == "G10" and gate["status"] == "FAIL" for gate in verdict["gates"])
         assert len(verdict["traces"]) == len(verdict["metrics"])
-        analysis = client.get(f"/api/v1/analysis/{run_id}").json()["data"]
-        assert analysis["risk"]["path_count"] == 240
-        assert len(analysis["regimes"]) == 4
+        # This route used to answer with a hard-coded P&L series run through the
+        # judge, so every number in it was invented and the verdict attached to
+        # them was real. A run record carries provenance and no P&L, so the only
+        # honest answer is a refusal that names where the real analysis lives.
+        analysis = client.get(f"/api/v1/analysis/{run_id}")
+        assert analysis.status_code == 409
+        detail = analysis.json()["detail"]
+        assert detail["code"] == "no_analysable_evidence"
+        assert any("/trades" in route for route in detail["analyse_instead"])
         rules = client.get("/api/v1/prop/rules").json()
         assert rules["meta"]["runnable"] == 0
         rule_id = rules["data"][0]["rule_id"]
