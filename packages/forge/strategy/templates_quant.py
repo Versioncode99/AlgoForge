@@ -68,8 +68,8 @@ VWAP_SIGMA_REVERSION = Template(
     source='''"""VWAP Sigma Reversion.
 
 Session-anchored VWAP with volume-weighted sigma bands, gated by an ADX regime
-filter. Long when price is stretched below the lower band in a ranging market;
-exit on the VWAP touch, an ATR stop, or a time stop.
+filter. Enters against a stretch away from VWAP in a ranging market, from either
+side; exits on the VWAP touch, an ATR stop, or a time stop.
 """
 
 
@@ -83,8 +83,11 @@ def entry_signal(w, p):
     adx = w.adx(14)
     if adx != adx or adx > float(p["adx_max"]):
         return None
-    if w.closes[-1] < vwap - float(p["entry_sigma"]) * sigma:
+    band = float(p["entry_sigma"]) * sigma
+    if w.closes[-1] < vwap - band:
         return 1
+    if w.closes[-1] > vwap + band:
+        return -1
     return None
 
 
@@ -92,11 +95,18 @@ def exit_signal(w, p, pos):
     if w.index - pos.entry_index >= int(p["max_bars"]):
         return "max_bars"
     vwap, _ = w.session_vwap()
-    if vwap == vwap and w.closes[-1] >= vwap:
-        return "signal"
+    if vwap == vwap:
+        if pos.direction == 1 and w.closes[-1] >= vwap:
+            return "signal"
+        if pos.direction == -1 and w.closes[-1] <= vwap:
+            return "signal"
     atr = w.atr(14)
-    if atr == atr and w.lows[-1] <= pos.entry_price - float(p["stop_atr"]) * atr:
-        return "stop"
+    if atr == atr:
+        stop = pos.entry_price - float(p["stop_atr"]) * atr * pos.direction
+        if pos.direction == 1 and w.lows[-1] <= stop:
+            return "stop"
+        if pos.direction == -1 and w.highs[-1] >= stop:
+            return "stop"
     return None
 ''',
 )
@@ -163,8 +173,11 @@ OPENING_RANGE_BREAK = Template(
     source='''"""Opening Range Breakout.
 
 Builds the opening range from the first N bars of each session, then takes a
-close above it while the longer-term average agrees. Wide stop, tighter target —
-the convex geometry used in the prop-account variants.
+close outside it while the longer-term average agrees with the direction. Wide
+stop, tighter target - the convex geometry used in the prop-account variants.
+
+Both sides: a session that opens and sells off is the same structure as one that
+opens and rallies, and a long-only version of this measures the index drift.
 """
 
 
@@ -180,18 +193,31 @@ def entry_signal(w, p):
     bias = w.sma(int(p["bias_period"]))
     if bias != bias:
         return None
-    if w.closes[-1] > high and w.closes[-1] > bias:
+    close = w.closes[-1]
+    if close > high and close > bias:
         return 1
+    if close < low and close < bias:
+        return -1
     return None
 
 
 def exit_signal(w, p, pos):
     atr = w.atr(14)
     if atr == atr:
-        if w.highs[-1] >= pos.entry_price + float(p["target_atr"]) * atr:
-            return "signal"
-        if w.lows[-1] <= pos.entry_price - float(p["stop_atr"]) * atr:
-            return "stop"
+        target = pos.entry_price + float(p["target_atr"]) * atr * pos.direction
+        stop = pos.entry_price - float(p["stop_atr"]) * atr * pos.direction
+        # Stop checked first: a bar that reached both is reported as the stop,
+        # because the order inside the bar is unknown.
+        if pos.direction == 1:
+            if w.lows[-1] <= stop:
+                return "stop"
+            if w.highs[-1] >= target:
+                return "signal"
+        else:
+            if w.highs[-1] >= stop:
+                return "stop"
+            if w.lows[-1] <= target:
+                return "signal"
     # Never carry a session trade into the next session.
     if w.bars_since_session_open() < w.index - pos.entry_index:
         return "signal"
@@ -251,8 +277,11 @@ LIQUIDITY_SWEEP_RECLAIM = Template(
     warmup_bars=280,
     source='''"""Liquidity Sweep Reclaim.
 
-Finds a swing low, waits for price to trade through it and then close back above
-it within a short window. The sweep alone is not the signal; the reclaim is.
+Finds a swing extreme, waits for price to trade through it and then close back
+inside within a short window. The sweep alone is not the signal; the reclaim is.
+
+Mirrored: a sweep of a swing high that fails and closes back below it is the
+same event as a swept low that closes back above, and both are the mechanism.
 """
 
 import numpy as np
@@ -264,12 +293,18 @@ def entry_signal(w, p):
     if w.closes.size < lookback + reclaim + 2:
         return None
 
-    # The level is the low of the window that ended before the reclaim window,
-    # so the sweep itself cannot define the level it swept.
-    level = float(np.min(w.lows[-(lookback + reclaim) : -reclaim]))
-    swept = bool(np.any(w.lows[-reclaim:] < level))
-    if swept and w.closes[-1] > level:
+    # The levels are taken from the window that ended before the reclaim window,
+    # so a sweep cannot define the level it swept.
+    low_level = float(np.min(w.lows[-(lookback + reclaim) : -reclaim]))
+    high_level = float(np.max(w.highs[-(lookback + reclaim) : -reclaim]))
+    close = w.closes[-1]
+
+    swept_low = bool(np.any(w.lows[-reclaim:] < low_level))
+    if swept_low and close > low_level:
         return 1
+    swept_high = bool(np.any(w.highs[-reclaim:] > high_level))
+    if swept_high and close < high_level:
+        return -1
     return None
 
 
@@ -278,10 +313,18 @@ def exit_signal(w, p, pos):
         return "max_bars"
     atr = w.atr(14)
     if atr == atr:
-        if w.lows[-1] <= pos.entry_price - float(p["stop_atr"]) * atr:
-            return "stop"
-        if w.highs[-1] >= pos.entry_price + 2.0 * float(p["stop_atr"]) * atr:
-            return "signal"
+        stop = pos.entry_price - float(p["stop_atr"]) * atr * pos.direction
+        target = pos.entry_price + 2.0 * float(p["stop_atr"]) * atr * pos.direction
+        if pos.direction == 1:
+            if w.lows[-1] <= stop:
+                return "stop"
+            if w.highs[-1] >= target:
+                return "signal"
+        else:
+            if w.highs[-1] >= stop:
+                return "stop"
+            if w.lows[-1] <= target:
+                return "signal"
     return None
 ''',
 )
@@ -314,7 +357,8 @@ VOLATILITY_COMPRESSION_BREAK = Template(
     source='''"""Volatility Compression Break.
 
 Requires a measurable contraction in realised volatility before a prior-range
-break. The compression is the claim; the breakout is only the entry vehicle.
+break. The compression is the claim; the breakout is only the entry vehicle,
+and it is taken in whichever direction the range breaks.
 """
 
 import numpy as np
@@ -335,8 +379,11 @@ def entry_signal(w, p):
     lookback = int(p["breakout"])
     if not _compressed(w, p) or w.highs.size < lookback + 1:
         return None
-    if w.closes[-1] > float(np.max(w.highs[-lookback - 1:-1])):
+    close = w.closes[-1]
+    if close > float(np.max(w.highs[-lookback - 1:-1])):
         return 1
+    if close < float(np.min(w.lows[-lookback - 1:-1])):
+        return -1
     return None
 
 
@@ -344,8 +391,12 @@ def exit_signal(w, p, pos):
     if w.index - pos.entry_index >= int(p["max_bars"]):
         return "max_bars"
     atr = w.atr(14)
-    if atr == atr and w.lows[-1] <= pos.entry_price - float(p["stop_atr"]) * atr:
-        return "stop"
+    if atr == atr:
+        stop = pos.entry_price - float(p["stop_atr"]) * atr * pos.direction
+        if pos.direction == 1 and w.lows[-1] <= stop:
+            return "stop"
+        if pos.direction == -1 and w.highs[-1] >= stop:
+            return "stop"
     return None
 ''',
 )
@@ -373,7 +424,12 @@ VOLUME_SURGE_CONTINUATION = Template(
         ParameterSpec(name="max_bars", default=20, low=4, high=80, step=4),
     ),
     warmup_bars=280,
-    source='''"""Volume Surge Continuation."""
+    source='''"""Volume Surge Continuation.
+
+A volume surge with a wide directional body, in the direction the longer trend
+already points. Symmetric: a surge of selling into a downtrend is the same
+claim about participation as a surge of buying into an uptrend.
+"""
 
 import numpy as np
 
@@ -387,24 +443,31 @@ def entry_signal(w, p):
     if std <= 0:
         return None
     zscore = (float(w.volumes[-1]) - float(np.mean(history))) / std
+    if zscore < float(p["volume_z"]):
+        return None
     atr = w.atr(14)
     trend = w.sma(int(p["trend_period"]))
+    if atr != atr or trend != trend:
+        return None
     body = w.closes[-1] - w.opens[-1]
-    if (
-        zscore >= float(p["volume_z"])
-        and atr == atr
-        and body >= float(p["body_atr"]) * atr
-        and trend == trend
-        and w.closes[-1] > trend
-    ):
+    threshold = float(p["body_atr"]) * atr
+    if body >= threshold and w.closes[-1] > trend:
         return 1
+    if body <= -threshold and w.closes[-1] < trend:
+        return -1
     return None
 
 
 def exit_signal(w, p, pos):
     if w.index - pos.entry_index >= int(p["max_bars"]):
         return "max_bars"
-    if w.closes[-1] < w.sma(int(p["trend_period"])):
+    trend = w.sma(int(p["trend_period"]))
+    if trend != trend:
+        return None
+    # Out when price loses the trend that justified the entry.
+    if pos.direction == 1 and w.closes[-1] < trend:
+        return "signal"
+    if pos.direction == -1 and w.closes[-1] > trend:
         return "signal"
     return None
 ''',
@@ -433,7 +496,12 @@ TREND_PULLBACK_RESUME = Template(
         ParameterSpec(name="max_bars", default=45, low=10, high=160, step=5),
     ),
     warmup_bars=280,
-    source='''"""Trend Pullback Resume."""
+    source='''"""Trend Pullback Resume.
+
+A pullback to the fast average inside an established trend, entered on the
+resumption. Taken in whichever direction the trend runs: a rally back to the
+fast average in a downtrend is the same structure as a dip to it in an uptrend.
+"""
 
 
 def entry_signal(w, p):
@@ -443,10 +511,17 @@ def entry_signal(w, p):
     fast, slow, atr = w.sma(fast_n), w.sma(slow_n), w.atr(14)
     if fast != fast or slow != slow or atr != atr:
         return None
-    touched = w.lows[-1] <= fast + float(p["touch_atr"]) * atr
-    reclaimed = w.closes[-1] > fast and w.closes[-1] > w.opens[-1]
-    if fast > slow and touched and reclaimed:
-        return 1
+    touch = float(p["touch_atr"]) * atr
+    if fast > slow:
+        touched = w.lows[-1] <= fast + touch
+        reclaimed = w.closes[-1] > fast and w.closes[-1] > w.opens[-1]
+        if touched and reclaimed:
+            return 1
+    elif fast < slow:
+        touched = w.highs[-1] >= fast - touch
+        rejected = w.closes[-1] < fast and w.closes[-1] < w.opens[-1]
+        if touched and rejected:
+            return -1
     return None
 
 
@@ -454,9 +529,19 @@ def exit_signal(w, p, pos):
     if w.index - pos.entry_index >= int(p["max_bars"]):
         return "max_bars"
     atr = w.atr(14)
-    if atr == atr and w.lows[-1] <= pos.entry_price - float(p["stop_atr"]) * atr:
-        return "stop"
-    if w.sma(int(p["fast"])) < w.sma(int(p["slow"])):
+    if atr == atr:
+        stop = pos.entry_price - float(p["stop_atr"]) * atr * pos.direction
+        if pos.direction == 1 and w.lows[-1] <= stop:
+            return "stop"
+        if pos.direction == -1 and w.highs[-1] >= stop:
+            return "stop"
+    fast, slow = w.sma(int(p["fast"])), w.sma(int(p["slow"]))
+    if fast != fast or slow != slow:
+        return None
+    # Out when the trend that justified the entry has turned.
+    if pos.direction == 1 and fast < slow:
+        return "signal"
+    if pos.direction == -1 and fast > slow:
         return "signal"
     return None
 ''',

@@ -22,16 +22,24 @@ from forge.research import (
     source_data_hash,
 )
 from forge.strategy import (
+    DESCRIBED_TARGETS,
     TEMPLATES,
+    VERIFIABLE_TARGETS,
     GuardViolation,
     StrategyLibrary,
+    blueprint,
+    blueprint_catalogue,
     check_determinism,
     check_source,
+    describe_target,
     generate_bars,
     run_backtest,
     strategy_capability_catalog,
+    to_python,
 )
+from forge.strategy.ir import IRError, SessionWindow, StrategyDefinition
 from pydantic import BaseModel, Field
+from pydantic import ValidationError as PydanticValidationError
 
 from forge_api.activity import ActivityLog, BacktestStore, Level
 from forge_api.conformance_store import ensure_conformance
@@ -52,6 +60,43 @@ class CreateStrategyRequest(BaseModel):
     name: str | None = None
     symbol: str = "MNQ.SYNTH"
     market: str = "futures"
+
+
+class BlueprintRequest(BaseModel):
+    """Create a strategy from a shipped blueprint, with the usual adjustments.
+
+    The overrides are the ones a person actually asks for in a sentence: a
+    different instrument, a different session cutoff, different defaults. Any
+    deeper change is an edit to the definition, which is what
+    `DefinitionRequest` is for.
+    """
+
+    blueprint: str = Field(min_length=2, max_length=64)
+    name: str | None = Field(default=None, max_length=120)
+    symbol: str | None = Field(default=None, max_length=16)
+    parameters: dict[str, float] = Field(default_factory=dict)
+    #: Minutes from midnight UTC. `None` leaves the blueprint's own window.
+    session_start_minute: int | None = Field(default=None, ge=0, lt=1440)
+    session_end_minute: int | None = Field(default=None, ge=0, lt=1440)
+    flat_by_minute: int | None = Field(default=None, ge=0, lt=1440)
+    #: Bars used to check that the generated Python reproduces the definition.
+    #: Zero skips the check, and the response says so rather than implying it
+    #: passed.
+    verify_bars: int = Field(default=4000, ge=0, le=50_000)
+
+
+class DefinitionRequest(BaseModel):
+    """Create a strategy from a Strategy IR document.
+
+    This is the route an agent composing a strategy uses, and it is deliberately
+    the same one the interface uses. There is no agent-only path: a definition
+    that would be refused here is refused there.
+    """
+
+    definition: dict[str, Any]
+    name: str | None = Field(default=None, max_length=120)
+    symbol: str | None = Field(default=None, max_length=16)
+    verify_bars: int = Field(default=4000, ge=0, le=50_000)
 
 
 class UpdateSourceRequest(BaseModel):
@@ -420,6 +465,253 @@ def build_router(
                 **spec.model_dump(mode="json"),
                 "path": str(library.dir_for(spec.strategy_id)),
             }
+        )
+
+    # ── the Strategy IR ──────────────────────────────────────────────────────
+
+    @router.get("/blueprints", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def list_blueprints() -> ApiEnvelope[list[dict[str, Any]]]:
+        """Strategies stated as data rather than as a function body.
+
+        A blueprint knows where its stop is, which is what lets the chart draw
+        one and the ledger record the one that was in force.
+        """
+        items = blueprint_catalogue()
+        return ApiEnvelope(
+            data=items,
+            meta={
+                "total": len(items),
+                "note": (
+                    "Session windows are minutes from midnight UTC. A window written "
+                    "in local time and read as UTC is a strategy trading the wrong "
+                    "hours, which backtests perfectly well and means nothing."
+                ),
+            },
+        )
+
+    def _write_definition(
+        definition: Any, *, name: str | None, symbol: str | None, verify_bars: int
+    ) -> ApiEnvelope[dict[str, Any]]:
+        bars = generate_bars(count=max(600, verify_bars), seed=20260908) if verify_bars else None
+        try:
+            spec = library.create_from_definition(
+                definition, name=name, symbol=symbol, verify_bars=bars
+            )
+        except IRError as exc:
+            raise HTTPException(
+                422, {"code": "invalid_definition", "detail": str(exc)}
+            ) from exc
+        except GuardViolation as exc:
+            raise HTTPException(422, {"code": "guard_violation", "detail": str(exc)}) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                422, {"code": "export_mismatch", "detail": str(exc)}
+            ) from exc
+        log.record(
+            "STRATEGY",
+            f"created {spec.strategy_id} from definition {definition.definition_id}",
+            "pass",
+            spec.strategy_id,
+        )
+        return ApiEnvelope(
+            data={
+                **spec.model_dump(mode="json"),
+                "definition_id": definition.definition_id,
+                "definition_hash": definition.definition_hash,
+                "path": str(library.dir_for(spec.strategy_id)),
+                "warmup_bars": spec.warmup_bars,
+            },
+            meta={
+                # Stated either way. "Verified" and "not checked" are different
+                # claims and a caller must be able to tell them apart.
+                "generated_python_verified": bool(verify_bars),
+                "verification": (
+                    f"The compiled definition and the generated Python produced "
+                    f"identical ledgers over {len(bars):,} synthetic bars."
+                    if bars is not None
+                    else "Not checked: verify_bars was zero."
+                ),
+                "canonical": "definition.json. strategy.py is its rendering.",
+            },
+        )
+
+    @router.post(
+        "/strategies/from-blueprint",
+        response_model=ApiEnvelope[dict[str, Any]],
+        status_code=201,
+    )
+    def create_from_blueprint(body: BlueprintRequest) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            definition = blueprint(body.blueprint)
+        except KeyError as exc:
+            raise HTTPException(
+                404, {"code": "blueprint_not_found", "detail": str(exc)}
+            ) from exc
+
+        changes: dict[str, Any] = {}
+        if body.symbol:
+            changes["symbol"] = body.symbol
+        if body.parameters:
+            unknown = set(body.parameters) - {p.name for p in definition.parameters}
+            if unknown:
+                raise HTTPException(
+                    422,
+                    {
+                        "code": "unknown_parameter",
+                        "detail": (
+                            f"{', '.join(sorted(unknown))} — this blueprint declares "
+                            f"{', '.join(p.name for p in definition.parameters)}"
+                        ),
+                    },
+                )
+            changes["parameters"] = tuple(
+                p.model_copy(update={"default": body.parameters[p.name]})
+                if p.name in body.parameters
+                else p
+                for p in definition.parameters
+            )
+        if body.session_start_minute is not None or body.session_end_minute is not None:
+            current = definition.entry.session
+            start = body.session_start_minute
+            end = body.session_end_minute
+            if current is None and (start is None or end is None):
+                raise HTTPException(
+                    422,
+                    {
+                        "code": "incomplete_session",
+                        "detail": (
+                            "this blueprint has no session window, so both a start "
+                            "and an end minute are needed to give it one"
+                        ),
+                    },
+                )
+            window = SessionWindow(
+                start_minute=(
+                    start if start is not None else (current.start_minute if current else 0)
+                ),
+                end_minute=end if end is not None else (current.end_minute if current else 0),
+                label="operator window (UTC minutes)",
+            )
+            changes["entry"] = definition.entry.model_copy(update={"session": window})
+        if body.flat_by_minute is not None:
+            changes["exit"] = definition.exit.model_copy(
+                update={"flat_by_minute": body.flat_by_minute}
+            )
+        if changes:
+            definition = definition.model_copy(update=changes)
+
+        return _write_definition(
+            definition,
+            name=body.name,
+            symbol=body.symbol,
+            verify_bars=body.verify_bars,
+        )
+
+    @router.post(
+        "/strategies/from-definition",
+        response_model=ApiEnvelope[dict[str, Any]],
+        status_code=201,
+    )
+    def create_from_definition(body: DefinitionRequest) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            definition = StrategyDefinition.model_validate(body.definition)
+        except PydanticValidationError as exc:
+            raise HTTPException(
+                422, {"code": "malformed_definition", "detail": exc.errors()}
+            ) from exc
+        return _write_definition(
+            definition, name=body.name, symbol=body.symbol, verify_bars=body.verify_bars
+        )
+
+    @router.get(
+        "/strategies/{strategy_id}/definition", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def strategy_definition(strategy_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """The IR this strategy renders, when there is one.
+
+        A hand-written strategy has none, and that is reported as an absence
+        rather than reverse-engineered from the source — a definition inferred
+        from a function body would be a guess wearing the authority of a
+        canonical record.
+        """
+        try:
+            definition = library.get_definition(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(
+                404,
+                {
+                    "code": "no_definition",
+                    "detail": str(exc),
+                    "reason": (
+                        "This strategy is hand-written Python. AlgoForge does not "
+                        "infer a definition from source: a guess presented as the "
+                        "canonical record is worse than no record."
+                    ),
+                },
+            ) from exc
+        return ApiEnvelope(
+            data=definition.model_dump(mode="json"),
+            meta={
+                "definition_id": definition.definition_id,
+                "definition_hash": definition.definition_hash,
+                "canonical": True,
+            },
+        )
+
+    @router.get(
+        "/strategies/{strategy_id}/export/{target}",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def export_strategy(strategy_id: str, target: str) -> ApiEnvelope[dict[str, Any]]:
+        """Render the strategy into another language, or say why it will not.
+
+        Python is generated because AlgoForge can execute it and compare the
+        ledger against the compiled definition. Pine and NinjaScript get a
+        coverage report and no code: AlgoForge has no TradingView and no
+        NinjaTrader to check a script against, and an unchecked generator is one
+        nobody should trade from.
+        """
+        try:
+            definition = library.get_definition(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(
+                404,
+                {
+                    "code": "no_definition",
+                    "detail": (
+                        "export renders the Strategy IR, and this strategy is "
+                        "hand-written Python. Its source is already at "
+                        f"/api/v1/strategies/{strategy_id}."
+                    ),
+                },
+            ) from exc
+
+        if target in VERIFIABLE_TARGETS:
+            report = to_python(definition)
+        elif target in DESCRIBED_TARGETS:
+            report = describe_target(definition, target)
+        else:
+            raise HTTPException(
+                422,
+                {
+                    "code": "unknown_target",
+                    "detail": (
+                        f"'{target}' is not an export target. Generated: "
+                        f"{', '.join(VERIFIABLE_TARGETS)}. Described but not "
+                        f"generated: {', '.join(DESCRIBED_TARGETS)}."
+                    ),
+                },
+            )
+        return ApiEnvelope(
+            data=report.as_dict(),
+            meta={
+                "verifiable_targets": list(VERIFIABLE_TARGETS),
+                "described_targets": list(DESCRIBED_TARGETS),
+                "warranty": (
+                    "An export preserves the strategy and its limitations. It is "
+                    "not a claim that the strategy is profitable."
+                ),
+            },
         )
 
     @router.get("/strategies/{strategy_id}", response_model=ApiEnvelope[dict[str, Any]])

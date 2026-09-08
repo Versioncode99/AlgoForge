@@ -33,7 +33,20 @@ from enum import StrEnum
 from typing import Any
 
 from forge.research import chronological_split
-from forge.strategy import TEMPLATES, TemplateRejected, run_backtest
+from forge.strategy import (
+    DESCRIBED_TARGETS,
+    TEMPLATES,
+    VERIFIABLE_TARGETS,
+    TemplateRejected,
+    describe_target,
+    generate_bars,
+    run_backtest,
+    to_python,
+)
+from forge.strategy.blueprints import blueprint as ir_blueprint
+from forge.strategy.blueprints import catalogue as blueprint_catalogue
+from forge.strategy.ir import IRError
+from forge.strategy.ir import SessionWindow as IRSessionWindow
 from forge.vault import VaultMirror
 from forge.workstation import (
     GRID_COLUMNS,
@@ -130,9 +143,14 @@ class Actions:
         templates: Any,
         mirror: VaultMirror,
         workspaces: WorkspaceStore,
+        ledger: Any = None,
     ) -> None:
         self.workspace = workspace
         self.library = library
+        # The trade-ledger view, when one is attached. Optional so this
+        # registry can be built before it exists; the actions that need it
+        # refuse by name rather than raising an attribute error.
+        self.ledger = ledger
         self.store = store
         self.log = log
         self.market = market
@@ -414,8 +432,108 @@ class Actions:
             },
             self.read_research,
         )
+        self._register_ir()
         self._register_workspace()
         self._register_builder()
+
+    def _register_ir(self) -> None:
+        """The Strategy IR verbs.
+
+        Registered here rather than given to the agent separately, which is the
+        whole architecture: an agent composing a strategy calls the same action
+        the interface calls, so a definition refused in one place is refused in
+        both, and there is no path by which the agent can write a strategy a
+        person could not.
+        """
+        self._add(
+            "list_blueprints",
+            "List the strategies that exist as data rather than as a function body. "
+            "A blueprint knows where its stop, target and session window are, which "
+            "is what lets the chart draw them and the ledger record them.",
+            {},
+            self.list_blueprints,
+        )
+        self._add(
+            "create_strategy_from_blueprint",
+            "Write a strategy from a blueprint, optionally on a different instrument, "
+            "with different parameter defaults, or inside a different session window. "
+            "The generated Python is checked against the definition before anything "
+            "is written.",
+            {
+                "blueprint": {"type": "string", "description": "A key from list_blueprints."},
+                "name": {"type": "string", "optional": True},
+                "symbol": {"type": "string", "optional": True},
+                "parameters": {"type": "object", "optional": True},
+                "session_start_minute": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "Minutes from midnight UTC. 0-1439.",
+                },
+                "session_end_minute": {"type": "integer", "optional": True},
+                "flat_by_minute": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "Close any open position at this minute of day, UTC.",
+                },
+            },
+            self.create_strategy_from_blueprint,
+            mutating=True,
+        )
+        self._add(
+            "strategy_definition",
+            "Read the Strategy IR a strategy renders. Hand-written strategies have "
+            "none, and that is reported as an absence rather than inferred from the "
+            "source.",
+            {"strategy_id": {"type": "string"}},
+            self.strategy_definition,
+        )
+        self._add(
+            "export_strategy",
+            "Render a strategy into another language. Python is generated because it "
+            "can be executed and compared against the definition; Pine and "
+            "NinjaScript return a coverage report and no code, because AlgoForge "
+            "cannot check them.",
+            {
+                "strategy_id": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "python | pine | ninjascript",
+                },
+            },
+            self.export_strategy,
+        )
+        self._add(
+            "strategy_trades",
+            "The historical trades of a strategy's most recent run, with the regime "
+            "each was taken in and the excursion each reached. Read from the backtest "
+            "artifact; nothing is recomputed.",
+            {
+                "strategy_id": {"type": "string"},
+                "limit": {"type": "integer", "optional": True},
+                "outcome": {"type": "string", "optional": True, "description": "all|win|loss"},
+                "regime": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "all | BULL_LOW | BULL_HIGH | BEAR_LOW | BEAR_HIGH",
+                },
+            },
+            self.strategy_trades,
+        )
+        self._add(
+            "strategy_regimes",
+            "Where a strategy's P&L actually came from, by market regime: exposure, "
+            "trade count and net result per regime, and how the regimes follow each "
+            "other.",
+            {
+                "strategy_id": {"type": "string"},
+                "attribution": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "entry | dominant | exit",
+                },
+            },
+            self.strategy_regimes,
+        )
 
     # ── implementations ──────────────────────────────────────────────────────
     def search_papers(self, query: str) -> dict[str, Any]:
@@ -557,6 +675,196 @@ class Actions:
                 "not evidence the idea works."
             ),
         }
+
+    # ── the Strategy IR ──────────────────────────────────────────────────────
+    def list_blueprints(self) -> dict[str, Any]:
+        items = blueprint_catalogue()
+        return {
+            "blueprints": items,
+            "total": len(items),
+            "note": (
+                "Session windows are minutes from midnight UTC. A window written in "
+                "local time and read as UTC is a strategy trading the wrong hours."
+            ),
+        }
+
+    def create_strategy_from_blueprint(
+        self,
+        blueprint: str,
+        name: str | None = None,
+        symbol: str | None = None,
+        parameters: dict[str, Any] | None = None,
+        session_start_minute: int | None = None,
+        session_end_minute: int | None = None,
+        flat_by_minute: int | None = None,
+    ) -> dict[str, Any]:
+        key = _str(blueprint, "blueprint", limit=64, lower=True)
+        try:
+            definition = ir_blueprint(key)
+        except KeyError as exc:
+            raise ActionError(str(exc)) from exc
+
+        changes: dict[str, Any] = {}
+        if symbol:
+            changes["symbol"] = _str(symbol, "symbol", limit=16).upper()
+        if parameters:
+            declared = {p.name: p for p in definition.parameters}
+            unknown = set(parameters) - set(declared)
+            if unknown:
+                raise ActionError(
+                    f"Unknown parameter(s) {', '.join(sorted(unknown))}. This blueprint "
+                    f"declares {', '.join(sorted(declared))}."
+                )
+            for pname, raw in parameters.items():
+                value = float(raw)
+                spec = declared[pname]
+                if not spec.low <= value <= spec.high:
+                    raise ActionError(
+                        f"Parameter '{pname}' = {value} is outside its declared range "
+                        f"[{spec.low}, {spec.high}]."
+                    )
+            changes["parameters"] = tuple(
+                p.model_copy(update={"default": float(parameters[p.name])})
+                if p.name in parameters
+                else p
+                for p in definition.parameters
+            )
+        if session_start_minute is not None or session_end_minute is not None:
+            current = definition.entry.session
+            if current is None and (session_start_minute is None or session_end_minute is None):
+                raise ActionError(
+                    "This blueprint has no session window, so both a start and an end "
+                    "minute are needed to give it one."
+                )
+            changes["entry"] = definition.entry.model_copy(
+                update={
+                    "session": IRSessionWindow(
+                        start_minute=(
+                            session_start_minute
+                            if session_start_minute is not None
+                            else (current.start_minute if current else 0)
+                        ),
+                        end_minute=(
+                            session_end_minute
+                            if session_end_minute is not None
+                            else (current.end_minute if current else 0)
+                        ),
+                        label="operator window (UTC minutes)",
+                    )
+                }
+            )
+        if flat_by_minute is not None:
+            changes["exit"] = definition.exit.model_copy(
+                update={"flat_by_minute": int(flat_by_minute)}
+            )
+        if changes:
+            definition = definition.model_copy(update=changes)
+
+        # The same check the HTTP route performs. A definition whose rendering
+        # disagrees with it is refused, not written and flagged.
+        bars = generate_bars(count=4000, seed=20260908)
+        try:
+            spec = self.library.create_from_definition(
+                definition, name=name, symbol=symbol, created_by="agent", verify_bars=bars
+            )
+        except (IRError, ValueError) as exc:
+            raise ActionError(str(exc)) from exc
+
+        self.mirror.strategy(spec)
+        return {
+            "strategy_id": spec.strategy_id,
+            "name": spec.name,
+            "family": spec.family,
+            "symbol": spec.symbol,
+            "warmup_bars": spec.warmup_bars,
+            "definition_id": definition.definition_id,
+            "definition_hash": definition.definition_hash,
+            "session": (
+                definition.entry.session.label if definition.entry.session else "none"
+            ),
+            "has_stop": definition.exit.stop is not None,
+            "has_target": definition.exit.target is not None,
+            "has_trailing": definition.exit.trailing is not None,
+            "generated_python_verified": True,
+            "next": (
+                f"backtest_strategy(strategy_id='{spec.strategy_id}') to produce a "
+                "trade ledger, then strategy_trades to read it."
+            ),
+        }
+
+    def strategy_definition(self, strategy_id: str) -> dict[str, Any]:
+        key = _str(strategy_id, "strategy_id", limit=120)
+        try:
+            definition = self.library.get_definition(key)
+        except KeyError as exc:
+            raise ActionError(
+                f"Strategy '{key}' is hand-written Python and has no definition. "
+                "AlgoForge does not infer one from source: a guess presented as the "
+                "canonical record is worse than no record."
+            ) from exc
+        return {
+            "definition": definition.model_dump(mode="json"),
+            "definition_id": definition.definition_id,
+            "definition_hash": definition.definition_hash,
+        }
+
+    def export_strategy(self, strategy_id: str, target: str) -> dict[str, Any]:
+        key = _str(strategy_id, "strategy_id", limit=120)
+        want = _str(target, "target", limit=32, lower=True)
+        try:
+            definition = self.library.get_definition(key)
+        except KeyError as exc:
+            raise ActionError(
+                f"Export renders the Strategy IR, and '{key}' is hand-written Python. "
+                "Its source is already readable in the library."
+            ) from exc
+        if want in VERIFIABLE_TARGETS:
+            report = to_python(definition)
+        elif want in DESCRIBED_TARGETS:
+            report = describe_target(definition, want)
+        else:
+            raise ActionError(
+                f"'{want}' is not an export target. Generated: "
+                f"{', '.join(VERIFIABLE_TARGETS)}. Described but not generated: "
+                f"{', '.join(DESCRIBED_TARGETS)}."
+            )
+        return report.as_dict()
+
+    def strategy_trades(
+        self,
+        strategy_id: str,
+        limit: int | None = None,
+        outcome: str | None = None,
+        regime: str | None = None,
+    ) -> dict[str, Any]:
+        key = _str(strategy_id, "strategy_id", limit=120)
+        if self.ledger is None:
+            raise ActionError("The trade ledger service is not attached to this registry.")
+        try:
+            payload: dict[str, Any] = self.ledger.ledger(
+                key,
+                outcome=_str(outcome or "all", "outcome", limit=8, lower=True),
+                regime=(regime or "all").strip().upper() if regime else "all",
+                limit=max(1, min(int(limit or 200), 4000)),
+            )
+        except Exception as exc:
+            raise ActionError(str(exc)) from exc
+        return payload
+
+    def strategy_regimes(
+        self, strategy_id: str, attribution: str | None = None
+    ) -> dict[str, Any]:
+        key = _str(strategy_id, "strategy_id", limit=120)
+        basis = _str(attribution or "entry", "attribution", limit=16, lower=True)
+        if basis not in ("entry", "dominant", "exit"):
+            raise ActionError("attribution must be one of entry, dominant, exit.")
+        if self.ledger is None:
+            raise ActionError("The trade ledger service is not attached to this registry.")
+        try:
+            report: dict[str, Any] = self.ledger.regime_report(key, attribution=basis)
+        except Exception as exc:
+            raise ActionError(str(exc)) from exc
+        return report
 
     def create_strategy(
         self,

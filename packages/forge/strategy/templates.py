@@ -67,8 +67,13 @@ MOMENTUM_BREAKOUT = Template(
     warmup_bars=90,
     source='''"""Momentum Breakout.
 
-Enter long when the last closed bar breaks the prior `lookback` high.
-Exit on an ATR stop or a hard time stop.
+Enter long when the last closed bar breaks the prior `lookback` high, and short
+when it breaks the prior `lookback` low. Exit on an ATR stop or a hard time
+stop.
+
+Both directions, because the stated mechanism — a break is liquidity-taking
+flow that must be absorbed — is symmetric. Testing it long-only on an index that
+rose across the sample measures the drift and calls it absorption.
 
 The Window handed in ends at the last CLOSED bar. Fills happen on the next bar's
 open, so this module cannot see the price it will trade at.
@@ -77,9 +82,15 @@ open, so this module cannot see the price it will trade at.
 
 def entry_signal(w, p):
     lookback = int(p["lookback"])
+    if w.highs.size < lookback + 2:
+        return None
     prior_high = w.highs[-lookback - 1 : -1].max()
-    if w.closes[-1] > prior_high:
+    prior_low = w.lows[-lookback - 1 : -1].min()
+    close = w.closes[-1]
+    if close > prior_high:
         return 1
+    if close < prior_low:
+        return -1
     return None
 
 
@@ -143,7 +154,11 @@ MEAN_REVERSION_BAND = Template(
     source='''"""Mean Reversion Band.
 
 Enter long when the close sits more than `entry_atr` ATRs below the moving
-average. Exit when price touches the average again, or on a time stop.
+average, and short when it sits the same distance above it. Exit when price
+touches the average again, or on a time stop.
+
+Symmetric because the mechanism is: displacement into a thin book reverts as
+liquidity replenishes, and a thin book is thin in both directions.
 """
 
 
@@ -152,8 +167,11 @@ def entry_signal(w, p):
     atr = w.atr(14)
     if sma != sma or atr != atr or atr <= 0:
         return None
-    if w.closes[-1] < sma - float(p["entry_atr"]) * atr:
+    band = float(p["entry_atr"]) * atr
+    if w.closes[-1] < sma - band:
         return 1
+    if w.closes[-1] > sma + band:
+        return -1
     return None
 
 
@@ -161,7 +179,12 @@ def exit_signal(w, p, pos):
     if w.index - pos.entry_index >= int(p["max_bars"]):
         return "max_bars"
     sma = w.sma(int(p["sma_period"]))
-    if sma == sma and w.closes[-1] >= sma:
+    if sma != sma:
+        return None
+    # The target is the average, from whichever side the trade approached it.
+    if pos.direction == 1 and w.closes[-1] >= sma:
+        return "signal"
+    if pos.direction == -1 and w.closes[-1] <= sma:
         return "signal"
     return None
 ''',
@@ -210,7 +233,7 @@ VOLATILITY_REGIME = Template(
 
 A fast/slow moving-average cross, but only permitted to trade while realised
 volatility sits below its own recent quantile. The regime filter is the claim;
-the cross is the vehicle.
+the cross is the vehicle, and it is taken in whichever direction it points.
 """
 
 import numpy as np
@@ -229,17 +252,27 @@ def _regime_calm(w, p):
 
 
 def entry_signal(w, p):
-    fast, slow = int(p["fast"]), int(p["slow"])
-    if fast >= slow or not _regime_calm(w, p):
+    fast_n, slow_n = int(p["fast"]), int(p["slow"])
+    if fast_n >= slow_n or not _regime_calm(w, p):
         return None
-    if w.sma(fast) > w.sma(slow):
+    fast, slow = w.sma(fast_n), w.sma(slow_n)
+    if fast != fast or slow != slow:
+        return None
+    if fast > slow:
         return 1
+    if fast < slow:
+        return -1
     return None
 
 
 def exit_signal(w, p, pos):
-    fast, slow = int(p["fast"]), int(p["slow"])
-    if w.sma(fast) < w.sma(slow):
+    fast, slow = w.sma(int(p["fast"])), w.sma(int(p["slow"]))
+    if fast != fast or slow != slow:
+        return None
+    # Out when the cross that put the position on reverses, whichever way it was.
+    if pos.direction == 1 and fast < slow:
+        return "signal"
+    if pos.direction == -1 and fast > slow:
         return "signal"
     if not _regime_calm(w, p):
         return "signal"

@@ -169,3 +169,91 @@ def test_synthetic_returns_have_no_embedded_drift():
     returns = np.diff(np.log(closes))
     t_stat = returns.mean() / (returns.std(ddof=1) / np.sqrt(returns.size))
     assert abs(t_stat) < 3.0, "synthetic series shows directional drift; it must be edge-free"
+
+
+# ── directional symmetry ─────────────────────────────────────────────────────
+
+
+def test_no_shipped_template_can_only_take_one_side() -> None:
+    """Nine of the twelve templates were long-only, and that was a measurement
+    problem rather than a missing feature.
+
+    A long-only breakout on an index future that rose across the sample is
+    measuring the drift plus a filter and reporting it as an edge. Worse, every
+    one of these templates states its mechanism symmetrically — "a break is
+    liquidity-taking flow that must be absorbed" — so testing it on one side
+    only means the falsifiable prediction it carries was never actually at risk.
+
+    This is a source-level check rather than a behavioural one on purpose: a
+    template that *could* go short but never happens to on one fixture would
+    pass a behavioural check and still be broken.
+    """
+    from forge.strategy import TEMPLATES
+
+    long_only = [
+        key
+        for key, template in TEMPLATES.items()
+        if "return 1" in template.source and "return -1" not in template.source
+    ]
+    assert not long_only, (
+        f"{', '.join(sorted(long_only))} can only ever go long. If that is "
+        "deliberate for a template, its hypothesis must say why the mechanism is "
+        "one-sided — and then this test needs an explicit exemption naming it."
+    )
+
+
+def test_every_template_actually_trades_both_sides_on_real_bars() -> None:
+    """The source check above proves the branch exists; this proves it is
+    reachable. A short branch guarded by a condition that can never hold is the
+    same defect wearing a fix."""
+    import importlib.util
+    import sys
+    import tempfile
+    import uuid
+    from datetime import UTC, datetime
+    from pathlib import Path as _Path
+
+    from forge.strategy import TEMPLATES, generate_bars, run_backtest
+    from forge.strategy.models import StrategySpec
+
+    bars = generate_bars(count=30_000, seed=4242)
+    one_sided: list[str] = []
+    silent: list[str] = []
+    for key, template in sorted(TEMPLATES.items()):
+        module_name = f"symmetry_{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _Path(tmp) / f"{module_name}.py"
+            path.write_text(template.source, encoding="utf-8")
+            spec_obj = importlib.util.spec_from_file_location(module_name, path)
+            assert spec_obj and spec_obj.loader
+            module = importlib.util.module_from_spec(spec_obj)
+            sys.modules[module_name] = module
+            try:
+                spec_obj.loader.exec_module(module)
+            finally:
+                sys.modules.pop(module_name, None)
+
+        spec = StrategySpec(
+            strategy_id=key,
+            name=template.name,
+            lineage=key,
+            family=template.family,
+            market="futures",
+            symbol="MNQ.SYNTH",
+            template=key,
+            hypothesis=template.hypothesis,
+            falsifiable_prediction=template.falsifiable_prediction,
+            parameters=template.parameters,
+            warmup_bars=template.warmup_bars,
+            created_at=datetime(2026, 9, 8, tzinfo=UTC),
+        )
+        result = run_backtest(module, spec, bars, code_hash=key)
+        if not result.trades:
+            silent.append(key)
+            continue
+        directions = {trade.direction for trade in result.trades}
+        if directions != {1, -1}:
+            one_sided.append(f"{key} (took only {directions})")
+
+    assert not one_sided, "; ".join(one_sided)
+    assert not silent, f"{', '.join(silent)} took no trades at all on 30,000 bars"

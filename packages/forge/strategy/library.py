@@ -9,12 +9,15 @@ import shutil
 import sys
 import time
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 from forge.contracts.hashing import content_hash
 from forge.strategy.guard import assert_safe
+from forge.strategy.ir import StrategyDefinition
 from forge.strategy.models import StrategySpec
 from forge.strategy.templates import TEMPLATES, TEST_TEMPLATE
 
@@ -32,6 +35,22 @@ class StrategyLibrary:
         spec.json        the frozen declaration (hypothesis, params, costs)
         strategy.py      the code that actually runs
         test_strategy.py its own conformance suite, including a lookahead trap
+        definition.json  the Strategy IR, when the strategy came from one
+
+    **Where `definition.json` exists, it is the source of truth and
+    `strategy.py` is its rendering.** That is not a bookkeeping distinction: the
+    generated module is what gets executed, imported, hashed and guarded exactly
+    like a hand-written one, so nothing downstream needs to know which kind it
+    is holding. What the definition adds is that AlgoForge can also *answer
+    questions* about the strategy — where its stop is, what its session window
+    was, what it would look like in another language — which a function body
+    cannot be asked.
+
+    Creation checks the two agree. `create_from_definition` runs the compiled IR
+    and the generated Python over the same bars and compares the ledgers, and
+    refuses to write anything if they differ. A rendering that says something
+    other than the definition would be the worst of both: an artifact whose
+    provenance points at an IR that does not describe it.
     """
 
     def __init__(self, root: Path) -> None:
@@ -55,6 +74,102 @@ class StrategyLibrary:
 
     def test_path(self, strategy_id: str) -> Path:
         return self.dir_for(strategy_id) / "test_strategy.py"
+
+    def definition_path(self, strategy_id: str) -> Path:
+        return self.dir_for(strategy_id) / "definition.json"
+
+    # ── the Strategy IR, where one exists ────────────────────────────────────
+    def has_definition(self, strategy_id: str) -> bool:
+        return self.definition_path(strategy_id).exists()
+
+    def get_definition(self, strategy_id: str) -> StrategyDefinition:
+        path = self.definition_path(strategy_id)
+        if not path.exists():
+            raise KeyError(f"strategy '{strategy_id}' was not built from a definition")
+        return StrategyDefinition.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def create_from_definition(
+        self,
+        definition: StrategyDefinition,
+        *,
+        name: str | None = None,
+        symbol: str | None = None,
+        created_by: str = "operator",
+        research_sources: tuple[str, ...] = (),
+        verify_bars: Sequence[Any] | None = None,
+    ) -> StrategySpec:
+        """Write a strategy whose canonical form is the definition.
+
+        `verify_bars` is the checking step and is not optional in spirit: when
+        bars are supplied the compiled IR and the generated Python are both run
+        over them and their ledgers compared, and a mismatch refuses the write.
+        Callers that genuinely have no bars (a unit test constructing a spec)
+        may omit it, and then the agreement is unchecked and stated as such.
+        """
+        from forge.strategy.export import to_python, verify_python
+        from forge.strategy.ir import validate_definition
+
+        definition = validate_definition(definition)
+        display = name or definition.name
+        base = slugify(display)
+        strategy_id, n = f"{base}_{uuid.uuid4().hex[:10]}", 2
+        while self.dir_for(strategy_id).exists():
+            strategy_id, n = f"{base}_v{n}", n + 1
+
+        spec = StrategySpec(
+            strategy_id=strategy_id,
+            name=display,
+            lineage=base,
+            family=definition.family,
+            market=definition.market,
+            symbol=symbol or definition.symbol,
+            bar_spec=definition.timeframe,
+            # Named for the definition it renders, so a reader of the spec alone
+            # can tell that `strategy.py` was generated rather than written.
+            template=f"ir:{definition.definition_id}",
+            hypothesis=definition.hypothesis,
+            falsifiable_prediction=definition.falsifiable_prediction,
+            parameters=definition.parameters,
+            warmup_bars=definition.required_warmup(),
+            commission_per_side=definition.execution.commission_per_side,
+            slippage_ticks=definition.execution.slippage_ticks,
+            created_at=datetime.now(UTC),
+            created_by=created_by,
+            research_sources=research_sources,
+        )
+
+        report = to_python(definition)
+        # The generated module passes the same static guard as anything else
+        # that is executed here. Generated is not the same as trusted.
+        assert_safe(report.code)
+
+        if verify_bars is not None:
+            check = verify_python(definition, list(verify_bars), spec)
+            if not check["verified"]:
+                raise ValueError(
+                    "the generated Python does not reproduce the definition "
+                    f"({check['reason']}). Nothing was written: an artifact whose "
+                    "provenance points at a definition that does not describe it "
+                    "would be worse than no strategy at all."
+                )
+
+        folder = self.dir_for(strategy_id)
+        folder.mkdir(parents=True)
+        self.definition_path(strategy_id).write_text(
+            json.dumps(definition.model_dump(mode="json"), indent=2), encoding="utf-8"
+        )
+        self.spec_path(strategy_id).write_text(
+            json.dumps(spec.model_dump(mode="json"), indent=2), encoding="utf-8"
+        )
+        self.source_path(strategy_id).write_text(report.code, encoding="utf-8")
+        params_literal = json.dumps(spec.defaults, indent=4)
+        self.test_path(strategy_id).write_text(
+            TEST_TEMPLATE.format(name=display)
+            + f"\n\nPARAMS = {params_literal}\n"
+            + "\nfrom strategy import entry_signal, exit_signal  # noqa: E402,F401\n",
+            encoding="utf-8",
+        )
+        return spec
 
     # ── create ───────────────────────────────────────────────────────────────
     def create_from_template(

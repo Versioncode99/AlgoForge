@@ -268,11 +268,14 @@ def build_control_router(
     orchestrator = Orchestrator(
         workspace.data / "missions.db", actions, agents, settings_store, log, mirror
     )
-    assistant = Assistant(root, library, store, log, settings_store, actions)
     # The trade ledger view: the strategy's own trades, keyed to timestamps so a
     # chart can place them at any timeframe. Holds the regime cache, because
     # classifying millions of bars per request would make the inspector unusable.
     ledger_view = TradeLedgerService(market, store, library)
+    # Handed to the registry so the agent reads trades through the same service
+    # the interface does, rather than through a second implementation.
+    actions.ledger = ledger_view
+    assistant = Assistant(root, library, store, log, settings_store, actions)
     agents.context = lambda: {
         "running": engine.state.running,
         "dataset": engine.state.config.dataset,
