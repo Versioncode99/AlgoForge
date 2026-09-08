@@ -8,8 +8,7 @@ from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from forge.analytics.regime import RegimeSettings
-from forge.analytics.regime import attribute as attribute_trades
+from forge.analytics.regime import attribute_at_times as attribute_trades
 from forge.analytics.resample import compare as compare_resamples
 from forge.capabilities import nautilus_capability
 from forge.contracts.models import ApiEnvelope
@@ -1061,17 +1060,11 @@ def build_control_router(
         """
         try:
             payload = ledger_view.resolve(strategy_id, backtest_id)
-            dataset = str(payload.get("dataset_key") or "")
-            if not dataset:
-                raise LedgerError(
-                    "this backtest does not record which dataset it ran on, so its "
-                    "regimes cannot be classified"
-                )
-            series, _ = ledger_view.regimes.get(dataset, RegimeSettings())
+            series, times, _ = ledger_view.classified(payload)
             trades = _Shim.many(payload)
             if len(trades) < 2:
                 raise LedgerError("resampling needs at least two trades")
-            marks = attribute_trades(trades, series)
+            marks = attribute_trades(trades, series, times)
             comparison = compare_resamples(
                 trades,
                 marks,

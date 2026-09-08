@@ -47,10 +47,12 @@ from forge.analytics.regime import (
 #: more, and a caller that wants the whole ledger should page.
 MAX_TRADES = 4000
 
-#: Bars to classify when a backtest does not record how many it ran on. Large
-#: enough to cover any run this application produces, small enough that it is
-#: seconds rather than minutes.
-DEFAULT_BAR_LIMIT = 400_000
+#: History attached before a run's own bars so its earliest trades can be
+#: classified at all. Extending the window *backwards* is free: a classifier
+#: given more prior history makes a better-informed decision, and cannot learn
+#: anything from bars that had not happened. The report is sliced back to the
+#: run's own bars afterwards, so this never reaches a denominator.
+REGIME_WARMUP_PAD = 4_000
 
 
 class LedgerError(Exception):
@@ -72,30 +74,47 @@ class RegimeCache:
         self._lock = threading.Lock()
         self._series: dict[str, tuple[RegimeSeries, list[datetime]]] = {}
 
-    def key(self, dataset: str, settings: RegimeSettings, bar_limit: int | None) -> str:
+    def key(
+        self, dataset: str, settings: RegimeSettings, start: datetime, end: datetime, pad: int
+    ) -> str:
         # The window is part of the identity. Two classifications of the same
         # dataset over different windows are different classifications, and
         # serving one for the other is precisely the defect this cache caused
         # once already.
-        return f"{dataset}@{bar_limit}@{settings.model_dump_json()}"
+        return (
+            f"{dataset}@{start.isoformat()}@{end.isoformat()}@{pad}@"
+            f"{settings.model_dump_json()}"
+        )
 
     def get(
-        self, dataset: str, settings: RegimeSettings, bar_limit: int | None = None
+        self,
+        dataset: str,
+        settings: RegimeSettings,
+        start: datetime,
+        end: datetime,
+        *,
+        pad_bars: int = 0,
     ) -> tuple[RegimeSeries, list[datetime]]:
-        cache_key = self.key(dataset, settings, bar_limit)
+        """Classify the bars in [start, end], plus `pad_bars` of earlier history.
+
+        Bounded by time on purpose. Loading the whole archive builds 4.7 million
+        validated model objects and four Python sequences of that length, which
+        is minutes of work and gigabytes of memory to answer a question about a
+        run that touched a fraction of them.
+        """
+        cache_key = self.key(dataset, settings, start, end, pad_bars)
         with self._lock:
             cached = self._series.get(cache_key)
         if cached is not None:
             return cached
 
-        # Bounded on purpose. Without a limit this loads every bar in the
-        # archive — 4.7 million for NQ — builds a validated model object for
-        # each, and then materialises four Python sequences of that length. It
-        # is minutes of work and gigabytes of memory to answer a question about
-        # a backtest that ran on a hundred and twenty thousand of them.
-        bars, _ = self.market.load(dataset, limit=bar_limit or DEFAULT_BAR_LIMIT)
+        bars, _ = self.market.load_range(dataset, start, end, pad_bars=pad_bars)
         if not bars:
-            raise LedgerError(f"no bars available for dataset '{dataset}'")
+            raise LedgerError(
+                f"dataset '{dataset}' holds no bars between {start.isoformat()} and "
+                f"{end.isoformat()}. This run's bars are not in the archive as it "
+                "stands, so its regimes cannot be reconstructed."
+            )
         series = classify(
             [b.high for b in bars], [b.low for b in bars], [b.close for b in bars], settings
         )
@@ -215,14 +234,21 @@ class TradeLedgerService:
 
     def classified(
         self, payload: dict[str, Any], settings: RegimeSettings | None = None
-    ) -> tuple[RegimeSeries, list[datetime]]:
+    ) -> tuple[RegimeSeries, list[datetime], RegimeSeries]:
         """The classification of the bars *this run* was executed over.
 
-        `bar_count` is what makes the window right. The backtest read the last
-        N bars of the archive, so the classification must cover the same N, or
-        the timestamps will not line up and every trade will fall outside the
-        series — which is a visible refusal rather than a silent mislabelling,
-        but is still wrong.
+        Returns the padded series and its timestamps — what attribution looks
+        trades up in — and the same series sliced to the run's own bars, which
+        is what a report's denominators must use.
+
+        Locating the window is the hard part, and `bar_count` cannot do it. A
+        backtest runs on a *partition* of a loaded window, so its bars are
+        neither the first N of the archive nor the last N. Runs now record
+        `first_bar_time` and `last_bar_time`. Older ones do not, and for those
+        the span is derived from the trades — which finds the stretch the trades
+        covered rather than the stretch the run read. That is a smaller window,
+        and it is reported as a derived one rather than assumed to be the same
+        thing.
         """
         dataset = str(payload.get("dataset_key") or "")
         if not dataset:
@@ -230,9 +256,29 @@ class TradeLedgerService:
                 "this backtest does not record which dataset it ran on, so its bars "
                 "cannot be classified. Re-run it to attribute regimes."
             )
-        recorded = payload.get("bar_count")
-        window = int(recorded) if isinstance(recorded, int) and recorded > 0 else None
-        return self.regimes.get(dataset, settings or RegimeSettings(), window)
+        start = _parse(payload.get("first_bar_time"))
+        end = _parse(payload.get("last_bar_time"))
+        if start is None or end is None:
+            stamps = [
+                stamp
+                for trade in (payload.get("trades") or [])
+                if isinstance(trade, dict)
+                for stamp in (_parse(trade.get("entry_time")), _parse(trade.get("exit_time")))
+                if stamp is not None
+            ]
+            if not stamps:
+                raise LedgerError(
+                    "this run records neither its bar range nor any trade, so there is "
+                    "nothing to locate its bars by. Re-run it."
+                )
+            start, end = min(stamps), max(stamps)
+
+        series, times = self.regimes.get(
+            dataset, settings or RegimeSettings(), start, end, pad_bars=REGIME_WARMUP_PAD
+        )
+        # Where the run's own bars begin inside the padded series.
+        offset = next((index for index, stamp in enumerate(times) if stamp >= start), 0)
+        return series, times, series.window(offset, len(times))
 
     # -- the ledger -----------------------------------------------------------
     def ledger(
@@ -258,7 +304,7 @@ class TradeLedgerService:
         dataset = str(payload.get("dataset_key") or "")
         if with_regimes and dataset and rows:
             try:
-                series, times = self.classified(payload)
+                series, times, _ = self.classified(payload)
                 marks = {
                     item.trade_id: item
                     for item in attribute_at_times(_TradeShim.many(payload), series, times)
@@ -337,7 +383,7 @@ class TradeLedgerService:
         regime_detail: dict[str, Any] = {}
         if dataset:
             try:
-                series, times = self.classified(payload)
+                series, times, _ = self.classified(payload)
                 marks = attribute_at_times(
                     _TradeShim.many(payload), series, times, with_percentile=True
                 )
@@ -404,13 +450,16 @@ class TradeLedgerService:
     ) -> dict[str, Any]:
         payload = self.resolve(strategy_id, backtest_id)
         settings = RegimeSettings(basis=Basis.FULL_SAMPLE) if descriptive else RegimeSettings()
-        series, times = self.classified(payload, settings)
+        series, times, own = self.classified(payload, settings)
         dataset = str(payload.get("dataset_key") or "")
         trades = _TradeShim.many(payload)
         if not trades:
             raise LedgerError("this backtest recorded no trades, so there is nothing to attribute")
+        # Attribution reads the padded series, so an early trade still gets a
+        # label. The summary reads the run's own bars, so exposure and coverage
+        # are shares of what the run actually touched.
         marks = attribute_at_times(trades, series, times)
-        report = summarise(trades, marks, series, attribution=attribution)  # type: ignore[arg-type]
+        report = summarise(trades, marks, own, attribution=attribution)  # type: ignore[arg-type]
         return {
             **report.model_dump(mode="json"),
             "strategy_id": strategy_id,

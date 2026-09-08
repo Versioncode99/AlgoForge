@@ -111,19 +111,22 @@ export function StrategyChart({
   const lines = useRef<IPriceLine[]>([])
   const [ready, setReady] = useState(false)
 
-  // Anchor the window on the selected trade when there is one, so clicking a
-  // trade from 2019 does not leave the chart showing 2026 with a marker nobody
-  // can find. `before` pages backwards from a timestamp, which is the only
-  // direction the bars endpoint needs to support.
-  const anchor = selected ? selected.exit_time : undefined
+  // Anchor the window on the trades, not on the latest bars. A strategy
+  // validated on last July has no trades in this week's candles, and a chart
+  // showing this week draws every marker clamped against its left edge — which
+  // looks like 550 trades in one minute. The selection wins when there is one,
+  // so stepping through the ledger walks the chart with it.
+  const lastTrade = ledger.trades.length ? ledger.trades[ledger.trades.length - 1] : null
+  const anchor = selected?.exit_time ?? lastTrade?.exit_time
   const bars = useQuery({
     queryKey: ['strategy-bars', dataset, timeframe, anchor ?? 'latest'],
     queryFn: () => {
       const query = new URLSearchParams({ dataset, timeframe, limit: '900' })
       if (anchor) {
-        // A window ending a little after the exit, so the trade sits inside it
-        // rather than against the right edge.
-        const after = new Date(new Date(anchor).getTime() + 6 * 3600_000).toISOString()
+        // A window ending a little after the anchor, so it sits inside the
+        // frame rather than against the right edge. `before` pages backwards,
+        // which is the only direction the bars endpoint needs to support.
+        const after = new Date(new Date(anchor).getTime() + 12 * 3600_000).toISOString()
         query.set('before', after)
       }
       return getJson<BarsResponse>(`/bars?${query.toString()}`)
@@ -186,15 +189,31 @@ export function StrategyChart({
     chart.current?.timeScale().fitContent()
   }, [ready, rows])
 
-  // Markers. Entry and exit for every trade in the ledger window; the selected
-  // one is spelled out, the rest are shapes.
+  // Which trades the drawn bars actually cover. A marker outside the loaded
+  // range is not omitted by the chart library — it is clamped to the nearest
+  // edge, so five hundred trades from July pile up on the first candle of
+  // September and read as five hundred trades in one minute. Placing a marker
+  // where the trade was not is worse than not placing it, so the range is
+  // computed and the ones outside it are counted instead of drawn.
+  const drawn = useMemo(() => {
+    if (!rows || rows.length === 0) return { inside: [] as TradeRow[], outside: 0 }
+    const first = seconds(rows[0].time)
+    const last = seconds(rows[rows.length - 1].time)
+    const inside = ledger.trades.filter((trade) => {
+      const at = seconds(trade.entry_time)
+      const out = seconds(trade.exit_time)
+      return out >= first && at <= last
+    })
+    return { inside, outside: ledger.trades.length - inside.length }
+  }, [rows, ledger.trades])
+
   useEffect(() => {
     if (!ready || !markerApi.current) return
     const up = token('--pass', '#8fce6a')
     const down = token('--fail', '#c1503f')
     const dim = token('--fg-3', '#5f5a52')
     const items: SeriesMarker<Time>[] = []
-    for (const trade of ledger.trades) {
+    for (const trade of drawn.inside) {
       const isSelected = selected?.trade_id === trade.trade_id
       const won = trade.net_pnl > 0
       items.push({
@@ -217,7 +236,7 @@ export function StrategyChart({
     // lightweight-charts requires markers in ascending time order.
     items.sort((a, b) => (a.time as number) - (b.time as number))
     markerApi.current.setMarkers(items)
-  }, [ready, ledger.trades, selected])
+  }, [ready, drawn, selected])
 
   // Levels for the selected trade only. Drawing every trade's stop would be a
   // wall of lines, and drawing a level a run never recorded would be a lie.
@@ -255,21 +274,24 @@ export function StrategyChart({
     const handler = (param: { time?: Time }) => {
       if (!param.time) return
       const at = param.time as number
-      const hit = ledger.trades.find(
+      const hit = drawn.inside.find(
         (trade) => seconds(trade.entry_time) <= at && at <= seconds(trade.exit_time),
       )
       onSelect(hit ?? null)
     }
     chart.current.subscribeClick(handler)
     return () => chart.current?.unsubscribeClick(handler)
-  }, [ready, ledger.trades, onSelect])
+  }, [ready, drawn, onSelect])
 
+  // The readout describes the trades on screen, and the footer says how many
+  // are not. Summing the whole ledger under a chart showing a fortnight of it
+  // would be a number that does not belong to the picture.
   const summary = useMemo(() => {
-    const shown = ledger.trades
+    const shown = drawn.inside
     const net = shown.reduce((total, trade) => total + trade.net_pnl, 0)
     const wins = shown.filter((trade) => trade.net_pnl > 0).length
     return { net, wins, count: shown.length }
-  }, [ledger.trades])
+  }, [drawn])
 
   return (
     <section className="strategy-chart">
@@ -323,6 +345,12 @@ export function StrategyChart({
         <span>{ledger.dataset_key ?? 'dataset not recorded'}</span>
         <span>{ledger.evidence_tier}</span>
         {bars.data?.convention && <span>{bars.data.convention}</span>}
+        {drawn.outside > 0 && (
+          <span className="warn">
+            {drawn.outside.toLocaleString()} trade(s) outside this window — step or
+            filter to reach them
+          </span>
+        )}
         {ledger.truncated && (
           <span className="warn">
             showing {ledger.returned_trades} of {ledger.matched_trades} matched

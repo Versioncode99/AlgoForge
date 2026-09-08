@@ -158,6 +158,16 @@ class BacktestResult(FrozenModel):
     # binds the claim to the run it actually preceded, and re-deriving it from
     # the current spec at judge time is what detects a claim that has moved.
     preregistration_hash: str | None = None
+    # The span of bars this run executed over. Recorded because `bar_count`
+    # alone cannot locate them: a run is executed on a *partition* of a loaded
+    # window, so it is neither the first N bars of an archive nor the last N.
+    # Anything that needs to line other measurements up against these bars —
+    # regime classification, most obviously — has to be told where they were,
+    # and deriving it from the trades only finds the span the trades happened to
+    # cover. Optional because artifacts written before this field existed do not
+    # carry one.
+    first_bar_time: datetime | None = None
+    last_bar_time: datetime | None = None
     started_at: datetime
     finished_at: datetime
 

@@ -219,6 +219,49 @@ class MarketService:
         return (bars[-limit:] if limit and limit < len(bars) else bars), dataset
 
 
+    def load_range(
+        self, key: str, start: Any, end: Any, *, pad_bars: int = 0
+    ) -> tuple[list[Bar], Dataset]:
+        """Bars between two timestamps, optionally with earlier history attached.
+
+        `pad_bars` extends the window *backwards* only. That is the direction
+        that costs nothing: a classifier given more history before a bar makes
+        a better-informed decision about it, and cannot possibly learn anything
+        from bars that had not happened. Extending forwards would be the other
+        thing entirely.
+
+        Exists because a backtest runs on a partition of a loaded window, so
+        neither `tail(n)` nor `head(n)` finds its bars, and anything lining
+        measurements up against them has to ask for the span by time.
+        """
+        dataset = DATASETS.get(key)
+        if dataset is None:
+            raise ProviderError(f"unknown dataset '{key}'")
+        if not dataset.is_imported:
+            bars, _ = self.load(key)
+            return [b for b in bars if start <= b.event_time <= end], dataset
+
+        pd = _pd()
+        frame = self._frame_for(key, dataset)
+        begin, finish = pd.Timestamp(start), pd.Timestamp(end)
+        if begin.tzinfo is None:
+            begin = begin.tz_localize("UTC")
+        if finish.tzinfo is None:
+            finish = finish.tz_localize("UTC")
+
+        # Integer positions, not index labels: the frame's index may be
+        # anything, and `iloc` is what the slice below needs.
+        # `.nonzero()` on the mask's own array rather than `np.flatnonzero`,
+        # so this module keeps its light import surface — see
+        # tests/test_import_cost.py, which holds the startup budget.
+        mask = ((frame["event_time"] >= begin) & (frame["event_time"] <= finish)).to_numpy()
+        inside = mask.nonzero()[0]
+        if inside.size == 0:
+            return [], dataset
+        first, last = int(inside[0]), int(inside[-1])
+        window = frame.iloc[max(0, first - max(0, pad_bars)) : last + 1]
+        return _frame_to_bars(window, dataset.symbol, dataset.provider), dataset
+
     # ── charting ─────────────────────────────────────────────────────────────
     def chart_bars(
         self,

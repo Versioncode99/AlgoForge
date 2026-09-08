@@ -393,6 +393,9 @@ def run_backtest(
         data_quality=quality,
         # The claim this run was executed under, bound to the run itself.
         preregistration_hash=preregistration_hash,
+        # Where these bars were. See BacktestResult.
+        first_bar_time=t[0],
+        last_bar_time=t[-1],
         started_at=started,
         finished_at=finished,
     )

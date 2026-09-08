@@ -148,6 +148,34 @@ class RegimeSeries(FrozenModel):
             return self.labels[index]
         return Regime.UNCLASSIFIED
 
+    def window(self, start: int, stop: int) -> RegimeSeries:
+        """The same classification, restricted to bars [start, stop).
+
+        Used when a classifier is given history *before* the span being
+        reported on. That extra history is free and strictly good — it lets
+        early bars be classified at all, and it cannot contain the future — but
+        it must not end up in the report's denominators. Exposure over "the
+        bars this run touched" and exposure over "those plus a month of warmup"
+        are different numbers, and only the first answers the question.
+
+        The labels are not recomputed. Slicing after classification is the
+        point: each label keeps the prior history it was derived from.
+        """
+        start = max(0, start)
+        stop = min(len(self.labels), stop)
+        if stop <= start:
+            raise ValueError(f"empty window [{start}, {stop})")
+        labels = self.labels[start:stop]
+        return RegimeSeries(
+            settings=self.settings,
+            bar_count=stop - start,
+            labels=labels,
+            volatility=self.volatility[start:stop],
+            trend_strength=self.trend_strength[start:stop],
+            vol_threshold=self.vol_threshold[start:stop],
+            classified_bars=sum(1 for label in labels if label is not Regime.UNCLASSIFIED),
+        )
+
 
 def _trailing_mean(values: np.ndarray, length: int) -> np.ndarray:
     """Mean of the `length` values ending at each position, NaN before warmup.
