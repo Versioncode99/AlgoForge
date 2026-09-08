@@ -53,7 +53,17 @@ export function StrategiesView() {
   // hid four hundred others behind a detail pane nobody asked for.
   useEffect(() => {
     if (!dataset && datasets.data?.length) {
-      const real = datasets.data.find((d) => d.is_imported && d.available) ?? datasets.data[0]
+      // Prefer a local archive, but never land on a data set that cannot run.
+      // `is_imported && available` describes one machine's setup, and where no
+      // archive is present it fell through to `[0]` — which is the 16-year NQ
+      // archive, rendered disabled in this very dropdown. A fresh install
+      // therefore opened with an unrunnable data set selected and failed the
+      // first backtest anyone tried, on a provider error rather than anything
+      // about the strategy.
+      const real =
+        datasets.data.find((d) => d.is_imported && d.available)
+        ?? datasets.data.find((d) => d.available)
+        ?? datasets.data[0]
       setDataset(real.key)
     }
   }, [datasets.data, dataset])
