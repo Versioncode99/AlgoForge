@@ -645,6 +645,19 @@ def build_control_router(
             }
         )
 
+    def _source_labels(record: dict[str, Any]) -> tuple[str, ...]:
+        """What the daily series being simulated actually is.
+
+        The simulator cannot know, so the caller says. Without this every
+        simulation carried `SAMPLE_DATA` — including one run over a real
+        strategy's real trade ledger — which is the kind of label a reader
+        learns to skip past, taking the meaningful ones with it.
+        """
+        labels = {str(item) for item in record.get("labels", ())}
+        tier = str(record.get("evidence_tier") or "LEGACY_IN_SAMPLE")
+        source = "REAL_DATA" if "REAL_DATA" in labels else "SYNTHETIC_DATA"
+        return (source, f"EVIDENCE_TIER:{tier}")
+
     @router.post("/prop/matrix", response_model=ApiEnvelope[dict[str, Any]])
     def prop_matrix(body: PropMatrixRequest) -> ApiEnvelope[dict[str, Any]]:
         """Every strategy against every rule, as one job.
@@ -662,7 +675,7 @@ def build_control_router(
         if not rules:
             raise HTTPException(422, {"code": "no_rules", "phase": body.phase})
 
-        candidates: list[tuple[str, str, tuple[float, ...]]] = []
+        candidates: list[tuple[str, str, tuple[float, ...], tuple[str, ...]]] = []
         skipped: list[dict[str, Any]] = []
         for spec in library.list_specs():
             if body.strategy_ids and spec.strategy_id not in body.strategy_ids:
@@ -741,7 +754,7 @@ def build_control_router(
                     }
                 )
                 continue
-            candidates.append((spec.strategy_id, spec.name, daily))
+            candidates.append((spec.strategy_id, spec.name, daily, _source_labels(latest)))
 
         if not candidates:
             raise HTTPException(
@@ -761,7 +774,7 @@ def build_control_router(
         def work(handle: JobHandle) -> dict[str, Any]:
             cells: list[dict[str, Any]] = []
             done = 0
-            for strategy_id, name, daily in candidates:
+            for strategy_id, name, daily, source_labels in candidates:
                 for rule in rules:
                     handle.progress(done, f"{name} vs {rule.display_name}")
                     simulation = simulate_prop_paths(
@@ -771,6 +784,7 @@ def build_control_router(
                         seed=body.seed,
                         paths=body.paths,
                         allow_unverified=True,
+                        source_labels=source_labels,
                     )
                     cells.append(
                         {
@@ -803,8 +817,13 @@ def build_control_router(
             return {
                 "cells": cells,
                 "strategies": [
-                    {"strategy_id": sid, "name": name, "trading_days": len(daily)}
-                    for sid, name, daily in candidates
+                    {
+                        "strategy_id": sid,
+                        "name": name,
+                        "trading_days": len(daily),
+                        "source_labels": list(source_labels),
+                    }
+                    for sid, name, daily, source_labels in candidates
                 ],
                 "rules": [
                     {
@@ -890,6 +909,7 @@ def build_control_router(
             seed=body.seed,
             paths=body.paths,
             allow_unverified=True,
+            source_labels=_source_labels(latest),
         )
 
         terminal = [outcome.terminal_balance for outcome in simulation.outcomes]

@@ -8,6 +8,7 @@
   "scripts": {
     "dev:web": "npm --prefix apps/web run dev",
     "build:web": "npm --prefix apps/web run build",
+    "typecheck:web": "npm --prefix apps/web run typecheck",
     "test:web": "npm --prefix apps/web run test",
     "test:e2e": "npm --prefix apps/web run test:e2e"
   }

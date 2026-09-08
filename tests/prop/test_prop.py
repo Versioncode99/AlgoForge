@@ -101,3 +101,63 @@ def test_block_bootstrap_preserves_losing_streaks():
         [longest_run(rng.choice(series, size=200, replace=True)) for _ in range(30)]
     )
     assert blocked > independent
+
+
+# ── labels have to mean something ────────────────────────────────────────────
+
+
+def _series(seed: int = 3) -> tuple[float, ...]:
+    rng = np.random.default_rng(seed)
+    return tuple(float(v) for v in rng.normal(60.0, 300.0, 90))
+
+
+def test_a_label_that_is_always_present_carries_no_information() -> None:
+    """`SAMPLE_DATA` and `UNVERIFIED_RULES` used to be unconditional defaults.
+
+    A simulation over a real strategy's real trade ledger, against a rule set
+    marked verified, came back saying both. The cost of a label that is always
+    true is not zero: it teaches the reader to skip the row, and the labels that
+    do mean something go with it.
+    """
+    rule = rules()["topstep-50k-challenge-sample-v1"]
+    verified = rule.model_copy(update={"verified": True})
+
+    unverified_run = simulate_prop_paths(
+        "run_demo", rule, _series(), paths=40, allow_unverified=True
+    )
+    verified_run = simulate_prop_paths(
+        "run_demo", verified, _series(), paths=40, allow_unverified=True
+    )
+    assert "UNVERIFIED_RULES" in unverified_run.labels
+    assert "UNVERIFIED_RULES" not in verified_run.labels
+
+
+def test_the_caller_states_what_the_series_is() -> None:
+    rule = rules()["topstep-50k-challenge-sample-v1"]
+    real = simulate_prop_paths(
+        "run_demo",
+        rule,
+        _series(),
+        paths=40,
+        allow_unverified=True,
+        source_labels=("REAL_DATA", "EVIDENCE_TIER:VALIDATION_OOS"),
+    )
+    assert "REAL_DATA" in real.labels
+    assert "EVIDENCE_TIER:VALIDATION_OOS" in real.labels
+    assert "SAMPLE_DATA" not in real.labels
+
+    # A caller that says nothing is recorded as having said nothing, rather than
+    # being credited with real data by omission.
+    silent = simulate_prop_paths("run_demo", rule, _series(), paths=40, allow_unverified=True)
+    assert "UNDECLARED_SOURCE" in silent.labels
+    assert "REAL_DATA" not in silent.labels
+
+
+def test_the_method_assumptions_are_stated_on_every_simulation() -> None:
+    """These three hold whatever the simulator is fed, so they are never omitted."""
+    rule = rules()["topstep-50k-challenge-sample-v1"]
+    simulation = simulate_prop_paths(
+        "run_demo", rule, _series(), paths=40, allow_unverified=True, source_labels=("REAL_DATA",)
+    )
+    for label in ("RESEARCH_ONLY", "BLOCK_BOOTSTRAP", "DAILY_SETTLEMENT_APPROXIMATION"):
+        assert label in simulation.labels

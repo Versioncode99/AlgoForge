@@ -109,5 +109,9 @@ def test_prop_scoring_refuses_a_track_record_that_is_too_short(engine: Autonomou
             self.exit_time = f"2026-01-{day}T15:00:00+00:00"
             self.net_pnl = pnl
 
-    engine._score_against_prop_firms("s1", [_Trade("01", 10.0), _Trade("02", -5.0)])
+    engine._score_against_prop_firms(
+        "s1",
+        [_Trade("01", 10.0), _Trade("02", -5.0)],
+        ("SYNTHETIC_DATA", "EVIDENCE_TIER:SYNTHETIC"),
+    )
     assert engine.state.prop_tested == 0

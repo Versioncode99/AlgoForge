@@ -44,13 +44,10 @@ class PropSimulation(FrozenModel):
     tail_risk: TailRiskSummary
     outcomes: tuple[PathOutcome, ...]
     equity_paths: tuple[tuple[float, ...], ...]
-    labels: tuple[str, ...] = (
-        "SAMPLE_DATA",
-        "UNVERIFIED_RULES",
-        "RESEARCH_ONLY",
-        "BLOCK_BOOTSTRAP",
-        "DAILY_SETTLEMENT_APPROXIMATION",
-    )
+    #: What this simulation actually rests on. Three of these always hold and
+    #: describe the method; the rest are supplied by the caller and describe the
+    #: input, so a label here means something rather than being decoration.
+    labels: tuple[str, ...]
 
 
 def load_rules(directory: Path) -> list[PropRuleSet]:
@@ -406,6 +403,15 @@ def _target_curve(outcomes: list[PathOutcome], timeout_days: int) -> tuple[Targe
     return tuple(points)
 
 
+#: Assumptions of the method itself. They hold for every simulation this
+#: function produces, whatever it is fed.
+METHOD_LABELS: tuple[str, ...] = (
+    "RESEARCH_ONLY",
+    "BLOCK_BOOTSTRAP",
+    "DAILY_SETTLEMENT_APPROXIMATION",
+)
+
+
 def simulate_prop_paths(
     run_id: str,
     rule: PropRuleSet,
@@ -414,7 +420,18 @@ def simulate_prop_paths(
     seed: int = 20260901,
     paths: int = 300,
     allow_unverified: bool = False,
+    source_labels: tuple[str, ...] = ("UNDECLARED_SOURCE",),
 ) -> PropSimulation:
+    """Simulate `paths` accounts against `rule`, resampling the observed days.
+
+    `source_labels` says what the daily series actually is — the caller knows
+    and this function cannot. It used to assert `SAMPLE_DATA` and
+    `UNVERIFIED_RULES` unconditionally, which meant a simulation over a real
+    strategy's real trade ledger against a verified rule set carried both. A
+    label that is always present carries no information, and the cost of one is
+    not zero: it teaches the reader to skip the whole row, including the labels
+    that do mean something.
+    """
     if not allow_unverified and not rule.runnable(date.today()):
         raise ValueError("RULE_LOCKED_UNVERIFIED_OR_EXPIRED")
     if paths < 20:
@@ -493,4 +510,9 @@ def simulate_prop_paths(
         tail_risk=_tail_summary(terminal_pnl),
         outcomes=tuple(outcomes[:100]),
         equity_paths=tuple(equities[:100]),
+        labels=(
+            *METHOD_LABELS,
+            *(() if rule.verified else ("UNVERIFIED_RULES",)),
+            *source_labels,
+        ),
     )

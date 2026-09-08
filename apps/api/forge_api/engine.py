@@ -418,7 +418,9 @@ class AutonomousEngine:
             self.state.worker_stages[str(worker)] = stage
             self.state.current_stage = stage
 
-    def _score_against_prop_firms(self, strategy_id: str, trades: Any) -> None:
+    def _score_against_prop_firms(
+        self, strategy_id: str, trades: Any, source_labels: tuple[str, ...]
+    ) -> None:
         """Ask the question the whole system exists to answer.
 
         A passing backtest is not the goal; surviving a funded evaluation is.
@@ -444,7 +446,12 @@ class AutonomousEngine:
         for rule in self._rules:
             try:
                 simulation = simulate_prop_paths(
-                    strategy_id, rule, daily, paths=400, allow_unverified=True
+                    strategy_id,
+                    rule,
+                    daily,
+                    paths=400,
+                    allow_unverified=True,
+                    source_labels=source_labels,
                 )
             except ValueError:
                 continue
@@ -912,9 +919,7 @@ class AutonomousEngine:
                     pnl=holdout_pnl,
                     trial_count=max(1, self.state.backtested),
                     data_gate_passed=(
-                        holdout.data_quality.accepted
-                        if holdout.data_quality is not None
-                        else None
+                        holdout.data_quality.accepted if holdout.data_quality is not None else None
                     ),
                     preregistered=self._preregistration_holds(attempt_id, template, params),
                     implementation_tests_passed=conformance.passed,
@@ -954,7 +959,14 @@ class AutonomousEngine:
                 verdict.verdict_id,
             )
             self._stage(worker, "prop")
-            self._score_against_prop_firms(spec.strategy_id, result.trades)
+            self._score_against_prop_firms(
+                spec.strategy_id,
+                result.trades,
+                (
+                    "REAL_DATA" if "REAL_DATA" in result.labels else "SYNTHETIC_DATA",
+                    f"EVIDENCE_TIER:{result.evidence_tier}",
+                ),
+            )
         else:
             self._bump("rejected")
             reason = f"failed {failed[0].gate} ({failed[0].name})" if failed else "rejected"
@@ -1204,9 +1216,7 @@ def _validation_grid(template: Any, params: dict[str, float]) -> dict[str, list[
         return grid
 
     axes = movable[:VALIDATION_AXES]
-    width = (
-        MINIMUM_TRIAL_CONFIGURATIONS if len(axes) == 1 else VALIDATION_POINTS_PER_AXIS
-    )
+    width = MINIMUM_TRIAL_CONFIGURATIONS if len(axes) == 1 else VALIDATION_POINTS_PER_AXIS
     for spec in axes:
         grid[spec.name] = _axis_points(spec, params[spec.name], width)
 
