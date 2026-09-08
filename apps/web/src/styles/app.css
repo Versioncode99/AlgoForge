@@ -268,27 +268,24 @@
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
   .grid-3 { grid-template-columns: repeat(2, 1fr); }
 }
+/* The rest of the deleted shell's breakpoints, and they were not merely dead.
+ *
+ * `:root { --rail-w: 0px }` and `:root { --topbar-h: auto }` are *live* token
+ * overrides: nothing renders `.rail` or `.topbar` any more, but the tokens they
+ * were setting are the ones the current shell builds its grid rows and columns
+ * from. Below 720px `--topbar-h: auto` collapsed the context bar's grid row and
+ * the rail head's height to their content. A rule for a deleted component is
+ * usually inert; one that writes a token is not. */
 @media (max-width: 1000px) {
-  :root { --rail-w: 0px; }
-  .rail { display: none; }
-  .body { grid-template-columns: minmax(0, 1fr); }
   .brand-sub { display: none; }
   .grid-2 { grid-template-columns: 1fr; }
-  .main { padding: 0 var(--sp-4) var(--sp-6); }
 }
 @media (max-width: 720px) {
-  :root { --topbar-h: auto; --logbar-h: 108px; }
-  .topbar { flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); }
-  .tabs { order: 3; width: 100%; }
-  .topstats { gap: var(--sp-3); }
-  .topstat:not(.is-live) { display: none; }
   .hero, .split { grid-template-columns: 1fr; }
   .grade, .donut-wrap { border-right: 0; border-bottom: 1px solid var(--line); }
   .metrics, .grid-3, .grid-4, .dimensions { grid-template-columns: 1fr; }
   .metrics > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .metrics > div:last-child { border-bottom: 0; }
-  .logline { grid-template-columns: 60px 1fr; }
-  .logline .stage { display: none; }
 }
 
 /* ── Strategy workbench ──────────────────────────────────────────────────── */

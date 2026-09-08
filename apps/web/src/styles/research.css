@@ -214,16 +214,6 @@
 .engine-counter strong.bad { color: var(--verdict-fail); }
 .engine-counter strong.warn { color: var(--verdict-unknown); }
 
-/* ── Palette groups ─────────────────────────────────────────────────────── */
-.palette-group + .palette-group { border-top: 1px solid var(--line); margin-top: var(--sp-2); padding-top: var(--sp-2); }
-.palette-group h3 {
-  padding: var(--sp-1) var(--sp-4);
-  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
-  letter-spacing: .05em; text-transform: uppercase; color: var(--fg-3);
-}
-.palette-results button[data-active='yes'] { background: var(--bg-3); }
-.palette-results button[data-active='yes'] strong { color: var(--brand); }
-
 /* ── Loading ────────────────────────────────────────────────────────────── */
 /* Contextual placeholders sized like the rows they stand in for, so the layout
    does not jump when real records arrive. */
