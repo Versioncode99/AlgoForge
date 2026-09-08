@@ -76,6 +76,41 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("finished_at", "TEXT"),
 )
 
+# Fixed when the experiment is reserved, and not an outcome of running it.
+#
+# `finish` records what happened; provenance records what was claimed and where
+# it came from, and the judge reads that provenance as evidence. G1 asks whether
+# the pre-registered hypothesis still describes what is being judged, and it
+# answers by comparing against `preregistration_hash` on this row -- so a
+# `finish` able to write that column is a second route to the very move
+# pre-registration exists to prevent: run it, dislike the result, rewrite the
+# claim. `parent_id` is here for the same reason in the lineage: an edge that
+# can be redirected after the fact can be pointed at an ancestor, and the
+# history stops being a history.
+#
+# Both routes are closed, because there are two. A field that is not promoted
+# into its column still lands in the payload blob, and `_merge` lets the blob
+# supply anything whose column is NULL -- which is how an experiment that was
+# never pre-registered at all could acquire a hash.
+_FROZEN_AT_RESERVATION = frozenset(
+    {
+        "id",
+        "scope",
+        "template",
+        "parameters",
+        "parent_id",
+        "policy",
+        "family",
+        "hypothesis",
+        "dataset",
+        "data_version",
+        "seed",
+        "preregistration_id",
+        "preregistration_hash",
+        "created_at",
+    }
+)
+
 # Guards the ancestor walk against a cycle. Nothing should be able to create
 # one, but a corrupted parent_id must not hang a worker thread.
 _MAX_LINEAGE_DEPTH = 512
@@ -129,6 +164,13 @@ class Experiments:
         Deflated Sharpe deflates against.
         """
         key = stable_id("experiment", {"scope": scope, "template": template, "params": parameters})
+        if parent_id is not None and parent_id == key:
+            # A policy proposing its own parent again — a neighbourhood step
+            # that clamped back to where it started. Declining is the same
+            # answer the identity check below would give (the row already
+            # exists, so the insert is ignored), and it says the useful half
+            # out loud: nothing is claimed, and no self-edge is written.
+            return None
         payload = {
             "id": key,
             "template": template,
@@ -136,6 +178,16 @@ class Experiments:
             "status": "reserved",
         }
         with closing(self.connect()) as db, db:
+            # Every edge must point at a row that already exists. Together with
+            # `parent_id` being frozen after reservation, that makes the lineage
+            # acyclic by construction rather than by hoping: a new edge can only
+            # ever point backwards, and no existing edge can be redirected. The
+            # read-side cycle guards stay where they are, because a database
+            # corrupted from outside this class is still possible.
+            if parent_id is not None:
+                known = db.execute("SELECT 1 FROM attempts WHERE id=?", (parent_id,)).fetchone()
+                if known is None:
+                    raise ValueError(f"parent experiment does not exist: {parent_id}")
             inserted = db.execute(
                 "INSERT OR IGNORE INTO attempts "
                 "(id, scope, template, payload, parent_id, policy, family, hypothesis, "
@@ -168,7 +220,19 @@ class Experiments:
         Keys matching a real column are written there so they can be queried;
         everything else stays in the payload blob, which is what keeps this
         backwards compatible with callers that invented their own field names.
+
+        Provenance is refused rather than ignored. This method takes arbitrary
+        keyword arguments, so the day someone forwards a results dictionary
+        into it, a colliding key would silently rewrite what the judge reads as
+        evidence. Failing loudly turns that from a corrupted record into a
+        stack trace.
         """
+        frozen = _FROZEN_AT_RESERVATION & fields.keys()
+        if frozen:
+            raise ValueError(
+                "finish() records an outcome and cannot rewrite provenance fixed "
+                f"at reservation: {', '.join(sorted(frozen))}"
+            )
         columns = {name for name, _ in _COLUMNS}
         promoted = {name: value for name, value in fields.items() if name in columns}
         if fields.get("status") is not None and "finished_at" not in promoted:

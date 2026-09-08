@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,7 +25,7 @@ class ResearchLedger:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS holdout_consumptions (
@@ -50,7 +51,7 @@ class ResearchLedger:
     ) -> HoldoutConsumption:
         stamp = consumed_at or datetime.now(UTC)
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection, connection:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     "INSERT INTO holdout_consumptions VALUES (?, ?, ?, NULL)",
@@ -61,7 +62,7 @@ class ResearchLedger:
         return HoldoutConsumption(lineage=lineage, split_id=split_id, consumed_at=stamp)
 
     def attach_result(self, lineage: str, result_id: str) -> HoldoutConsumption:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             changed = connection.execute(
                 "UPDATE holdout_consumptions SET result_id = ? WHERE lineage = ?",
                 (result_id, lineage),
@@ -74,14 +75,14 @@ class ResearchLedger:
         return item
 
     def get(self, lineage: str) -> HoldoutConsumption | None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             row = connection.execute(
                 "SELECT * FROM holdout_consumptions WHERE lineage = ?", (lineage,)
             ).fetchone()
         return None if row is None else HoldoutConsumption.model_validate(dict(row))
 
     def list_consumptions(self) -> list[HoldoutConsumption]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(
                 "SELECT * FROM holdout_consumptions ORDER BY consumed_at DESC"
             ).fetchall()
