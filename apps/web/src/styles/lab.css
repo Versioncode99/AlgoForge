@@ -385,3 +385,65 @@
 }
 .lab-retract:hover:not(:disabled) { color: var(--fail); }
 .lab-retract:focus-visible { outline: 1px solid var(--brand); outline-offset: 1px; }
+
+/* ── asking in words ─────────────────────────────────────────────────────────
+   The box resolves to one of the same six analyses the dropdown below offers.
+   It is placed above them rather than instead of them, because the list is what
+   makes the bound visible: a reader can see the whole of what the lab can
+   answer, which is what stops a refusal reading as a failure. */
+.lab-ask {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2, 8px);
+  padding: var(--sp-2, 8px) var(--sp-3, 12px);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-1);
+}
+.lab-ask-field { flex: 1 1 auto; min-width: 0; }
+.lab-ask-field input {
+  width: 100%;
+  background: var(--bg-0);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--fg-0);
+  font: inherit;
+  font-size: var(--fs-xs);
+  padding: 5px 8px;
+}
+.lab-ask-field input::placeholder { color: var(--fg-3); }
+.lab-ask-field input:focus-visible { outline: 1px solid var(--brand); outline-offset: 0; }
+
+.lab-unrouted {
+  border: 1px solid var(--line-strong);
+  border-left: 2px solid var(--warn);
+  border-radius: 4px;
+  background: var(--bg-1);
+  padding: var(--sp-3, 12px);
+  display: grid;
+  gap: var(--sp-2, 8px);
+}
+.lab-unrouted p { margin: 0; font-size: var(--fs-xs); line-height: 1.55; color: var(--fg-1); max-width: 90ch; }
+.lab-unrouted ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.lab-unrouted li { display: flex; align-items: baseline; gap: var(--sp-2, 8px); }
+.lab-unrouted li button {
+  background: none; border: 0; padding: 0; font: inherit; font-size: var(--fs-xs);
+  color: var(--brand); cursor: pointer; text-align: left;
+}
+.lab-unrouted li button:hover { text-decoration: underline; }
+.lab-unrouted li small { color: var(--fg-3); font-size: var(--fs-nano); }
+.lab-force {
+  justify-self: start;
+  background: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--fs-nano);
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.lab-force:hover { color: var(--fg-0); border-color: var(--brand); }
+.lab-unrouted button:focus-visible { outline: 1px solid var(--brand); outline-offset: 1px; }

@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { getJson, postJson } from '../api'
+import { ApiError, getJson, postJson } from '../api'
 import { AnalysisChart, type AnalysisResult, type Cell } from '../components/AnalysisChart'
 
 /* Ask a question about a strategy's trades, and get back to the trades.
@@ -55,6 +55,16 @@ type Drilldown = {
   note: string
 }
 
+type RouteCandidate = { analysis: string; score: number; matched: string[] }
+
+type NotRouted = {
+  code: string
+  reason: string
+  question: string
+  candidates: RouteCandidate[]
+  available: CatalogueItem[]
+}
+
 type Finding = {
   finding_id: string
   statement: string
@@ -89,6 +99,8 @@ export function ResearchLabWorkbench() {
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [picked, setPicked] = useState<Cell | null>(null)
+  const [typed, setTyped] = useState('')
+  const [unrouted, setUnrouted] = useState<NotRouted | null>(null)
 
   const strategies = useQuery({
     queryKey: ['strategies'],
@@ -104,6 +116,33 @@ export function ResearchLabWorkbench() {
   })
 
   const active = strategyId || strategies.data?.[0]?.strategy_id || ''
+
+  // A question in words. It resolves to one of the same six analyses the
+  // dropdown offers — the routing chooses among them, it cannot conjure a
+  // seventh — and refuses when the sentence does not pick one out.
+  const ask = useMutation({
+    mutationFn: (force: boolean) =>
+      postJson<AnalysisResult>('/lab/ask', {
+        question: typed,
+        strategy_id: active,
+        hour_bucket: hourBucket,
+        force,
+      }),
+    onMutate: () => {
+      setError(null)
+      setPicked(null)
+      setUnrouted(null)
+    },
+    onSuccess: (data) => {
+      setResult(data)
+      queryClient.invalidateQueries({ queryKey: ['lab-artifacts'] })
+    },
+    onError: (err) => {
+      const detail = err instanceof ApiError ? err.detail<NotRouted>() : undefined
+      if (detail?.code === 'question_not_routed') setUnrouted(detail)
+      else setError(err instanceof Error ? err.message : 'Could not answer that')
+    },
+  })
 
   const run = useMutation({
     mutationFn: () =>
@@ -204,6 +243,67 @@ export function ResearchLabWorkbench() {
 
   return (
     <div className="lab-view">
+      <form
+        className="lab-ask"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (typed.trim()) ask.mutate(false)
+        }}
+      >
+        <label className="ctl lab-ask-field">
+          <span>Ask</span>
+          <input
+            type="text"
+            value={typed}
+            placeholder="Does this strategy's edge depend on volatility?"
+            onChange={(event) => setTyped(event.target.value)}
+          />
+        </label>
+        <button type="submit" className="lab-run" disabled={ask.isPending || !typed.trim()}>
+          {ask.isPending ? 'Answering…' : 'Answer'}
+        </button>
+      </form>
+
+      {unrouted && (
+        <div className="lab-unrouted" role="status">
+          <p>{unrouted.reason}</p>
+          {unrouted.candidates.length > 0 ? (
+            <>
+              <p className="lab-sub">What it heard:</p>
+              <ul>
+                {unrouted.candidates.map((item) => (
+                  <li key={item.analysis}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAnalysis(item.analysis)
+                        setUnrouted(null)
+                      }}
+                    >
+                      {catalogue.data?.find((row) => row.key === item.analysis)?.title ??
+                        item.analysis}
+                    </button>
+                    <small className="mono">{item.matched.join(' · ')}</small>
+                  </li>
+                ))}
+              </ul>
+              {/* Running the top candidate anyway is a decision, so it is a
+                  button the reader presses rather than something done for them
+                  behind a confidence score. */}
+              <button type="button" className="lab-force" onClick={() => ask.mutate(true)}>
+                Run {catalogue.data?.find((row) => row.key === unrouted.candidates[0].analysis)
+                  ?.title ?? unrouted.candidates[0].analysis} anyway
+              </button>
+            </>
+          ) : (
+            <p className="lab-sub">
+              Pick a question from the list below instead — those are the ones this lab can
+              answer from a trade ledger.
+            </p>
+          )}
+        </div>
+      )}
+
       <header className="lab-bar">
         <label className="ctl">
           <span>Strategy</span>

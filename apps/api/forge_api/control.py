@@ -23,6 +23,7 @@ from forge.research.knowledge import (
     KnowledgeStore,
     as_payload,
 )
+from forge.research.routing import route as route_question
 from forge.strategy import FamilyRegistry, StrategyLibrary, TemplateStore
 
 # `Workspace` here is the storage location, not the screen layout. The two are
@@ -149,6 +150,20 @@ class PanelSettingRequest(BaseModel):
 class LinkPanelsRequest(BaseModel):
     panel_ids: list[str] = Field(min_length=1)
     group: str | None = None
+
+
+class LabQuestionRequest(BaseModel):
+    """A research question in the user's own words, for the lab."""
+
+    question: str = Field(min_length=1, max_length=400)
+    strategy_id: str = Field(min_length=1, max_length=120)
+    backtest_id: str | None = Field(default=None, max_length=120)
+    hour_bucket: int = Field(default=2, ge=1, le=6)
+    save: bool = True
+    #: Run the top candidate even when the question did not clearly pick one.
+    #: Off by default: a confident wrong answer to a question nobody asked is
+    #: worse than a refusal, because the result looks like an answer.
+    force: bool = False
 
 
 class PromoteFindingRequest(BaseModel):
@@ -1295,6 +1310,66 @@ def build_control_router(
             return ApiEnvelope(data=research_lab.drilldown(artifact_id, parsed, limit=limit))
         except LabError as exc:
             raise HTTPException(404, {"code": "cell_not_found", "reason": str(exc)}) from exc
+
+    @router.post("/lab/ask", response_model=ApiEnvelope[dict[str, Any]])
+    def lab_ask(body: LabQuestionRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Answer a question asked in words, or say why it cannot be.
+
+        The routing is a scored match against declared vocabulary rather than a
+        model call, for two reasons. It can be tested, which no part of the lab
+        should be without. And a model asked "which analysis answers this?" will
+        answer *something* for a question none of them answer — the result comes
+        back correctly computed over real trades, addressing a different
+        question, with nothing on the screen to say so.
+
+        A question that does not pick one analysis out clearly is refused, with
+        what it did hear. `force` runs the top candidate anyway, which is a
+        decision the caller makes rather than one made for them.
+        """
+        resolved = route_question(body.question)
+        chosen = resolved.analysis or (
+            resolved.candidates[0].analysis if body.force and resolved.candidates else None
+        )
+        if chosen is None:
+            raise HTTPException(
+                422,
+                {
+                    "code": "question_not_routed",
+                    "reason": resolved.reason,
+                    "question": body.question,
+                    "candidates": [item.model_dump(mode="json") for item in resolved.candidates],
+                    "available": research_lab.catalogue(),
+                },
+            )
+        try:
+            payload = research_lab.run(
+                chosen,
+                body.strategy_id,
+                backtest_id=body.backtest_id,
+                measure=resolved.measure,
+                hour_bucket=body.hour_bucket,
+                save=body.save,
+                note=body.question,
+            )
+        except LabError as exc:
+            raise HTTPException(422, {"code": "analysis_unavailable", "reason": str(exc)}) from exc
+        return ApiEnvelope(
+            data=payload,
+            meta={
+                "is_evidence": False,
+                "note": payload.get("evidence_note", ""),
+                "routed": {
+                    "question": body.question,
+                    "analysis": chosen,
+                    "measure": resolved.measure,
+                    "decisive": resolved.decisive,
+                    "reason": resolved.reason,
+                    "candidates": [
+                        item.model_dump(mode="json") for item in resolved.candidates
+                    ],
+                },
+            },
+        )
 
     # ── research memory ──────────────────────────────────────────────────────
     # What the search has learned, kept with the artifact that said it. Never
