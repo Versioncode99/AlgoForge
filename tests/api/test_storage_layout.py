@@ -7,6 +7,7 @@ vault-based installation must not break on the day that becomes true.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,25 @@ from forge_api.main import create_app
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """An app whose *repository* is also temporary, not only its workspace.
+
+    Isolating the workspace is not enough for these tests. The pointer lives in
+    the repository, so `migrate-layout` writes to `<repo>/config/storage.json` —
+    and a fixture that leaves `main.ROOT` on the real checkout will happily
+    rewrite the live installation's pointer at it.
+
+    That is not hypothetical. An earlier version of this fixture did exactly
+    that: a migration test repointed the real installation at a pytest
+    temporary directory, and the next launch came up with an empty library
+    while 413 strategies sat untouched in the vault it no longer knew about.
+    """
+    import forge_api.main as main
+
+    repo = tmp_path / "repo"
+    (repo / "config").mkdir(parents=True)
+    shutil.copytree(Path("rules"), repo / "rules", dirs_exist_ok=True)
+    shutil.copy(Path("config") / "capabilities.json", repo / "config" / "capabilities.json")
+    monkeypatch.setattr(main, "ROOT", repo)
     monkeypatch.setenv("ALGOFORGE_VAULT", str(tmp_path / "workspace"))
     with TestClient(create_app(tmp_path / "api.db")) as running:
         yield running
