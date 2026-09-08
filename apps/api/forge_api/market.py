@@ -11,12 +11,14 @@ A dataset is a named window of real market data. Three sources feed it:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from forge.data.dbn_import import cached_batch
+from forge.data.health import HealthReport, analyse, report_path
 from forge.data.live import DataRequest as LiveRequest
 from forge.data.live import MarketDataCache, ProviderError, _frame_to_bars, get_provider
 from forge.data.models import Bar
@@ -332,6 +334,71 @@ class MarketService:
             {"key": tf.key, "label": tf.label, "note": tf.note}
             for tf in TIMEFRAMES.values()
         ]
+
+
+    def health(self, key: str, *, rebuild: bool = False) -> dict[str, Any]:
+        """What this archive actually contains, measured.
+
+        Cached to disk: reading a 4.7-million-row archive to count its holes
+        takes a couple of seconds, and an archive is immutable once bought, so
+        the answer does not change until the file does. The cache lives beside
+        the other derived data and can be deleted without losing anything.
+        """
+        dataset = DATASETS.get(key)
+        if dataset is None:
+            raise ProviderError(f"unknown dataset '{key}'")
+        if not dataset.is_imported:
+            # Streaming and synthetic datasets have no archive to measure. Say
+            # so rather than reporting a health verdict nothing produced.
+            return {
+                "dataset": key,
+                "measurable": False,
+                "reason": (
+                    "Only imported archives are measured. This dataset is fetched on "
+                    "demand, so there is no file to inspect."
+                ),
+            }
+
+        path = cached_batch(self.cache.root, key)
+        if path is None:
+            return {
+                "dataset": key,
+                "measurable": False,
+                "reason": f"'{key}' has not been imported yet.",
+            }
+
+        cache = report_path(self.cache.root, key)
+        stamp = path.stat().st_mtime_ns
+        if not rebuild and cache.exists():
+            try:
+                stored = json.loads(cache.read_text(encoding="utf-8"))
+                # Keyed on the archive's mtime so a re-import invalidates it
+                # rather than serving a measurement of the previous file.
+                if stored.get("source_mtime_ns") == stamp:
+                    return dict(stored)
+            except (OSError, json.JSONDecodeError):
+                pass  # a damaged cache is rebuilt, never trusted
+
+        report: HealthReport = analyse(_pd().read_parquet(path), key)
+        payload = {
+            **report.as_dict(),
+            "measurable": True,
+            "symbol": dataset.symbol,
+            "interval": dataset.interval,
+            "provider": dataset.provider,
+            "authority": dataset.authority,
+            "source_mtime_ns": stamp,
+            "source_bytes": path.stat().st_size,
+        }
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        temporary = cache.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+        temporary.replace(cache)
+        return payload
+
+    def health_matrix(self) -> list[dict[str, Any]]:
+        """Every dataset, measured. The unmeasurable ones say why."""
+        return [self.health(key) for key in DATASETS]
 
     def available_rows(self, key: str) -> int:
         """How many bars an imported dataset holds, without materialising them.

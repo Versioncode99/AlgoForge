@@ -872,6 +872,27 @@ def build_control_router(
 
 
 
+
+    @router.get("/data-health", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def data_health() -> ApiEnvelope[list[dict[str, Any]]]:
+        """Every dataset, measured rather than asserted.
+
+        A dataset is never called healthy because it was paid for or because it
+        is named after a range. Each row carries the arithmetic that produced
+        its status, and the ones that cannot be measured say so instead of
+        showing a tick.
+        """
+        return ApiEnvelope(data=market.health_matrix())
+
+    @router.get("/data-health/{dataset}", response_model=ApiEnvelope[dict[str, Any]])
+    def dataset_health(dataset: str, rebuild: bool = False) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            return ApiEnvelope(data=market.health(dataset, rebuild=rebuild))
+        except ProviderError as exc:
+            raise HTTPException(
+                404, {"code": "unknown_dataset", "reason": str(exc)}
+            ) from exc
+
     # ── charting ─────────────────────────────────────────────────────────────
     @router.get("/timeframes", response_model=ApiEnvelope[list[dict[str, Any]]])
     def timeframes() -> ApiEnvelope[list[dict[str, Any]]]:

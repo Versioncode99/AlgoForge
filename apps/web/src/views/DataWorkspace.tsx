@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Database, ShieldAlert } from 'lucide-react'
 import { getJson } from '../api'
 import { PanelHead, Stat } from '../components/ui'
+import { HealthMatrix } from '../components/HealthMatrix'
 import type { DatasetInfo } from '../types'
 
 export function DataWorkspaceView() {
@@ -17,6 +18,9 @@ export function DataWorkspaceView() {
     <div className="panel"><PanelHead title="Dataset registry" meta="absence is reported, never coerced to zero"><Database /></PanelHead>
       {!rows.length ? <div className="panel-body evidence-absent"><ShieldAlert /><div><strong>No datasets registered</strong><p>Configure a provider or import a dataset before starting evidence-producing work.</p></div></div> :
       <div className="table-scroll"><table className="data-table"><thead><tr><th>Dataset</th><th>Symbol</th><th>Interval</th><th>Provider</th><th>Authority</th><th className="num">Bars</th><th className="num">Span</th><th>Status</th></tr></thead><tbody>{rows.map(row => <tr key={row.key}><td><strong>{row.label}</strong><small className="table-note mono">{row.key}</small></td><td className="mono">{row.symbol}</td><td className="mono">{row.interval}</td><td>{row.provider}</td><td>{row.authority}</td><td className="mono num">{row.loaded ? row.bar_count.toLocaleString() : '—'}</td><td className="mono num">{row.span_years ? `${row.span_years.toFixed(1)}y` : '—'}</td><td><span className={`status-badge ${row.is_real && row.available ? 'is-passed' : row.available ? 'is-reserved' : 'is-failed'}`}>{row.loaded ? 'LOADED' : row.available ? row.is_real ? 'REAL READY' : 'SYNTHETIC' : 'BLOCKED DATA'}</span></td></tr>)}</tbody></table></div>}
+    </div>
+    <div className="panel"><PanelHead title="Integrity, measured" meta="computed from the archive on disk, not from the dataset's name"><ShieldAlert /></PanelHead>
+      <div className="panel-body"><HealthMatrix /></div>
     </div>
   </section>
 }
