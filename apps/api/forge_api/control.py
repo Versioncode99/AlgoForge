@@ -1332,6 +1332,14 @@ def build_control_router(
                 save=body.save,
                 note=body.note,
             )
+        except LedgerError as exc:
+            # A strategy or backtest id that does not resolve is the caller's
+            # mistake, not a server fault. Uncaught, it left FastAPI to answer
+            # with a plain-text 500 -- and `LedgerError` already carries the
+            # sentence worth showing ("strategy 'x' has no backtest yet. Run one
+            # and its trades will appear on the chart."), which the 500 threw
+            # away. Every other ledger-backed endpoint already does this.
+            raise HTTPException(404, {"code": "ledger_unavailable", "reason": str(exc)}) from exc
         except LabError as exc:
             raise HTTPException(422, {"code": "analysis_unavailable", "reason": str(exc)}) from exc
         return ApiEnvelope(
@@ -1443,6 +1451,8 @@ def build_control_router(
                 save=body.save,
                 note=body.question,
             )
+        except LedgerError as exc:
+            raise HTTPException(404, {"code": "ledger_unavailable", "reason": str(exc)}) from exc
         except LabError as exc:
             raise HTTPException(422, {"code": "analysis_unavailable", "reason": str(exc)}) from exc
         return ApiEnvelope(
