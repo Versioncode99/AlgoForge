@@ -103,6 +103,72 @@ def test_pbo_is_near_chance_on_noise_and_low_with_a_real_edge() -> None:
     assert probability_of_backtest_overfitting(edged, blocks=8).probability < 0.1
 
 
+def test_pbo_is_near_chance_on_noise_for_an_odd_number_of_configurations() -> None:
+    """The case the 30-column test above cannot see.
+
+    `rank / (N + 1)` is exactly 0.5 when the winner takes the middle rank, and
+    the middle rank is an integer only when N is odd. Counting those ties as
+    overfit inflated PBO for odd N alone, while every even count stayed
+    correct.
+
+    Averaged over independent draws rather than asserted on one: with three
+    configurations a single 400-row matrix swings between roughly 0.15 and
+    0.85, so one draw measures the draw and not the estimator. Over 24 the mean
+    is stable, and the old behaviour misses it by a wide margin -- 0.70 against
+    0.53 at three columns, 0.66 against 0.54 at five.
+    """
+    for columns in (3, 5, 9, 15):
+        rng = np.random.default_rng(13 + columns)
+        measured = float(
+            np.mean(
+                [
+                    probability_of_backtest_overfitting(
+                        rng.normal(0.0, 1.0, (400, columns)), blocks=8
+                    ).probability
+                    for _ in range(24)
+                ]
+            )
+        )
+        assert measured == pytest.approx(0.5, abs=0.08), (
+            f"{columns} configurations of pure noise averaged PBO {measured}; "
+            "the selection rule is neither better nor worse than chance here"
+        )
+
+
+def test_pbo_calls_indistinguishable_configurations_a_coin_flip() -> None:
+    """Selection among identical things is exactly neutral, not damning.
+
+    Every column the same means every split ties on the median, so every logit
+    is exactly 0.0. Counting a tie as overfit scored this 1.0 -- the most
+    damning value available -- for the one case that is unambiguously a coin
+    flip. PBO gates promotion, so that error withheld verdicts.
+    """
+    rng = np.random.default_rng(29)
+    identical = np.tile(rng.normal(0.0, 1.0, (300, 1)), (1, 6))
+    result = probability_of_backtest_overfitting(identical, blocks=8)
+    assert all(logit == 0.0 for logit in result.logits)
+    assert result.probability == pytest.approx(0.5)
+
+
+def test_pbo_still_condemns_a_search_that_never_generalises() -> None:
+    """The fix must not soften the finding PBO exists to make.
+
+    Columns that are best in-sample precisely when they are worst out of
+    sample: the selection rule is actively misleading, and no tie-handling
+    convention should rescue it.
+    """
+    rng = np.random.default_rng(5)
+    periods, columns = 400, 6
+    matrix = rng.normal(0.0, 0.5, (periods, columns))
+    half = periods // 2
+    for column in range(columns):
+        # A ramp in the first half, reversed in the second: whoever wins on one
+        # side is the loser on the other, whichever way the blocks are dealt.
+        matrix[:half, column] += 0.4 * column
+        matrix[half:, column] -= 0.4 * column
+    assert probability_of_backtest_overfitting(matrix, blocks=8).probability > 0.5
+
+
 def test_pbo_split_count_is_the_symmetric_combination_count() -> None:
     rng = np.random.default_rng(14)
     result = probability_of_backtest_overfitting(rng.normal(0.0, 1.0, (200, 8)), blocks=6)

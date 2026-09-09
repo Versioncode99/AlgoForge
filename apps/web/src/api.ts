@@ -52,9 +52,18 @@ function readMessage(payload: unknown, status: number): string {
   }
 
   if (detail && typeof detail === 'object') {
-    const d = detail as { problems?: string[]; detail?: string; code?: string }
+    const d = detail as { problems?: string[]; detail?: string; reason?: string; code?: string }
     if (d.problems?.length) return d.problems.join('; ')
     if (d.detail) return d.detail
+    /* `reason` is the shape fifteen endpoints in `control.py` actually use --
+     * `{"code": "market_data_unavailable", "reason": "<what went wrong>"}` --
+     * and it was the one field this reader did not know about. Every one of
+     * them fell through to `code`, so the server wrote an explanation and the
+     * interface displayed a machine token instead: the chart's empty state
+     * read "Market data unavailable" and then, underneath it,
+     * "market_data_unavailable". The code stays on `ApiError.payload` for
+     * anything that wants to branch on it. */
+    if (d.reason) return d.reason
     if (d.code) return d.code
   }
 
