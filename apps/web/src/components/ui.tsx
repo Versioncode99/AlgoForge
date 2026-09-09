@@ -20,6 +20,15 @@ export function Rolling({
   className?: string
 }) {
   const [shown, setShown] = useState(value)
+  /* What the reader is currently looking at.
+   *
+   * `from` is the origin the next roll counts up from, and interrupting a roll
+   * used to set it to the value being animated *towards* rather than to the
+   * number on screen. Retargeting a 0 -> 100 roll at 85 therefore restarted
+   * from 100: the digits jumped up to a figure the count had never reached and
+   * then rolled back down. `shown` itself is stale inside the cleanup closure,
+   * so the displayed figure is mirrored into a ref. */
+  const displayed = useRef(value)
   // Direction is information a rolling number loses: by the time the digits
   // settle, "went up" and "went down" look identical. The tint is dropped as
   // soon as it has been read, so a static screen carries no colour.
@@ -39,11 +48,13 @@ export function Rolling({
     const delta = value - start
     if (Math.abs(delta) < 10 ** -decimals) {
       setShown(value)
+      displayed.current = value
       from.current = value
       return
     }
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
       setShown(value)
+      displayed.current = value
       from.current = value
       return
     }
@@ -52,14 +63,17 @@ export function Rolling({
       const t = Math.min(1, (now - began) / 380)
       // Out-quint, matching --ease-out so motion feels like one system.
       const eased = 1 - (1 - t) ** 5
-      setShown(start + delta * eased)
+      const at = start + delta * eased
+      displayed.current = at
+      setShown(at)
       if (t < 1) frame.current = requestAnimationFrame(step)
       else from.current = value
     }
     frame.current = requestAnimationFrame(step)
     return () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current)
-      from.current = value
+      // Continue from what is on screen, not from where this roll was headed.
+      from.current = displayed.current
     }
   }, [value, decimals])
 

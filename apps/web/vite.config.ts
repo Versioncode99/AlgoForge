@@ -8,6 +8,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts?(x)'],
+    // Unmounts between cases and marks the act environment. Without it a
+    // container rendered by one test stays in the document for the rest of the
+    // file, and React 19 warns that act() is unsupported.
+    setupFiles: ['./src/test-setup.ts'],
     // These tests mount the whole application in jsdom and wait for content.
     // Vitest's 5s default is a budget for how fast the machine is, not an
     // assertion any of them make -- and on a slower one the app-wide mounts
