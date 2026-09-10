@@ -72,9 +72,7 @@ def test_the_grid_becomes_a_surface_the_existing_renderer_can_draw() -> None:
     assert result.axes[0].categories == ("10", "20", "30")
     assert result.axes[1].categories == ("1", "2", "3")
     assert len(result.cells) == 9
-    assert {cell.coords for cell in result.cells} == {
-        (x, y) for x in range(3) for y in range(3)
-    }
+    assert {cell.coords for cell in result.cells} == {(x, y) for x in range(3) for y in range(3)}
 
 
 def test_axis_values_are_sorted_however_the_sweep_produced_them() -> None:

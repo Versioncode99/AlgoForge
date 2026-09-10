@@ -188,12 +188,15 @@ def test_no_shipped_template_can_only_take_one_side() -> None:
     template that *could* go short but never happens to on one fixture would
     pass a behavioural check and still be broken.
     """
-    from forge.strategy import TEMPLATES
+    from forge.strategy import SHIPPED_TEMPLATE_KEYS, TEMPLATES
 
+    # Shipped templates only. The catalogue is open at run time by design, and a
+    # template an operator or the research director registered is not something
+    # this repository ships or can make promises about.
     long_only = [
         key
-        for key, template in TEMPLATES.items()
-        if "return 1" in template.source and "return -1" not in template.source
+        for key in SHIPPED_TEMPLATE_KEYS
+        if "return 1" in TEMPLATES[key].source and "return -1" not in TEMPLATES[key].source
     ]
     assert not long_only, (
         f"{', '.join(sorted(long_only))} can only ever go long. If that is "
@@ -213,13 +216,15 @@ def test_every_template_actually_trades_both_sides_on_real_bars() -> None:
     from datetime import UTC, datetime
     from pathlib import Path as _Path
 
-    from forge.strategy import TEMPLATES, generate_bars, run_backtest
+    from forge.strategy import SHIPPED_TEMPLATE_KEYS, TEMPLATES, generate_bars, run_backtest
     from forge.strategy.models import StrategySpec
 
     bars = generate_bars(count=30_000, seed=4242)
     one_sided: list[str] = []
     silent: list[str] = []
-    for key, template in sorted(TEMPLATES.items()):
+    for key, template in sorted(
+        (key, TEMPLATES[key]) for key in SHIPPED_TEMPLATE_KEYS if key in TEMPLATES
+    ):
         module_name = f"symmetry_{uuid.uuid4().hex[:8]}"
         with tempfile.TemporaryDirectory() as tmp:
             path = _Path(tmp) / f"{module_name}.py"

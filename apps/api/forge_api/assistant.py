@@ -37,7 +37,13 @@ from forge_api.settings_store import SettingsStore
 
 # How many actions one question may trigger. Enough to search, read the result
 # and act on it; not enough for a runaway loop on the operator's allowance.
-MAX_TOOL_CALLS = 4
+#
+# Six rather than four because building a workspace from a stated goal is a
+# build-then-check-then-repair sequence: the model composes a layout, an action
+# refuses one panel by name, and it needs the calls left to fix that and confirm
+# the result. Four meant a repair used the whole budget and the operator got
+# "reached the call limit" instead of a workspace.
+MAX_TOOL_CALLS = 6
 
 SYSTEM_PROMPT = """You are the console assistant inside AlgoForge, a local paper-only
 quantitative research application. You answer questions about THIS instance — the

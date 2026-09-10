@@ -90,6 +90,7 @@ _PY_FEATURE: dict[str, str] = {
     "low": "_at(w.lows, {shift})",
     "volume": "_at(w.volumes, {shift})",
     "sma": "_mean(w.closes, {shift}, {a0})",
+    "volume_sma": "_mean(w.volumes, {shift}, {a0})",
     "ema": "_ema(w.closes, {shift}, {a0})",
     "atr": "_atr(w, {shift}, {a0})",
     "adx": "_adx(w, {shift}, {a0})",

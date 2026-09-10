@@ -1,9 +1,10 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, X } from 'lucide-react'
+import { FolderCog, Plus, Trash2, X } from 'lucide-react'
 import { API, getJson } from '../api'
 import { playSound } from '../sound'
 import { PanelBody } from '../components/PanelBody'
+import { WorkspaceManager } from '../components/WorkspaceManager'
 import type { DatasetInfo } from '../types'
 
 /* The workstation itself: panels on a grid, arranged by the operator.
@@ -73,6 +74,7 @@ export function WorkspaceView() {
   const client = useQueryClient()
   const surface = useRef<HTMLDivElement | null>(null)
   const [adding, setAdding] = useState(false)
+  const [managing, setManaging] = useState(false)
 
   const active = useQuery({
     queryKey: ['workspace-active'],
@@ -221,7 +223,10 @@ export function WorkspaceView() {
   }
 
   return (
-    <div className="workspace">
+    <div className="workspace" data-managing={managing ? 'yes' : undefined}>
+      {managing && (
+        <WorkspaceManager activeId={workspace.workspace_id} onClose={() => setManaging(false)} />
+      )}
       <header className="workspace-bar">
         <label className="ctl">
           <span>Workspace</span>
@@ -245,9 +250,10 @@ export function WorkspaceView() {
         <button
           type="button"
           className="ghost"
-          onClick={() => create.mutate('blank')}
+          onClick={() => setManaging((value) => !value)}
+          aria-expanded={managing}
         >
-          New blank workspace
+          <FolderCog size={13} /> Manage
         </button>
 
         <span className="workspace-hint">Drag a header to move, drag the corner to resize.</span>

@@ -48,6 +48,8 @@ from forge_api.actions import ActionError, Actions, ApprovalRequired
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
 from forge_api.assistant import Assistant
+from forge_api.campaigns import CampaignService, build_campaign_router
+from forge_api.director import ResearchDirector
 from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.fund import FundService
 from forge_api.jobs import REGISTRY, JobHandle
@@ -132,6 +134,19 @@ class CreateWorkspaceRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     template_key: str | None = None
     activate: bool = True
+
+
+class ImportWorkspaceRequest(BaseModel):
+    document: dict[str, Any]
+    name: str | None = None
+
+
+class CollapsePanelRequest(BaseModel):
+    collapsed: bool = True
+
+
+class ReorderPanelRequest(BaseModel):
+    position: int
 
 
 class RenameWorkspaceRequest(BaseModel):
@@ -359,6 +374,7 @@ class ControlSurface:
     fund: FundService
     approvals: ApprovalQueue
     audit: AuditLog
+    campaigns: CampaignService
 
 
 def build_control_router(
@@ -394,6 +410,37 @@ def build_control_router(
     execution_store = ExecutionStore(
         workspace.data / "execution.db", starting_cash=fund_config.get().starting_cash
     )
+
+    # The research factory. All application state, so all in the app-owned data
+    # root beside the layouts and the mode session. Deleting these costs the
+    # research *map* — the frontier, the hypothesis graph, the campaign journal —
+    # and no verdict, artifact or holdout consumption, which live elsewhere.
+    campaign_service = CampaignService(workspace.data, log=log)
+    campaign_service.director = ResearchDirector(
+        campaigns=campaign_service.campaigns,
+        frontier=campaign_service.frontier,
+        hypotheses=campaign_service.hypotheses,
+        journal=campaign_service.journal,
+        sources=campaign_service.sources,
+        promotion=campaign_service.promotion,
+        families=families,
+        templates=templates,
+        log=log,
+        library=library,
+    )
+    # The engine asks the director what to research next. With no campaign
+    # running the director returns nothing and the engine's original template
+    # draw runs unchanged, so this attachment costs nothing when unused.
+    engine.director = campaign_service.director
+    # A campaign that was running when the process died is not running now.
+    # Left as "running" it would refuse every new campaign as a conflict.
+    interrupted = campaign_service.campaigns.active()
+    if interrupted is not None:
+        campaign_service.campaigns.set_status(
+            interrupted.campaign_id,
+            "stopped",
+            reason="the application restarted while this campaign was running",
+        )
 
     def verdict_for(strategy_id: str) -> str | None:
         """The judge's decision for one strategy, through the dossier's own path.
@@ -1699,10 +1746,17 @@ def build_control_router(
         is a side effect nobody asked for, and the caller needs to be able to
         tell "nothing open yet" from "here is your layout".
         """
-        active = workspaces.active()
+        # `restore_session` is what makes a workspace survive a restart: it
+        # returns the last one open, falling back to the operator's default, and
+        # marks whichever it found as active. It still creates nothing — a
+        # genuinely empty installation gets an honest null.
+        active = workspaces.restore_session()
         return ApiEnvelope(
             data=None if active is None else actions.call("describe_workspace"),
-            meta={"count": workspaces.count()},
+            meta={
+                "count": workspaces.count(),
+                "default_workspace_id": workspaces.default_id(),
+            },
         )
 
     @router.post("/workspaces/build", response_model=ApiEnvelope[dict[str, Any]])
@@ -1765,6 +1819,87 @@ def build_control_router(
     ) -> ApiEnvelope[dict[str, Any]]:
         return ApiEnvelope(
             data=_action("rename_workspace", {"workspace_id": workspace_id, "name": body.name})
+        )
+
+    @router.post("/workspaces/{workspace_id}/default", response_model=ApiEnvelope[dict[str, Any]])
+    def set_default_workspace(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("set_default_workspace", {"workspace_id": workspace_id}))
+
+    @router.get("/workspaces/{workspace_id}/export", response_model=ApiEnvelope[dict[str, Any]])
+    def export_workspace(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("export_workspace", {"workspace_id": workspace_id}))
+
+    @router.post("/workspaces/import", response_model=ApiEnvelope[dict[str, Any]])
+    def import_workspace(body: ImportWorkspaceRequest) -> ApiEnvelope[dict[str, Any]]:
+        arguments: dict[str, Any] = {"document": body.document}
+        if body.name:
+            arguments["name"] = body.name
+        return ApiEnvelope(data=_action("import_workspace", arguments))
+
+    @router.get("/workspaces/{workspace_id}/history", response_model=ApiEnvelope[dict[str, Any]])
+    def workspace_history(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("workspace_history", {"workspace_id": workspace_id}))
+
+    @router.post(
+        "/workspaces/{workspace_id}/history/{version}/restore",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def restore_workspace_version(workspace_id: str, version: int) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "restore_workspace_version",
+                {"workspace_id": workspace_id, "version": version},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/history/{version}/duplicate",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def duplicate_workspace_version(
+        workspace_id: str, version: int, body: RenameWorkspaceRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "duplicate_workspace_version",
+                {"workspace_id": workspace_id, "version": version, "name": body.name},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/collapse",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def collapse_panel(
+        workspace_id: str, panel_id: str, body: CollapsePanelRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "collapse_panel",
+                {
+                    "workspace_id": workspace_id,
+                    "panel_id": panel_id,
+                    "collapsed": body.collapsed,
+                },
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/order",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def reorder_panel(
+        workspace_id: str, panel_id: str, body: ReorderPanelRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "reorder_panel",
+                {
+                    "workspace_id": workspace_id,
+                    "panel_id": panel_id,
+                    "position": body.position,
+                },
+            )
         )
 
     @router.delete("/workspaces/{workspace_id}", response_model=ApiEnvelope[dict[str, Any]])
@@ -2092,6 +2227,34 @@ def build_control_router(
     def read_audit(limit: int = 100) -> ApiEnvelope[dict[str, Any]]:
         return ApiEnvelope(data=_action("audit_log", {"limit": limit}))
 
+    # ── research campaigns ───────────────────────────────────────────────────
+    def start_campaign_engine(campaign: Any, settings: Any) -> None:
+        """Start the search machinery for a campaign.
+
+        The campaign supplies the dataset and the seed; the request supplies how
+        hard to run. Injected into the campaign router so that module never
+        touches the engine, and so "start a campaign" is one call rather than a
+        sequence the interface has to get right.
+        """
+        engine.start(
+            EngineConfig(
+                dataset=campaign.dataset,
+                cycle_seconds=settings.cycle_seconds,
+                max_strategies=settings.max_strategies,
+                workers=settings.workers,
+                max_bars=settings.max_bars,
+                seed=campaign.seed,
+            )
+        )
+
+    router.include_router(
+        build_campaign_router(
+            campaign_service,
+            start_engine=start_campaign_engine,
+            stop_engine=engine.stop,
+        )
+    )
+
     return ControlSurface(
         router=router,
         engine=engine,
@@ -2103,4 +2266,5 @@ def build_control_router(
         fund=fund,
         approvals=approvals,
         audit=audit,
+        campaigns=campaign_service,
     )

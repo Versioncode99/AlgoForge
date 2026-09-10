@@ -1,0 +1,333 @@
+/* The research campaign surface.
+ *
+ * Two constraints shape everything here, and both come from what the screen has
+ * to say rather than from how it should look.
+ *
+ * **Three frontier states mean "no evidence either way" and must not read as
+ * failure.** Untested, inconclusive and blocked-on-data are the whole reason
+ * the frontier exists, and painting them in the same family as FAILED would
+ * undo it in the palette after the backend went to some trouble to keep them
+ * apart. They take the neutral and unknown tones the verdict pills already
+ * established for exactly this distinction.
+ *
+ * **Intent and outcome are drawn on the same track.** The budget rows show the
+ * share a bucket was allocated and the share it actually consumed as two bars
+ * in one lane, because the interesting number is the gap between them and two
+ * separate charts would hide it.
+ *
+ * No colour literal appears below. Everything resolves through tokens.css, so
+ * the surface themes with the rest of the application and `test_theme_tokens`
+ * keeps it that way.
+ */
+
+.campaign {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+/* ── header ─────────────────────────────────────────────────────────────── */
+.campaign-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+.campaign-title { display: flex; gap: var(--sp-3); min-width: 0; }
+.campaign-title > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.campaign-title h2 {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  color: var(--fg-0);
+  line-height: 1.2;
+}
+.campaign-title p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+  line-height: 1.45;
+  max-width: 78ch;
+}
+.campaign-controls { display: flex; gap: var(--sp-2); flex-shrink: 0; }
+.campaign-note { max-width: 88ch; }
+
+/* ── the four figures that separate breadth from depth ──────────────────── */
+.campaign-scale {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.campaign-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--sp-4);
+}
+@media (max-width: 1180px) {
+  .campaign-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── the frontier band ──────────────────────────────────────────────────── */
+.frontier-bar {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.frontier-bar li { background: var(--bg-1); }
+.frontier-bar button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  padding: var(--sp-3);
+  background: transparent;
+  border: 0;
+  border-top: 2px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--t-fast) var(--ease);
+}
+.frontier-bar button:hover { background: var(--bg-2); }
+.frontier-bar li[data-active='yes'] button { background: var(--bg-2); }
+.frontier-bar b {
+  font-size: var(--fs-xl);
+  font-weight: 500;
+  line-height: 1.05;
+  color: var(--fg-0);
+  font-variant-numeric: tabular-nums;
+}
+.frontier-bar span {
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+/* The tones. Note that `open` and `partial` are deliberately neutral and
+   amber respectively — never the failure red — and that `blocked` is a
+   different neutral again, because "we cannot measure this" is not "we have
+   not got round to it". */
+[data-tone='open']       { --state-ink: var(--fg-2);            --state-wash: transparent; }
+[data-tone='partial']    { --state-ink: var(--verdict-unknown); --state-wash: var(--verdict-unknown-wash); }
+[data-tone='promising']  { --state-ink: var(--info);            --state-wash: var(--brand-wash); }
+[data-tone='validated']  { --state-ink: var(--verdict-pass);    --state-wash: var(--verdict-pass-wash); }
+[data-tone='failed']     { --state-ink: var(--verdict-fail);    --state-wash: var(--verdict-fail-wash); }
+[data-tone='blocked']    { --state-ink: var(--tier-holdout);    --state-wash: transparent; }
+[data-tone='exhausted']  { --state-ink: var(--fg-3);            --state-wash: transparent; }
+
+.frontier-bar li[data-tone] button { border-top-color: var(--state-ink); }
+.frontier-bar li[data-tone='open'] button,
+.frontier-bar li[data-tone='exhausted'] button { border-top-color: var(--line-strong); }
+
+.frontier-legend {
+  margin: 0;
+  padding: var(--sp-3) var(--pad-panel);
+  font-size: var(--fs-micro);
+  max-width: 80ch;
+}
+
+.state-pill {
+  display: inline-block;
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--state-ink, var(--line-strong));
+  background: var(--state-wash, transparent);
+  color: var(--state-ink, var(--fg-2));
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ── budget: intent against outcome, one lane ───────────────────────────── */
+.budget-rows { list-style: none; margin: 0; padding: var(--pad-panel); display: grid; gap: var(--sp-3); }
+.budget-rows li {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(80px, 2fr) auto;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.budget-label { font-size: var(--fs-sm); color: var(--fg-1); }
+.budget-track {
+  position: relative;
+  height: 14px;
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+/* The allocation, drawn as an outline: this is what was *meant* to happen. */
+.budget-intent {
+  position: absolute; inset-block: 0; left: 0;
+  background: var(--brand-wash);
+  border-right: 1px dashed var(--brand-dim);
+}
+/* What actually happened, drawn solid over it. */
+.budget-actual {
+  position: absolute; inset-block: 3px; left: 0;
+  background: var(--brand-dim);
+  border-radius: var(--r-sm);
+}
+.budget-figures { font-size: var(--fs-micro); color: var(--fg-2); white-space: nowrap; }
+
+/* ── the event stream ───────────────────────────────────────────────────── */
+.campaign-stream { max-height: 380px; display: flex; flex-direction: column; }
+.event-stream {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--pad-panel) var(--pad-panel);
+  overflow-y: auto;
+  display: grid;
+  gap: 1px;
+}
+.event-stream li {
+  display: grid;
+  grid-template-columns: 62px 132px minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.event-stream li:last-child { border-bottom: 0; }
+.event-stream time { font-size: var(--fs-micro); color: var(--fg-3); }
+.event-kind {
+  font-family: var(--font-label);
+  font-size: var(--fs-nano);
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.event-stream p { margin: 0; font-size: var(--fs-sm); color: var(--fg-1); line-height: 1.45; }
+.event-stream li[data-level='pass'] .event-kind { color: var(--pass); }
+.event-stream li[data-level='warn'] .event-kind { color: var(--warn); }
+.event-stream li[data-level='fail'] .event-kind { color: var(--fail); }
+
+/* ── tabs ───────────────────────────────────────────────────────────────── */
+.campaign-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  border-bottom: 1px solid var(--line);
+}
+.campaign-tabs button {
+  padding: var(--sp-2) var(--sp-3);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.campaign-tabs button:hover { color: var(--fg-1); }
+.campaign-tabs button[aria-selected='true'] {
+  color: var(--fg-0);
+  border-bottom-color: var(--accent);
+}
+
+/* ── frontier table ─────────────────────────────────────────────────────── */
+.frontier-table td { vertical-align: top; }
+.frontier-question p { margin: 0 0 2px; max-width: 68ch; line-height: 1.45; }
+.frontier-reason { max-width: 44ch; color: var(--fg-2); font-size: var(--fs-sm); line-height: 1.45; }
+
+/* ── hypotheses ─────────────────────────────────────────────────────────── */
+.hypothesis-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-3); }
+.hypothesis-list > li { padding: var(--sp-4); display: grid; gap: var(--sp-2); }
+.hypothesis-list header { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.hypothesis-claim {
+  margin: 0;
+  font-size: var(--fs-base);
+  color: var(--fg-0);
+  line-height: 1.5;
+  max-width: 86ch;
+}
+.hypothesis-prediction {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--fg-1);
+  line-height: 1.5;
+  max-width: 86ch;
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--line-strong);
+}
+.hypothesis-prediction b { color: var(--fg-2); font-weight: 600; }
+.hypothesis-mechanism { margin: 0; font-size: var(--fs-sm); line-height: 1.5; max-width: 86ch; }
+
+/* ── sources ────────────────────────────────────────────────────────────── */
+.query-list, .source-list { list-style: none; margin: 0; padding: var(--pad-panel); display: grid; gap: var(--sp-2); }
+.source-list { padding: 0; gap: var(--sp-3); }
+.query-list li { display: flex; justify-content: space-between; gap: var(--sp-3); font-size: var(--fs-sm); }
+.source-list > li { padding: var(--sp-4); display: grid; gap: var(--sp-1); }
+.source-list a { color: var(--fg-0); font-size: var(--fs-base); text-decoration: none; }
+.source-list a:hover { text-decoration: underline; }
+.claim-list {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0 0 0 var(--sp-3);
+  border-left: 2px solid var(--line-strong);
+  display: grid;
+  gap: var(--sp-2);
+}
+.claim-list li { font-size: var(--fs-sm); color: var(--fg-1); line-height: 1.5; max-width: 90ch; }
+
+/* ── the new-campaign form ──────────────────────────────────────────────── */
+.campaign-form { padding: var(--sp-4); display: grid; gap: var(--sp-4); max-width: 900px; }
+.campaign-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-3);
+}
+@media (max-width: 760px) { .campaign-form-row { grid-template-columns: minmax(0, 1fr); } }
+.field-block { display: grid; gap: 4px; font-size: var(--fs-sm); color: var(--fg-2); }
+.field-block input, .field-block select, .field-block textarea {
+  font: inherit;
+  color: var(--fg-0);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: var(--sp-2) var(--sp-3);
+}
+.field-block textarea { resize: vertical; line-height: 1.5; }
+.field-inline {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-2) var(--sp-3);
+  align-items: center;
+  font-size: var(--fs-sm);
+  color: var(--fg-1);
+}
+.field-inline small { grid-column: 2; }
+.campaign-form-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+
+/* ── earlier campaigns ──────────────────────────────────────────────────── */
+.campaign-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; background: var(--line); }
+.campaign-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-1);
+}
+.campaign-list p { margin: 2px 0; font-size: var(--fs-sm); max-width: 80ch; line-height: 1.45; }
+.campaign-list span { font-size: var(--fs-micro); }

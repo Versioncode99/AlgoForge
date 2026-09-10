@@ -51,6 +51,8 @@ from forge.vault import VaultMirror, Workspace
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
 from forge_api.conformance_store import refresh_conformance
+from forge_api.director import Candidate as DirectedCandidate
+from forge_api.director import ObservationInput, Refusal, ResearchDirector
 from forge_api.experiments import POLICIES, Experiments
 from forge_api.market import DEFAULT_DATASET, MarketService
 from forge_api.mechanism_check import mechanism_for
@@ -185,6 +187,11 @@ class AutonomousEngine:
         self._active: dict[int, str] = {}
         self._paused: set[int] = set()
         self.agents: AgentService | None = None
+        # The research director, attached by `forge_api.control` once the
+        # campaign stores exist. Absent means no campaign: `_cycle` falls back
+        # to the original template draw and the engine behaves exactly as it
+        # did before campaigns existed.
+        self.director: ResearchDirector | None = None
         self.experiments = Experiments(workspace.data / "experiments.db")
         # Durable failure record. Exact repeats are already refused by
         # Experiments.reserve; this is what generalises a failure to the region
@@ -281,6 +288,43 @@ class AutonomousEngine:
             f"{self.state.config.dataset}:{self.state.config.max_bars}:"
             f"{self._data_version}:{self._catalog_version}:contract-units-v2"
         )
+
+    # ── research direction ───────────────────────────────────────────────────
+    def _directed_candidate(
+        self, rng: random.Random, worker: int, policy: str
+    ) -> DirectedCandidate | Refusal | None:
+        """Ask the director what to research next.
+
+        Returns ``None`` when no director is attached or no campaign is
+        running, which is what keeps the engine usable on its own. A failure
+        inside the director is logged and treated as "nothing this cycle"
+        rather than propagated: the research layer must never be able to stop
+        the search machinery.
+        """
+        if self.director is None:
+            return None
+        try:
+            return self.director.next_candidate(rng, worker, policy)
+        except Exception as exc:
+            with self._state_lock:
+                self.state.last_error = f"director: {exc}"
+            self.log.record("RESEARCH", f"director failed: {type(exc).__name__}: {exc}", "fail")
+            return None
+
+    def _observe(self, research: DirectedCandidate | None, **fields: Any) -> None:
+        """Hand one finished cycle back to the director.
+
+        Called at every terminal point of ``_cycle``, including the ones that
+        return early. A cycle whose outcome is never observed is a question the
+        frontier still believes is untested, which is the one thing the
+        frontier must never be wrong about.
+        """
+        if self.director is None or research is None:
+            return
+        try:
+            self.director.observe(ObservationInput(candidate=research, **fields))
+        except Exception as exc:
+            self.log.record("RESEARCH", f"observation failed: {type(exc).__name__}: {exc}", "warn")
 
     # ── the loop ─────────────────────────────────────────────────────────────
     def _loop(self, worker: int = 0) -> None:
@@ -473,72 +517,104 @@ class AutonomousEngine:
             )
 
     def _cycle(self, rng: random.Random, bars: list[Bar], real_data: bool, worker: int = 0) -> None:
-        proposal = self.agents.take_proposal() if self.agents and worker == 0 else None
         policy = POLICIES[worker % len(POLICIES)]
-        pool = sorted(TEMPLATES)
-        family = {
-            "momentum": "momentum",
-            "reversion": "mean_reversion",
-            "volatility": "volatility",
-        }.get(policy)
-        if family:
-            pool = [key for key in pool if TEMPLATES[key].family == family] or pool
-        if policy in {"literature", "replication"}:
-            pool = [
-                key
-                for key in pool
-                if key
-                in {
-                    "vol_normalized_momentum",
-                    "variance_ratio_reversion",
-                    "ou_half_life_reversion",
-                    "vwap_sigma_reversion",
-                }
-            ]
-        template_key = str(proposal["template"]) if proposal else rng.choice(pool)
-        template = TEMPLATES[template_key]
+
+        # The line that used to be the whole of the search's creativity was
+        # `rng.choice(pool)` a few lines below. With a campaign running, the
+        # director decides instead — which may mean proposing a family,
+        # composing a template from the strategy IR, or picking up an open
+        # question from the frontier. It hands back the same two things the
+        # engine always needed, a template key and a parameter set, so
+        # everything from the memory gate onwards is unchanged.
+        #
+        # With no campaign attached it returns None and the original selection
+        # runs exactly as before: stopping a campaign does not stop the engine.
+        research = self._directed_candidate(rng, worker, policy)
+        if isinstance(research, Refusal):
+            self._bump("skipped_by_memory")
+            self.log.record(
+                "RESEARCH",
+                f"no candidate this cycle ({research.bucket.value.lower()}): {research.reason}",
+                "info",
+            )
+            return
+
+        proposal = (
+            None
+            if research is not None
+            else (self.agents.take_proposal() if self.agents and worker == 0 else None)
+        )
         parent_id: str | None = None
-
-        # Draw parameters from the spec's own declared ranges.
         params: dict[str, float] = {}
-        for spec_param in template.parameters:
-            steps = max(1, round((spec_param.high - spec_param.low) / spec_param.step))
-            value = spec_param.low + spec_param.step * rng.randint(0, steps)
-            params[spec_param.name] = round(min(value, spec_param.high), 4)
 
-        if proposal:
-            params = proposal["parameters"]
-        elif policy in {"neighbourhood", "ablation"}:
-            history = [
-                a
-                for a in self.experiments.recent(self._scope())
-                if a.get("development_net") is not None
-            ]
-            if history:
-                parent = max(history, key=lambda a: float(a["development_net"]))
-                # The lineage edge these policies always had in control flow and
-                # never had on disk.
-                parent_id = str(parent["id"])
-                template_key = parent["template"]
-                template = TEMPLATES[template_key]
-                params = dict(parent["parameters"])
-                parameter = rng.choice(template.parameters)
-                params[parameter.name] = (
-                    float(parameter.default)
-                    if policy == "ablation"
-                    else round(
-                        max(
-                            parameter.low,
-                            min(
-                                parameter.high,
-                                params[parameter.name] + rng.choice([-1, 1]) * parameter.step,
+        if research is not None:
+            template_key = research.template_key
+            template = TEMPLATES[template_key]
+            params = dict(research.parameters)
+            parent_id = research.parent_experiment_id
+        else:
+            pool = sorted(TEMPLATES)
+            family = {
+                "momentum": "momentum",
+                "reversion": "mean_reversion",
+                "volatility": "volatility",
+            }.get(policy)
+            if family:
+                pool = [key for key in pool if TEMPLATES[key].family == family] or pool
+            if policy in {"literature", "replication"}:
+                pool = [
+                    key
+                    for key in pool
+                    if key
+                    in {
+                        "vol_normalized_momentum",
+                        "variance_ratio_reversion",
+                        "ou_half_life_reversion",
+                        "vwap_sigma_reversion",
+                    }
+                ]
+            template_key = str(proposal["template"]) if proposal else rng.choice(pool)
+            template = TEMPLATES[template_key]
+
+            # Draw parameters from the spec's own declared ranges.
+            for spec_param in template.parameters:
+                steps = max(1, round((spec_param.high - spec_param.low) / spec_param.step))
+                value = spec_param.low + spec_param.step * rng.randint(0, steps)
+                params[spec_param.name] = round(min(value, spec_param.high), 4)
+
+            if proposal:
+                params = proposal["parameters"]
+            elif policy in {"neighbourhood", "ablation"}:
+                history = [
+                    a
+                    for a in self.experiments.recent(self._scope())
+                    if a.get("development_net") is not None
+                ]
+                if history:
+                    parent = max(history, key=lambda a: float(a["development_net"]))
+                    # The lineage edge these policies always had in control flow
+                    # and never had on disk.
+                    parent_id = str(parent["id"])
+                    template_key = parent["template"]
+                    template = TEMPLATES[template_key]
+                    params = dict(parent["parameters"])
+                    parameter = rng.choice(template.parameters)
+                    params[parameter.name] = (
+                        float(parameter.default)
+                        if policy == "ablation"
+                        else round(
+                            max(
+                                parameter.low,
+                                min(
+                                    parameter.high,
+                                    params[parameter.name] + rng.choice([-1, 1]) * parameter.step,
+                                ),
                             ),
-                        ),
-                        4,
+                            4,
+                        )
                     )
-                )
-        elif policy == "replication":
-            params = {p.name: float(p.default) for p in template.parameters}
+            elif policy == "replication":
+                params = {p.name: float(p.default) for p in template.parameters}
 
         signature = ",".join(f"{k}={params[k]}" for k in sorted(params))
 
@@ -572,9 +648,15 @@ class AutonomousEngine:
             preregistration_id=prereg.preregistration_id,
             preregistration_hash=prereg.content_hash,
             parent_id=parent_id,
-            policy=policy,
+            # The bucket the research budget drew, when a campaign is running.
+            # Recorded in place of the worker's fixed policy because it is what
+            # actually decided this candidate, and because the realised split
+            # across buckets is only checkable if it is on the row.
+            policy=(research.bucket.value.lower() if research is not None else policy),
             family=template.family,
-            hypothesis=template.hypothesis,
+            hypothesis=(research.hypothesis_text or template.hypothesis)
+            if research is not None
+            else template.hypothesis,
             dataset=self.state.config.dataset,
             data_version=self._data_version,
             seed=self.state.config.seed,
@@ -591,7 +673,9 @@ class AutonomousEngine:
         self._stage(worker, "creating")
         with self._library_lock:
             sources = (
-                tuple(proposal["source_ids"])
+                research.research_sources
+                if research is not None
+                else tuple(proposal["source_ids"])
                 if proposal
                 else tuple(
                     str(s["id"])
@@ -607,7 +691,13 @@ class AutonomousEngine:
                 parameters=params,
                 created_by=f"worker-{worker}:{policy}",
                 research_sources=sources,
-                hypothesis=proposal["hypothesis"] if proposal else None,
+                hypothesis=(
+                    research.hypothesis_text
+                    if research is not None
+                    else proposal["hypothesis"]
+                    if proposal
+                    else None
+                ),
             )
             self._active[worker] = spec.strategy_id
         self.experiments.finish(attempt_id, strategy_id=spec.strategy_id, status="running")
@@ -693,6 +783,24 @@ class AutonomousEngine:
                     "warn",
                     spec.strategy_id,
                 )
+                self._observe(
+                    research,
+                    strategy_id=spec.strategy_id,
+                    experiment_id=attempt_id,
+                    status="screened",
+                    trades=len(development.trades),
+                    net_pnl=development.net_pnl,
+                    grid_size=_grid_size(_validation_grid(template, params)),
+                    conformance_passed=conformance.passed,
+                    determinism_reproduced=determinism.reproduced,
+                    real_data=real_data,
+                    reason=(
+                        f"screened out: development net {development.net_pnl:+.2f} over "
+                        f"{len(development.trades)} trades"
+                    ),
+                    backtest_id=development.backtest_id,
+                    compute_units=1.0,
+                )
                 return
             result = run_backtest(
                 module,
@@ -765,6 +873,20 @@ class AutonomousEngine:
                 failure_reason="produced no trades",
             )
             self.log.record("JUDGE", f"{spec.strategy_id} → no trades to judge", "warn")
+            self._observe(
+                research,
+                strategy_id=spec.strategy_id,
+                experiment_id=attempt_id,
+                status="no_trades",
+                trades=0,
+                net_pnl=0.0,
+                conformance_passed=conformance.passed,
+                determinism_reproduced=determinism.reproduced,
+                real_data=real_data,
+                failure_class=FailureClass.NO_TRADES,
+                reason="produced no trades at these settings",
+                compute_units=1.0,
+            )
             self.library.delete(spec.strategy_id)
             self._bump("created", -1)
             return
@@ -1009,6 +1131,40 @@ class AutonomousEngine:
             )
             # Keep only candidates that got somewhere; the rest are noise on disk.
             # Preserve failures for the post-mortem and evidence inspector.
+
+        broken_gate = next((g for g in verdict.gates if g.status == "FAIL"), None)
+        self._observe(
+            research,
+            strategy_id=spec.strategy_id,
+            experiment_id=attempt_id,
+            status="passed" if verdict.decision == "PASS" else "judged",
+            trades=len(result.trades),
+            net_pnl=result.net_pnl,
+            grid_size=_grid_size(grid),
+            conformance_passed=conformance.passed,
+            determinism_reproduced=determinism.reproduced,
+            real_data=real_data,
+            failure_class=(
+                classify_gate(
+                    broken_gate.gate, broken_gate.status, lookahead=not result.lookahead_clean
+                )
+                if broken_gate is not None
+                else None
+            ),
+            gate=broken_gate.gate if broken_gate is not None else None,
+            reason=(
+                f"cleared the gate ladder, grade {verdict.grade}"
+                if verdict.decision == "PASS"
+                else f"failed {broken_gate.gate} ({broken_gate.name})"
+                if broken_gate is not None
+                else f"{verdict.decision}: the evidence did not decide"
+            ),
+            verdict_id=verdict.verdict_id,
+            backtest_id=result.backtest_id,
+            decision=verdict.decision,
+            gates=tuple((g.gate, g.status, g.name) for g in verdict.gates),
+            compute_units=2.0 + (_grid_size(grid) if evidence_args else 0.0),
+        )
 
         self._stage(worker, "idle")
 

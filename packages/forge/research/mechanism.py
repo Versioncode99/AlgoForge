@@ -116,9 +116,7 @@ class MechanismTest:
             "trades": self.trades,
             "aligned": self.aligned,
             "reason": self.reason,
-            "null": (
-                "the same directions and holding periods entered at uniformly random times"
-            ),
+            "null": ("the same directions and holding periods entered at uniformly random times"),
             "does_not_assert": (
                 "that the stated economic story is the cause; only that entry timing "
                 "carried information over this series"

@@ -48,6 +48,7 @@ const ChartsView = lazy(() => import('./views/Charts').then(m => ({ default: m.C
 const StrategyChartView = lazy(() => import('./views/StrategyChartView').then(m => ({ default: m.StrategyChartView })))
 const ResearchLabWorkbench = lazy(() => import('./views/ResearchLabView').then(m => ({ default: m.ResearchLabWorkbench })))
 const ResearchMemoryView = lazy(() => import('./views/ResearchMemory').then(m => ({ default: m.ResearchMemoryView })))
+const ResearchCampaignView = lazy(() => import('./views/ResearchCampaign').then(m => ({ default: m.ResearchCampaignView })))
 const WorkspaceView = lazy(() => import('./views/Workspace').then(m => ({ default: m.WorkspaceView })))
 const PropAccountView = lazy(() => import('./views/PropAccount').then(m => ({ default: m.PropAccountView })))
 const ActionsView = lazy(() => import('./views/Actions').then(m => ({ default: m.ActionsView })))
@@ -122,6 +123,7 @@ function viewFor(mode: ModeKey, route: string): React.ReactNode {
     assistant: <ConsoleView />,
     agents: <AgentCommandView />,
     missions: <MissionsView />,
+    campaigns: <ResearchCampaignView />,
     pipeline: <PipelineView />,
     activity: <OperatingLogView />,
     settings: <SettingsView />,

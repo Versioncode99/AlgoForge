@@ -219,6 +219,31 @@ class Workspace(FrozenModel):
     def renamed(self, name: str) -> Workspace:
         return self._touch(name=name)
 
+    def collapsing(self, panel_id: str, collapsed: bool) -> Workspace:
+        """Fold a panel to its title bar, or unfold it.
+
+        A separate operation from resizing because it is reversible without
+        remembering anything: the panel keeps its geometry and the interface
+        simply draws it as a bar, so unfolding restores exactly what was there.
+        """
+        panel = self.require(panel_id)
+        return self.replacing_panel(panel.model_copy(update={"collapsed": bool(collapsed)}))
+
+    def reordered(self, panel_id: str, position: int) -> Workspace:
+        """Move a panel within the stacking order.
+
+        Order in `panels` is draw order: later panels are drawn over earlier
+        ones and appear later in tab order. Moving a panel to the end is what
+        "bring to front" means, and there is no separate z-index to fall out of
+        step with the list.
+        """
+        self.require(panel_id)
+        remaining = [p for p in self.panels if p.panel_id != panel_id]
+        moved = self.require(panel_id)
+        index = max(0, min(len(remaining), int(position)))
+        remaining.insert(index, moved)
+        return self._touch(panels=tuple(remaining))
+
     def linked(self, link_group: str | None, panel_ids: tuple[str, ...]) -> Workspace:
         for panel_id in panel_ids:
             self.require(panel_id)

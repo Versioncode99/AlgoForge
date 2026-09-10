@@ -25,21 +25,32 @@ from forge.workstation.models import (
     new_panel_id,
     new_workspace_id,
 )
-from forge.workstation.store import SCHEMA_VERSION, WorkspaceStore
+from forge.workstation.store import (
+    EXPORT_KIND,
+    EXPORT_VERSION,
+    MAX_VERSIONS,
+    SCHEMA_VERSION,
+    WorkspaceImportError,
+    WorkspaceStore,
+)
 from forge.workstation.templates import TEMPLATES, WorkspaceTemplate, catalogue, template
 
 __all__ = [
     "EXECUTION_PANELS",
+    "EXPORT_KIND",
+    "EXPORT_VERSION",
     "GRID_COLUMNS",
     "KNOWN_ROOTS",
     "MAX_PANELS",
     "MAX_ROWS",
+    "MAX_VERSIONS",
     "SCHEMA_VERSION",
     "STYLE_TIMEFRAMES",
     "TEMPLATES",
     "Panel",
     "PanelKind",
     "Workspace",
+    "WorkspaceImportError",
     "WorkspaceProfile",
     "WorkspaceStore",
     "WorkspaceTemplate",

@@ -173,6 +173,86 @@ with their schemas; the console assistant calls the same set, which is why it ca
 now search for papers, add a family or start a backtest instead of explaining
 that it cannot. Every call is validated, logged, and refusable with a reason.
 
+## Research campaigns
+
+Starting the engine on its own is a parameter search: it draws from each
+template's declared ranges and tests the numbers. That is a real thing to do and
+it is still available, but it is not research, because the set of *questions* is
+fixed at whatever the catalogue happens to hold.
+
+A **campaign** gives it a question. It names an objective, fixes the dataset and
+the universe, declares the budgets, and carries an explicit allocation across
+five kinds of search:
+
+| | |
+|---|---|
+| New hypotheses and mechanisms | 35% |
+| New families and their templates | 25% |
+| Advancing research already going somewhere | 20% |
+| Parameter refinement | 10% |
+| Robustness and replication | 10% |
+
+The split is configurable and adapts, within a bounded drift, from what the
+frontier actually contains — a backlog of promising work pulls budget towards
+advancing it; family proposals that keep colliding with existing families pull
+budget away from discovery. The realised split is recorded next to the intended
+one, because an allocation nobody checks is a comment.
+
+Each cycle the campaign draws a bucket and composes a candidate for it. For the
+discovery buckets that means proposing a family and composing a template — as a
+`StrategyDefinition`, which is **data**, put through the same IR validation,
+static guard, IR-versus-Python ledger check and synthetic smoke test an
+operator-written template faces. Nothing generates Python; the exporter renders
+it and the guard refuses it if it reaches for the filesystem, the network, a
+subprocess or dynamic execution.
+
+Everything after that line is the pipeline that was already there: the memory
+gates, the frozen pre-registration, conformance, determinism, the chronological
+split, the validation grid, the judge, the burn-once holdout. G0-G13 are
+unchanged, and nothing in the research layer can reach the judge's input.
+
+### The frontier
+
+Every question the system holds sits in one of nine states, and three of them
+exist to stop a gap being mistaken for a verdict:
+
+- `UNTESTED` — admitted, never run. **Not a failure.**
+- `INCONCLUSIVE` — run, and the evidence could not say. Also not a failure.
+- `BLOCKED_BY_DATA` — needs data this installation cannot serve. Says nothing
+  about whether the claim is true.
+
+The frontier has no veto. Only research memory, acting on a classified failure
+with a declared reach, may decline to spend compute — a map that could delete
+territory would stop being a map.
+
+### Failures become questions
+
+A failed experiment is the middle of a piece of research, not the end of one.
+When a result concentrates in a condition, the engine derives the questions that
+follow — *is the edge conditional on volatility expansion rather than volatility
+level?* — and admits them as `UNTESTED` hypotheses with an edge back to what
+suggested them. Every generated question passes the same falsifiability bar a
+human-written one does, and the same novelty check. Bookkeeping, data, lookahead
+and safety failures deliberately generate nothing: a full disk says nothing
+about the market, and the right follow-up to a lookahead defect is a fix.
+
+### Novelty
+
+Before a family or a template is created, the proposal is compared against every
+existing family, template and hypothesis — on the claim, the mechanism, and the
+structure of the signal. The comparison is deterministic and offline, so it
+gives the same answer twice and can be tested. A restatement is refused with the
+collision named, which is why there is no `mean_reversion_2`.
+
+### External research
+
+With web research enabled, the campaign searches arXiv and Crossref for
+mechanisms and stores what it finds with the URL, the source, the publication
+date where the index supplied one, the retrieval timestamp, and claims copied
+**verbatim** out of the returned abstract. There is no path that constructs a
+citation and no fallback that invents one: with no network it stores nothing and
+records that it looked.
+
 ## Autonomous engine
 
 Overview has a start/stop control. Once running it draws parameters from each
@@ -197,6 +277,31 @@ Open `http://127.0.0.1:5173`. The API documentation is at `http://127.0.0.1:8765
 The **Pipeline** tab draws the whole graph — sources, catalogue, candidates,
 measurement, judgement, survival — with live counts, and lights the stage each
 worker is in.
+
+## Workspaces
+
+A workspace is a screen layout you own — panels on a twelve-column grid, arranged
+however you want them. It is not a mode and does not gate anything.
+
+- **It survives a restart.** Reopening the application restores the last
+  workspace that was open, falling back to the one you marked as default.
+  Opening a workspace is not the same as making it your default, and the two are
+  separate controls.
+- **It has a history.** Every meaningful save keeps a version with a change
+  summary, who made it, and the version it came from — so an edit the agent made
+  is visible as one, and reversible. Restoring is recorded as a new version on
+  top rather than a rewind, so the work in between stays readable.
+- **It travels.** Export writes a portable document carrying the layout and
+  nothing else: no research, no credentials, no identifiers to collide on the
+  way in. Import validates every panel through the same models the rest of the
+  application uses.
+- **Deleting one deletes no research.** A workspace holds no experiment, verdict
+  or holdout; the two live in different places on purpose, and either can be
+  deleted without touching the other.
+
+Every one of these is a registered action before it is a route, so "duplicate
+this desk for ES" typed at the assistant and clicked in the manager are the same
+call. There is no AI-only path into a workspace.
 
 ## Experiments
 

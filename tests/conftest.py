@@ -72,3 +72,32 @@ def protect_the_real_storage_pointer() -> Any:
         "the test must isolate `forge_api.main.ROOT` to a temporary repository "
         "instead of leaving it on the real checkout."
     )
+
+
+@pytest.fixture(autouse=True)
+def isolated_template_catalogue() -> Any:
+    """Give every test its own view of the shared template catalogue.
+
+    `forge.strategy.TEMPLATES` is a module-level dict that every consumer holds
+    a reference to, and two things write into it at run time: `TemplateStore`
+    registers what an operator authored, and the research director registers
+    what it composed. Both are deliberate — a generated template is meant to be
+    indistinguishable from a shipped one at the point of use — and both leak
+    between tests, because the dict outlives them.
+
+    That is not a hypothetical. Without this, a director test that composed
+    `gen_range_breakout_*` left it in the catalogue, and
+    `test_no_shipped_template_can_only_take_one_side` then read it as a shipped
+    template and failed on a directional draw that was never claimed to be
+    two-sided. The failure appeared only in a full run and pointed at the wrong
+    file.
+
+    Snapshot and restore, for the same reason the workspace fixture above
+    exists: isolation is the default, not something each test has to remember.
+    """
+    from forge.strategy import TEMPLATES
+
+    before = dict(TEMPLATES)
+    yield
+    TEMPLATES.clear()
+    TEMPLATES.update(before)

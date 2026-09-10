@@ -220,8 +220,16 @@ def _empty_warning(cells: Sequence[Cell]) -> str:
 
 HOURS = tuple(f"{h:02d}:00" for h in range(24))
 PERCENTILE_BANDS = (
-    "P0-P10", "P10-P20", "P20-P30", "P30-P40", "P40-P50",
-    "P50-P60", "P60-P70", "P70-P80", "P80-P90", "P90-P100",
+    "P0-P10",
+    "P10-P20",
+    "P20-P30",
+    "P30-P40",
+    "P40-P50",
+    "P50-P60",
+    "P60-P70",
+    "P70-P80",
+    "P80-P90",
+    "P90-P100",
 )
 
 
@@ -329,9 +337,8 @@ def by_volatility_percentile(
     if len(populated) >= 4:
         top = populated[-1]
         rest = [c for c in populated[:-1]]
-        rest_avg = (
-            sum((c.average_trade or 0.0) * c.trade_count for c in rest)
-            / max(1, sum(c.trade_count for c in rest))
+        rest_avg = sum((c.average_trade or 0.0) * c.trade_count for c in rest) / max(
+            1, sum(c.trade_count for c in rest)
         )
         if top.average_trade is not None and top.average_trade < 0 <= rest_avg:
             findings.append(
@@ -412,13 +419,9 @@ def hour_by_volatility(
     band_labels = ("P0-P20", "P20-P40", "P40-P60", "P60-P80", "P80-P100")
 
     slots = 24 // hour_bucket
-    hour_labels = tuple(
-        f"{i * hour_bucket:02d}-{(i + 1) * hour_bucket:02d}" for i in range(slots)
-    )
+    hour_labels = tuple(f"{i * hour_bucket:02d}-{(i + 1) * hour_bucket:02d}" for i in range(slots))
 
-    buckets: dict[tuple[int, int], list[Any]] = {
-        (h, b): [] for h in range(slots) for b in range(5)
-    }
+    buckets: dict[tuple[int, int], list[Any]] = {(h, b): [] for h in range(slots) for b in range(5)}
     for (trade, _), band in zip(paired, bands, strict=True):
         buckets[(trade.entry_time.hour // hour_bucket, int(band))].append(trade)
 
@@ -564,9 +567,7 @@ def edge_over_time(
     )
 
 
-def excursion(
-    trades: Sequence[Any], provenance: AnalysisProvenance
-) -> AnalysisResult:
+def excursion(trades: Sequence[Any], provenance: AnalysisProvenance) -> AnalysisResult:
     """How far trades ran in each direction before they closed.
 
     Bucketed by MFE against MAE, both measured over the bars the position was
@@ -589,9 +590,7 @@ def excursion(
     mae_edges = np.percentile(mae, [25, 50, 75])
     quartiles = ("Q1 lowest", "Q2", "Q3", "Q4 highest")
 
-    buckets: dict[tuple[int, int], list[Any]] = {
-        (a, b): [] for a in range(4) for b in range(4)
-    }
+    buckets: dict[tuple[int, int], list[Any]] = {(a, b): [] for a in range(4) for b in range(4)}
     for trade, favourable, adverse in zip(usable, mfe, mae, strict=True):
         row = int(np.digitize(favourable, mfe_edges))
         column = int(np.digitize(adverse, mae_edges))
@@ -603,11 +602,7 @@ def excursion(
         for b in range(4)
     )
 
-    gave_back = [
-        t
-        for t in usable
-        if float(t.mfe) > 0 and float(t.net_pnl) < 0
-    ]
+    gave_back = [t for t in usable if float(t.mfe) > 0 and float(t.net_pnl) < 0]
     findings = [
         f"{len(gave_back)} of {len(usable)} trades were in profit at some point and "
         f"closed at a loss."
@@ -692,15 +687,14 @@ def worst_decile(
     )
 
     findings: list[str] = []
+
     def _vol_at(index: int) -> float | None:
         value = volatility[index]
         return float(value) if value is not None else None
 
     worst_vol = [v for v in (_vol_at(i) for i in sorted(worst_idx)) if v is not None]
     rest_vol = [
-        v
-        for v in (_vol_at(i) for i in range(len(trades)) if i not in worst_idx)
-        if v is not None
+        v for v in (_vol_at(i) for i in range(len(trades)) if i not in worst_idx) if v is not None
     ]
     if worst_vol and rest_vol:
         wm, rm = float(np.mean(worst_vol)), float(np.mean(rest_vol))

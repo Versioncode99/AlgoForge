@@ -56,6 +56,12 @@ FEATURE_ARITY: dict[str, int] = {
     "low": 0,
     "volume": 0,
     "sma": 1,
+    # A signal about liquidity has to be able to say "compared with usual". The
+    # raw `volume` feature is an absolute count, and comparing it to a price
+    # average — the only other average the vocabulary had — is a category
+    # error that silently never fires. This is the baseline that makes the
+    # `liquidity` family reachable at all.
+    "volume_sma": 1,
     "ema": 1,
     "atr": 1,
     "adx": 1,
@@ -530,6 +536,10 @@ def _feature_value(frame: _Frame, item: Feature, args: list[float], shift: int) 
 
     if kind == "sma":
         values = _tail(frame.c, total, length)
+        return float(values.mean()) if values.size == length else nan
+
+    if kind == "volume_sma":
+        values = _tail(frame.v, total, length)
         return float(values.mean()) if values.size == length else nan
 
     if kind == "ema":
