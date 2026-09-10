@@ -203,11 +203,7 @@ def test_nothing_in_the_judge_imports_the_knowledge_store() -> None:
 def test_the_knowledge_store_never_reaches_for_the_judge() -> None:
     """And the reverse direction, so neither end can grow the link later."""
     module = (
-        Path(__file__).resolve().parents[2]
-        / "packages"
-        / "forge"
-        / "research"
-        / "knowledge.py"
+        Path(__file__).resolve().parents[2] / "packages" / "forge" / "research" / "knowledge.py"
     )
     imported = _imported_modules(module)
     assert not any(name.startswith("forge.judge") for name in imported)

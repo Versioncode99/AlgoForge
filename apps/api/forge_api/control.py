@@ -48,6 +48,8 @@ from forge_api.actions import ActionError, Actions, ApprovalRequired
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
 from forge_api.assistant import Assistant
+from forge_api.campaigns import CampaignService, build_campaign_router
+from forge_api.director import ResearchDirector
 from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.fund import FundService
 from forge_api.jobs import REGISTRY, JobHandle
@@ -359,6 +361,7 @@ class ControlSurface:
     fund: FundService
     approvals: ApprovalQueue
     audit: AuditLog
+    campaigns: CampaignService
 
 
 def build_control_router(
@@ -394,6 +397,37 @@ def build_control_router(
     execution_store = ExecutionStore(
         workspace.data / "execution.db", starting_cash=fund_config.get().starting_cash
     )
+
+    # The research factory. All application state, so all in the app-owned data
+    # root beside the layouts and the mode session. Deleting these costs the
+    # research *map* — the frontier, the hypothesis graph, the campaign journal —
+    # and no verdict, artifact or holdout consumption, which live elsewhere.
+    campaign_service = CampaignService(workspace.data, log=log)
+    campaign_service.director = ResearchDirector(
+        campaigns=campaign_service.campaigns,
+        frontier=campaign_service.frontier,
+        hypotheses=campaign_service.hypotheses,
+        journal=campaign_service.journal,
+        sources=campaign_service.sources,
+        promotion=campaign_service.promotion,
+        families=families,
+        templates=templates,
+        log=log,
+        library=library,
+    )
+    # The engine asks the director what to research next. With no campaign
+    # running the director returns nothing and the engine's original template
+    # draw runs unchanged, so this attachment costs nothing when unused.
+    engine.director = campaign_service.director
+    # A campaign that was running when the process died is not running now.
+    # Left as "running" it would refuse every new campaign as a conflict.
+    interrupted = campaign_service.campaigns.active()
+    if interrupted is not None:
+        campaign_service.campaigns.set_status(
+            interrupted.campaign_id,
+            "stopped",
+            reason="the application restarted while this campaign was running",
+        )
 
     def verdict_for(strategy_id: str) -> str | None:
         """The judge's decision for one strategy, through the dossier's own path.
@@ -2092,6 +2126,34 @@ def build_control_router(
     def read_audit(limit: int = 100) -> ApiEnvelope[dict[str, Any]]:
         return ApiEnvelope(data=_action("audit_log", {"limit": limit}))
 
+    # ── research campaigns ───────────────────────────────────────────────────
+    def start_campaign_engine(campaign: Any, settings: Any) -> None:
+        """Start the search machinery for a campaign.
+
+        The campaign supplies the dataset and the seed; the request supplies how
+        hard to run. Injected into the campaign router so that module never
+        touches the engine, and so "start a campaign" is one call rather than a
+        sequence the interface has to get right.
+        """
+        engine.start(
+            EngineConfig(
+                dataset=campaign.dataset,
+                cycle_seconds=settings.cycle_seconds,
+                max_strategies=settings.max_strategies,
+                workers=settings.workers,
+                max_bars=settings.max_bars,
+                seed=campaign.seed,
+            )
+        )
+
+    router.include_router(
+        build_campaign_router(
+            campaign_service,
+            start_engine=start_campaign_engine,
+            stop_engine=engine.stop,
+        )
+    )
+
     return ControlSurface(
         router=router,
         engine=engine,
@@ -2103,4 +2165,5 @@ def build_control_router(
         fund=fund,
         approvals=approvals,
         audit=audit,
+        campaigns=campaign_service,
     )

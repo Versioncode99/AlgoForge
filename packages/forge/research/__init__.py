@@ -1,3 +1,19 @@
+from forge.research.allocation import (
+    DEFAULT_WEIGHTS,
+    AllocationAdvice,
+    Bucket,
+    FrontierSignal,
+    ResearchAllocation,
+    adapt,
+    realised,
+)
+from forge.research.campaign import (
+    Campaign,
+    CampaignError,
+    CampaignProgress,
+    CampaignStore,
+    StoppingCriteria,
+)
 from forge.research.cpcv import (
     CombinatorialPlan,
     CombinatorialSplit,
@@ -5,7 +21,33 @@ from forge.research.cpcv import (
     combinatorial_purged_plan,
     path_distribution,
 )
+from forge.research.followup import FollowUp, Observation, derive, derive_many
+from forge.research.frontier import (
+    FrontierError,
+    FrontierItem,
+    FrontierState,
+    ResearchFrontier,
+    SearchKind,
+)
+from forge.research.hypotheses import (
+    EdgeKind,
+    Hypothesis,
+    HypothesisError,
+    HypothesisGraph,
+    HypothesisStatus,
+)
+from forge.research.information import CostEstimate, InformationValue, estimate_cost, value_of
+from forge.research.journal import EventKind, ResearchJournal
 from forge.research.ledger import HoldoutConsumption, ResearchLedger
+from forge.research.literature import (
+    Claim,
+    LiteratureError,
+    RetrievalReport,
+    Source,
+    SourceStore,
+    retrieve,
+    topics_for,
+)
 from forge.research.mechanism import (
     MECHANISM_ALPHA,
     MINIMUM_TRADES_FOR_CONTROL,
@@ -18,7 +60,35 @@ from forge.research.models import (
     ResearchPartitions,
     ResearchSplitReceipt,
 )
+from forge.research.novelty import (
+    NoveltyVerdict,
+    Similarity,
+    Subject,
+    containment,
+    subjects_from_families,
+    subjects_from_hypotheses,
+    subjects_from_templates,
+)
+from forge.research.novelty import assess as assess_novelty
+from forge.research.promotion import Candidate as PromotionCandidate
+from forge.research.promotion import (
+    Prerequisites,
+    PromotionOutcome,
+    PromotionQueue,
+    PromotionState,
+    outcome_from_verdict,
+)
+from forge.research.promotion import assess as assess_promotion
 from forge.research.split import chronological_split, source_data_hash
+from forge.research.synthesis import (
+    ARCHETYPES,
+    Archetype,
+    Composition,
+    SynthesisError,
+    archetypes_for,
+    compose,
+    structural_variants,
+)
 from forge.research.validation import (
     ValidationEvidence,
     expand_grid,
@@ -34,30 +104,91 @@ from forge.research.walkforward import (
 )
 
 __all__ = [
+    "ARCHETYPES",
+    "DEFAULT_WEIGHTS",
     "MECHANISM_ALPHA",
     "MINIMUM_TRADES_FOR_CONTROL",
+    "AllocationAdvice",
+    "Archetype",
+    "Bucket",
+    "Campaign",
+    "CampaignError",
+    "CampaignProgress",
+    "CampaignStore",
+    "Claim",
     "CombinatorialPlan",
     "CombinatorialSplit",
+    "Composition",
+    "CostEstimate",
+    "EdgeKind",
+    "EventKind",
     "EvidenceTier",
+    "FollowUp",
+    "FrontierError",
+    "FrontierItem",
+    "FrontierSignal",
+    "FrontierState",
     "HoldoutConsumption",
+    "Hypothesis",
+    "HypothesisError",
+    "HypothesisGraph",
+    "HypothesisStatus",
+    "InformationValue",
+    "LiteratureError",
     "MechanismTest",
+    "NoveltyVerdict",
+    "Observation",
     "PartitionReceipt",
     "PathDistribution",
+    "Prerequisites",
+    "PromotionCandidate",
+    "PromotionOutcome",
+    "PromotionQueue",
+    "PromotionState",
+    "ResearchAllocation",
+    "ResearchFrontier",
+    "ResearchJournal",
     "ResearchLedger",
     "ResearchPartitions",
     "ResearchSplitReceipt",
+    "RetrievalReport",
+    "SearchKind",
+    "Similarity",
+    "Source",
+    "SourceStore",
+    "StoppingCriteria",
+    "Subject",
+    "SynthesisError",
     "ValidationEvidence",
     "WalkForwardFold",
     "WalkForwardPlan",
     "WalkForwardResult",
+    "adapt",
+    "archetypes_for",
+    "assess_novelty",
+    "assess_promotion",
     "chronological_split",
     "combinatorial_purged_plan",
+    "compose",
+    "containment",
+    "derive",
+    "derive_many",
     "entry_timing_control",
+    "estimate_cost",
     "expand_grid",
+    "outcome_from_verdict",
     "path_distribution",
+    "realised",
     "reconstruct_paths",
+    "retrieve",
     "run_validation",
     "source_data_hash",
+    "structural_variants",
+    "subjects_from_families",
+    "subjects_from_hypotheses",
+    "subjects_from_templates",
+    "topics_for",
+    "value_of",
     "walk_forward_efficiency",
     "walk_forward_plan",
 ]

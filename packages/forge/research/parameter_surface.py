@@ -137,13 +137,9 @@ def build_surface(
     reported as absent cells rather than filled in.
     """
     if metric not in METRICS:
-        raise AnalysisError(
-            f"unknown metric '{metric}'. Available: {', '.join(sorted(METRICS))}"
-        )
+        raise AnalysisError(f"unknown metric '{metric}'. Available: {', '.join(sorted(METRICS))}")
     if not points:
-        raise AnalysisError(
-            "the sweep produced no configurations, so there is no surface to draw"
-        )
+        raise AnalysisError("the sweep produced no configurations, so there is no surface to draw")
 
     xs = sorted({float(point["x"]) for point in points})
     ys = sorted({float(point["y"]) for point in points})
@@ -277,9 +273,6 @@ def _neighbours_of(target: Cell, cells: Sequence[Cell]) -> list[Cell]:
     """The eight cells adjacent to one, on the grid."""
     x, y = target.coords
     wanted = {
-        (x + dx, y + dy)
-        for dx in (-1, 0, 1)
-        for dy in (-1, 0, 1)
-        if not (dx == 0 and dy == 0)
+        (x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if not (dx == 0 and dy == 0)
     }
     return [cell for cell in cells if tuple(cell.coords) in wanted and cell.trade_count > 0]
