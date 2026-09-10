@@ -155,3 +155,44 @@ def test_a_routed_question_never_names_an_analysis_that_does_not_exist(
         else:
             for item in response.json()["detail"]["candidates"]:
                 assert item["analysis"] in keys
+
+# ── a strategy that is not there ─────────────────────────────────────────────
+
+
+def test_an_unknown_strategy_is_refused_rather_than_crashing(client: TestClient) -> None:
+    """A mistyped id used to reach the caller as a plain-text 500.
+
+    `research_lab.run` resolves the strategy's trades through the ledger, and
+    the ledger raises `LedgerError` when there are none. Both lab routes caught
+    `LabError` and not that one, so FastAPI answered with a bare
+    "Internal Server Error" and a stack trace in the log — for what is only ever
+    the caller getting an id wrong.
+
+    The message thrown away was the useful part: the ledger writes "strategy 'x'
+    has no backtest yet. Run one and its trades will appear on the chart."
+    """
+    for route, body in (
+        ("/api/v1/lab/run", {"analysis": "by_hour", "strategy_id": "no_such_strategy"}),
+        (
+            "/api/v1/lab/ask",
+            {
+                "question": "does the edge depend on volatility?",
+                "strategy_id": "no_such_strategy",
+            },
+        ),
+    ):
+        response = client.post(route, json=body)
+        assert response.status_code == 404, f"{route} answered {response.status_code}"
+        detail = response.json()["detail"]
+        assert detail["code"] == "ledger_unavailable"
+        assert "no_such_strategy" in detail["reason"]
+
+
+def test_an_unknown_backtest_is_refused_the_same_way(client: TestClient, strategy: str) -> None:
+    """Same path, one level deeper: the strategy exists but the run does not."""
+    response = client.post(
+        "/api/v1/lab/run",
+        json={"analysis": "by_hour", "strategy_id": strategy, "backtest_id": "no_such_backtest"},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "ledger_unavailable"

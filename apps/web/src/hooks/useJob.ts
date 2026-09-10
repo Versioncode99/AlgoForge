@@ -2,20 +2,34 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { getJson, postJson } from '../api'
 import type { Job } from '../types'
 
-/** Polls one background job until it settles.
+/** How many consecutive failed polls to absorb before giving up on a job.
  *
- * Polling rather than a socket: the backend is a single local process and a
- * one-second poll costs nothing, while a socket would add a reconnection
- * lifecycle for no benefit on localhost. The interval eases off once a job has
- * been running a while, because a sixteen-year backtest does not need 300
- * requests to tell you it is still going.
- */
+ * A local API restarting, a dropped socket, one 502 from a proxy: none of those
+ * mean the job died, and the job is still running on the server whatever the
+ * client thinks. Retrying a few times with a widening gap covers a restart
+ * without hiding an API that is genuinely gone. */
+const MAX_CONSECUTIVE_FAILURES = 5
+
 export function useJob() {
   const [job, setJob] = useState<Job | null>(null)
   const [error, setError] = useState<string | null>(null)
   const timer = useRef<number | null>(null)
 
+  /* Which poll loop currently owns this hook.
+   *
+   * `stop()` can clear a pending timeout but cannot cancel a request already in
+   * flight, and that gap was a real defect: starting a second job while the
+   * first one's fetch was outstanding left both loops alive. The stale one
+   * resolved, wrote its own job into state, and rescheduled itself into the
+   * same ref — so the bar flipped between two jobs and the newer one's timer
+   * handle was lost, leaving cancel and clear able to reach only one of them.
+   *
+   * Every loop captures the generation it was started under and does nothing at
+   * all once that number has moved on. */
+  const generation = useRef(0)
+
   const stop = useCallback(() => {
+    generation.current += 1
     if (timer.current !== null) {
       window.clearTimeout(timer.current)
       timer.current = null
@@ -23,9 +37,16 @@ export function useJob() {
   }, [])
 
   const poll = useCallback((jobId: string, since: number) => {
+    const mine = generation.current
+    let failures = 0
+
     const tick = async () => {
+      if (generation.current !== mine) return
       try {
         const next = await getJson<Job>(`/jobs/${jobId}`)
+        if (generation.current !== mine) return
+        failures = 0
+        setError(null)
         setJob(next)
         if (next.status === 'RUNNING' || next.status === 'QUEUED') {
           const age = Date.now() - since
@@ -33,7 +54,17 @@ export function useJob() {
           timer.current = window.setTimeout(tick, delay)
         }
       } catch (e) {
-        setError((e as Error).message)
+        if (generation.current !== mine) return
+        failures += 1
+        if (failures >= MAX_CONSECUTIVE_FAILURES) {
+          /* Stop and say so. Retrying forever would leave an unreachable API
+           * behind a progress bar that never settles, which is the failure this
+           * whole component exists to prevent. */
+          setError((e as Error).message)
+          return
+        }
+        // Widen the gap on each attempt: 400ms, 800ms, 1.6s, 3.2s.
+        timer.current = window.setTimeout(tick, 400 * 2 ** (failures - 1))
       }
     }
     void tick()

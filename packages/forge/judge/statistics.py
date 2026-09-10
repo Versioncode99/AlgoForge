@@ -366,8 +366,28 @@ def probability_of_backtest_overfitting(
         logits.append(math.log(relative / (1.0 - relative)))
 
     values = np.asarray(logits, dtype=np.float64)
+    # A split whose winner lands exactly on the out-of-sample median counts as
+    # half, for the same reason the rank above uses mid-ranks: a tie is neither
+    # a success nor a failure of the selection rule.
+    #
+    # `<= 0.0` counted every one of them as overfit, and they are not rare.
+    # `rank / (N + 1)` is exactly 0.5 whenever the winner takes the middle rank,
+    # which is an integer rank only when N is odd -- so the error was invisible
+    # for an even number of configurations and large for an odd one. Measured on
+    # pure noise, where the true PBO is 0.5 by construction: 3 configurations
+    # read 0.70, 5 read 0.66, 15 read 0.59, while 4, 6, 8 and 10 all read within
+    # 0.03 of 0.5. The existing regression test used 30 columns and a 0.15
+    # tolerance, so it sat in the blind spot.
+    #
+    # It failed in the punishing direction. PBO gates promotion in
+    # `judge.engine` and in `/strategies`, so an inflated value withholds a
+    # verdict from a search that was merely neutral. Six identical
+    # configurations -- selection among indistinguishable things, the textbook
+    # coin flip -- scored 1.0, the most damning value available.
+    below = float(np.mean(values < 0.0))
+    tied = float(np.mean(values == 0.0))
     return BacktestOverfitting(
-        probability=float(np.mean(values <= 0.0)),
+        probability=below + 0.5 * tied,
         splits=len(logits),
         trials=trials,
         blocks=blocks,
