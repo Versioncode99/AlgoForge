@@ -59,15 +59,7 @@ BARS = 30_000
 
 
 @pytest.fixture
-def shipped_templates():
-    before = dict(TEMPLATES)
-    yield
-    TEMPLATES.clear()
-    TEMPLATES.update(before)
-
-
-@pytest.fixture
-def factory(tmp_path: Path, shipped_templates):
+def factory(tmp_path: Path):
     """The whole factory, wired as `build_control_router` wires it."""
     shutil.copytree(Path("rules"), tmp_path / "rules", dirs_exist_ok=True)
     workspace = Workspace(repo=tmp_path, root=tmp_path, vault_mode=False).ensure()
@@ -237,7 +229,7 @@ def test_follow_up_questions_are_generated_from_what_failed(factory) -> None:
 
     from forge_api.director import Candidate
 
-    before = len(service.hypotheses.list(campaign.campaign_id))
+    before_ids = {h.hypothesis_id for h in service.hypotheses.list(campaign.campaign_id)}
     service.director.observe(
         ObservationInput(
             candidate=Candidate(
@@ -265,12 +257,18 @@ def test_follow_up_questions_are_generated_from_what_failed(factory) -> None:
         )
     )
     after = service.hypotheses.list(campaign.campaign_id)
-    assert len(after) > before, "a classified failure generated no follow-up question"
-    derived = [h for h in after if h.origin == "failure-derived"]
+    fresh = [h for h in after if h.hypothesis_id not in before_ids]
+    assert fresh, "a classified failure generated no follow-up question"
+    derived = [h for h in fresh if h.origin == "failure-derived"]
     assert derived
+    # Only the ones this observation just derived. Earlier follow-ups may since
+    # have been picked up and tested — which is the loop working, not a
+    # regression — so asserting over every failure-derived node ever would fail
+    # for the right reason.
     assert all(h.status.value == "UNTESTED" for h in derived), (
         "a derived hypothesis was recorded as anything other than a question"
     )
+    assert all(h.parent_id == node.hypothesis_id for h in derived)
 
 
 def test_synthetic_bars_are_never_promoted_and_the_reason_is_the_data(factory) -> None:

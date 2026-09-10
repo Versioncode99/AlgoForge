@@ -70,6 +70,8 @@ from forge.research.promotion import (
     Prerequisites,
     PromotionOutcome,
     PromotionQueue,
+    PromotionState,
+    outcome_from_verdict,
 )
 from forge.research.promotion import (
     assess as assess_promotion,
@@ -87,6 +89,19 @@ LITERATURE_RESULTS = 6
 #: bar count for that pilot — enough to establish that it trades at a usable
 #: rate on real data, far short of enough to say anything about edge.
 PILOT_BARS = 20_000
+
+
+class _Gate:
+    """The three fields `outcome_from_verdict` reads, and nothing else.
+
+    A tiny local shape rather than the judge's `GateResult`, so this module
+    stays unable to construct anything the judge would accept as evidence.
+    """
+
+    __slots__ = ("gate", "name", "status")
+
+    def __init__(self, gate: str, status: str, name: str) -> None:
+        self.gate, self.status, self.name = gate, status, name
 
 
 @dataclass
@@ -166,6 +181,12 @@ class ObservationInput:
     verdict_id: str | None = None
     backtest_id: str | None = None
     decision: str = ""
+    #: The judge's gate ladder as ``(gate, status, name)``, so the promotion
+    #: queue can record *which* gate settled the candidate rather than only
+    #: that something did. Flattened to tuples because the director must not
+    #: import the judge's models: it records what the judge said, and has no
+    #: business being able to construct a verdict.
+    gates: tuple[tuple[str, str, str], ...] = ()
     compute_units: float = 0.0
     #: A condition the effect was confined to, when the result carried one.
     condition: str = ""
@@ -689,7 +710,25 @@ class ResearchDirector:
         recorded, because a hypothesis whose implementation was rejected would
         be a claim the system cannot test and should not be on the frontier as
         if it could.
+
+        **Two different things happen here**, and conflating them made the
+        exploration bucket stall the moment the frontier had anything open. A
+        *fresh proposal* is a new claim and faces the novelty gate. Picking up an
+        **existing frontier item** is not a new claim at all — the question is
+        already admitted, and this is a second construction of it. Running the
+        "is this claim new?" gate on the second case refused it as a duplicate of
+        its own hypothesis, so every attempt to answer an open question produced
+        a refusal instead of an experiment.
         """
+        # Is this a new claim, or another way of testing one already on the
+        # frontier? The answer decides whether the novelty gate applies.
+        existing_item = self.frontier.get(frontier_item_id) if frontier_item_id else None
+        existing_node = (
+            self.hypotheses.get(existing_item.hypothesis_id)
+            if existing_item is not None and existing_item.hypothesis_id
+            else None
+        )
+
         seed = rng.randrange(1_000_000)
         composition = compose(
             archetype=archetype,
@@ -710,7 +749,47 @@ class ResearchDirector:
             if isinstance(registered, Refusal):
                 return registered
 
-        # The claim, checked against every claim already made. A structural
+        if existing_node is not None and existing_item is not None:
+            # A second construction of a question already on the frontier. The
+            # claim does not face the novelty gate — it was admitted when the
+            # question was — and the candidate is recorded as STRUCTURAL,
+            # because what is new here is how the effect is being measured.
+            self._event(
+                EventKind.EXPERIMENT_STARTED,
+                f"new construction for an open question: {existing_item.question[:140]}",
+                subject=existing_item.item_id,
+                detail={
+                    "hypothesis_id": existing_node.hypothesis_id,
+                    "frontier_item_id": existing_item.item_id,
+                    "template": template_key,
+                    "archetype": archetype.key,
+                    "state": str(existing_item.state),
+                },
+                worker=worker,
+            )
+            self.hypotheses.link(
+                existing_node.hypothesis_id,
+                EdgeKind.IMPLEMENTED_BY,
+                template_key,
+                note=archetype.key,
+            )
+            return Candidate(
+                template_key=template_key,
+                parameters=_draw(TEMPLATES[template_key], rng),
+                bucket=bucket,
+                search_kind=SearchKind.STRUCTURAL
+                if existing_item.experiments
+                else existing_item.search_kind,
+                hypothesis_id=existing_node.hypothesis_id,
+                frontier_item_id=existing_item.item_id,
+                research_sources=tuple(sources or existing_item.sources),
+                hypothesis_text=existing_node.statement,
+                novelty=existing_item.novelty,
+                rationale=rationale
+                or f"testing an open question with the {archetype.key} construction",
+            )
+
+        # A fresh claim, checked against every claim already made. A structural
         # variant that turns out to restate an existing hypothesis is refused
         # here rather than becoming a near-duplicate node in the graph.
         proposal = Subject.of(
@@ -1056,6 +1135,7 @@ class ResearchDirector:
         )
 
         self._queue_validation(campaign, outcome, candidate)
+        self._settle_validation(campaign, outcome)
         self._generate_followups(campaign, outcome, candidate)
 
     def _queue_validation(
@@ -1094,6 +1174,54 @@ class ResearchDirector:
             subject=outcome.strategy_id,
             detail={"entry_id": entry, "reasons": list(eligibility.reasons)},
             level="pass",
+        )
+
+    def _settle_validation(self, campaign: Campaign, outcome: ObservationInput) -> None:
+        """Record what the validation run actually decided.
+
+        The engine validates inline — the parameter grid, the walk-forward and
+        the CPCV paths all run inside the cycle, and the judge reads them — so
+        by the time a judged observation arrives the answer already exists. This
+        writes it onto the queue entry, which is what turns the queue from a
+        list of intentions into a record.
+
+        The three outcomes are the judge's, translated mechanically. A gate that
+        was never measured makes the result INCONCLUSIVE rather than a failure,
+        because "the evidence was not produced" and "the claim was disproven"
+        are different results and only one of them settles anything.
+        """
+        if not outcome.decision or not outcome.strategy_id:
+            return
+        entry = next(
+            (
+                row
+                for row in self.promotion.list(campaign.campaign_id, limit=200)
+                if row["strategy_id"] == outcome.strategy_id
+                and row["state"] in {PromotionState.QUEUED, PromotionState.RUNNING}
+            ),
+            None,
+        )
+        if entry is None:
+            return
+        gates = tuple(_Gate(*row) for row in outcome.gates)
+        decided, reasons = outcome_from_verdict(outcome.decision, gates)
+        self.promotion.decide(
+            entry["entry_id"],
+            decided,
+            reasons=reasons,
+            detail={
+                "verdict_id": outcome.verdict_id,
+                "backtest_id": outcome.backtest_id,
+                "trades": outcome.trades,
+                "grid_size": outcome.grid_size,
+            },
+        )
+        self._event(
+            EventKind.VALIDATION_DECIDED,
+            f"{outcome.strategy_id} validation {decided}: {reasons[0] if reasons else ''}",
+            subject=outcome.strategy_id,
+            detail={"outcome": str(decided), "reasons": list(reasons)},
+            level="pass" if decided is PromotionOutcome.PASS else "info",
         )
 
     def _generate_followups(

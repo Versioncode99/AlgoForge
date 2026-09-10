@@ -1162,6 +1162,7 @@ class AutonomousEngine:
             verdict_id=verdict.verdict_id,
             backtest_id=result.backtest_id,
             decision=verdict.decision,
+            gates=tuple((g.gate, g.status, g.name) for g in verdict.gates),
             compute_units=2.0 + (_grid_size(grid) if evidence_args else 0.0),
         )
 

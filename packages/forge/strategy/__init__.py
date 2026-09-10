@@ -48,10 +48,25 @@ from forge.strategy.templates_statistical import STATISTICAL_TEMPLATES
 TEMPLATES.update(QUANT_TEMPLATES)
 TEMPLATES.update(STATISTICAL_TEMPLATES)
 
+#: The templates this build ships, captured here — before anything can register
+#: into `TEMPLATES` at run time.
+#:
+#: `TEMPLATES` is deliberately open: `TemplateStore` registers what an operator
+#: authored and the research director registers what it composed, and a
+#: registered template is meant to be indistinguishable from a shipped one *at
+#: the point of use*. That is the right property for the engine and the wrong
+#: one for a test asserting something about what this repository ships — a
+#: contributor who adds a one-sided custom template should not fail a test named
+#: "no shipped template can only take one side".
+#:
+#: So: identical in capability, distinguishable in provenance.
+SHIPPED_TEMPLATE_KEYS: frozenset[str] = frozenset(TEMPLATES)
+
 __all__ = [
     "BLUEPRINTS",
     "BUILTIN_FAMILIES",
     "DESCRIBED_TARGETS",
+    "SHIPPED_TEMPLATE_KEYS",
     "TEMPLATES",
     "VERIFIABLE_TARGETS",
     "Always",

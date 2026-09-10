@@ -1,6 +1,6 @@
 import {
   Activity, Archive, BadgeCheck, BookOpen, BrainCircuit, CandlestickChart, ClipboardList,
-  Crosshair, Database, FileCheck2, FlaskConical, Gauge, LayoutGrid, Layers3, LineChart,
+  Compass, Crosshair, Database, FileCheck2, FlaskConical, Gauge, LayoutGrid, Layers3, LineChart,
   MessageSquare, Network, PieChart, PlaySquare, Radar, Scale, ScrollText, Settings,
   ShieldCheck, SlidersHorizontal, TestTubes, Timer, Wallet, Workflow,
 } from 'lucide-react'
@@ -48,6 +48,7 @@ const ICONS: Record<string, typeof Radar> = {
   actions: SlidersHorizontal,
   activity: Activity,
   missions: PlaySquare,
+  campaigns: Compass,
   pipeline: Workflow,
   // hedge fund
   fund: PieChart,

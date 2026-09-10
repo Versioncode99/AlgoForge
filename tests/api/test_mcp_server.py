@@ -21,6 +21,7 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
         "engine_status",
         "experiment_lineage",
         "export_strategy",
+        "export_workspace",
         "fund_config",
         "fund_operations",
         "fund_performance",
@@ -44,6 +45,7 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
         "strategy_dossier",
         "strategy_regimes",
         "strategy_trades",
+        "workspace_history",
     }
     assert all(tool.annotations.read_only_hint for tool in tools.values())
     # Reading a layout is not destructive, so nothing here should be flagged as

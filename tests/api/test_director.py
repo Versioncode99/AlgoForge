@@ -24,22 +24,7 @@ OBJECTIVE = "Discover intraday NQ alpha on one-minute bars between 2008 and 2026
 
 
 @pytest.fixture
-def shipped_templates() -> dict:
-    """Restore the shared catalogue after a test that registers into it.
-
-    `TEMPLATES` is a module-level dict every consumer holds, and the director
-    registers generated templates into it on purpose — that is what makes a
-    generated template indistinguishable from a shipped one. It must not leak
-    between tests.
-    """
-    before = dict(TEMPLATES)
-    yield before
-    TEMPLATES.clear()
-    TEMPLATES.update(before)
-
-
-@pytest.fixture
-def director(tmp_path: Path, shipped_templates) -> ResearchDirector:
+def director(tmp_path: Path) -> ResearchDirector:
     service = CampaignService(tmp_path)
     service.director = ResearchDirector(
         campaigns=service.campaigns,
@@ -65,7 +50,15 @@ def start(director: ResearchDirector, **kwargs):
 
 
 def propose_until(director: ResearchDirector, bucket: Bucket, tries: int = 60):
-    """Force one bucket by pinning the allocation, then ask for a candidate."""
+    """Ask for a candidate from one specific bucket.
+
+    The allocation is pinned to that bucket, but `MIN_WEIGHT` keeps every other
+    bucket reachable on purpose — a campaign that stopped exploring entirely
+    because exploration was going badly would never find out it had stopped
+    being right. So roughly one draw in nine lands elsewhere, and the returned
+    candidate is filtered rather than assumed: a helper that accepted whatever
+    came back would assert against a bucket the test did not ask for.
+    """
     campaign = director.campaign()
     assert campaign is not None
     campaign.allocation = ResearchAllocation(
@@ -75,7 +68,7 @@ def propose_until(director: ResearchDirector, bucket: Bucket, tries: int = 60):
     director._allocation = None
     for seed in range(tries):
         outcome = director.next_candidate(random.Random(seed), 0, "exploration")
-        if isinstance(outcome, Candidate):
+        if isinstance(outcome, Candidate) and outcome.bucket is bucket:
             return outcome
     return None
 
@@ -141,27 +134,84 @@ def test_generated_templates_are_attributable_to_their_origin(
     assert record["campaign_id"] == director.campaign_id
 
 
-def test_a_duplicate_family_proposal_is_refused_with_the_collision_named(
+def test_family_discovery_never_creates_more_families_than_it_has_mechanisms(
     director: ResearchDirector,
 ) -> None:
-    """Every archetype has already become a family, so the next is a duplicate."""
+    """The gate's job: a restatement is refused rather than becoming a family.
+
+    Run the discovery bucket far past the number of distinct constructions
+    available. Every family beyond that would have to be a re-proposal of one
+    already registered, so the count staying inside the vocabulary is the gate
+    working.
+    """
+    from forge.research.synthesis import ARCHETYPES
+
     start(director)
-    refusals = []
-    for seed in range(80):
-        outcome = propose_until(
-            director, Bucket.DISCOVER_FAMILY, tries=1
-        ) or director.next_candidate(random.Random(seed), 0, "exploration")
-        if isinstance(outcome, Refusal):
-            refusals.append(outcome)
-        if len(refusals) >= 1 and seed > 40:
-            break
+    for seed in range(60):
+        director.next_candidate(random.Random(seed), 0, "exploration")
     campaign = director.campaigns.get(director.campaign_id)
     assert campaign is not None
-    # Either it refused duplicates, or it exhausted the archetype vocabulary —
-    # both are the gate doing its job rather than inventing families.
-    assert campaign.progress.families_created <= len(
-        __import__("forge.research.synthesis", fromlist=["ARCHETYPES"]).ARCHETYPES
+    created = [f for f in director.families.all() if f.origin != "builtin"]
+    assert len(created) <= len(ARCHETYPES)
+    # And no family is a numeric restatement of an existing name.
+    assert not [f for f in created if f.key.endswith(("_2", "_v2", "_new"))]
+
+
+def test_an_open_question_can_actually_be_tested(director: ResearchDirector) -> None:
+    """The exploration bucket must not refuse a question it just admitted.
+
+    Picking up an existing frontier item is a second *construction* of a claim
+    already on the frontier, not a new claim. Running the novelty gate on it
+    refused it as a duplicate of its own hypothesis, so every attempt to answer
+    an open question produced a refusal instead of an experiment and the bucket
+    stalled the moment the frontier had anything in it.
+    """
+    start(director)
+    first = propose_until(director, Bucket.EXPLORE_HYPOTHESIS)
+    assert first is not None
+    assert first.hypothesis_id
+    open_items = director.frontier.schedulable(director.campaign_id)
+    assert open_items, "the first proposal admitted nothing to the frontier"
+
+    # With the frontier now non-empty, the bucket has to keep producing
+    # candidates rather than refusals.
+    produced = [
+        propose_until(director, Bucket.EXPLORE_HYPOTHESIS, tries=30) for _ in range(3)
+    ]
+    assert all(candidate is not None for candidate in produced)
+    assert all(candidate.hypothesis_id for candidate in produced if candidate)
+    # And they are recorded against an admitted question, not as new claims.
+    assert all(candidate.frontier_item_id for candidate in produced if candidate)
+
+
+def test_a_second_construction_of_a_promising_question_is_structural(
+    director: ResearchDirector,
+) -> None:
+    """If the effect is real it should survive being measured a different way."""
+    start(director)
+    first = propose_until(director, Bucket.EXPLORE_HYPOTHESIS)
+    assert first is not None
+    director.observe(
+        ObservationInput(
+            candidate=first,
+            strategy_id="s1",
+            experiment_id="exp_1",
+            status="screened",
+            trades=84,
+            net_pnl=900.0,
+            grid_size=9,
+            conformance_passed=True,
+            determinism_reproduced=True,
+            real_data=True,
+        )
     )
+    second = propose_until(director, Bucket.ADVANCE_PROMISING, tries=40)
+    assert second is not None
+    assert second.hypothesis_id == first.hypothesis_id
+    assert second.frontier_item_id == first.frontier_item_id
+    assert second.search_kind is SearchKind.STRUCTURAL
+    # A different construction, not the same template again.
+    assert second.template_key != first.template_key
 
 
 def test_parameter_refinement_is_still_available_and_budgeted(
@@ -339,6 +389,68 @@ def test_a_candidate_that_has_not_earned_validation_is_not_queued(
         )
     )
     assert director.promotion.pending(director.campaign_id) == 0
+
+
+def test_a_validated_candidate_gets_its_outcome_recorded(director: ResearchDirector) -> None:
+    """The queue is a record, not a list of intentions.
+
+    The engine validates inline, so by the time a judged observation arrives the
+    answer exists. It has to land on the entry, or "queued for validation" and
+    "validated" become indistinguishable.
+    """
+    start(director)
+    candidate = propose_until(director, Bucket.EXPLORE_HYPOTHESIS)
+    assert candidate is not None
+    director.observe(
+        ObservationInput(
+            candidate=candidate,
+            strategy_id="s_judged",
+            experiment_id="exp_1",
+            status="passed",
+            trades=96,
+            net_pnl=2_400.0,
+            grid_size=9,
+            conformance_passed=True,
+            determinism_reproduced=True,
+            real_data=True,
+            decision="PASS",
+            gates=(("G0", "PASS", "Data integrity"),),
+            verdict_id="vd_1",
+        )
+    )
+    outcomes = director.promotion.outcomes(director.campaign_id)
+    assert outcomes["PASS"] == 1
+    assert director.promotion.pending(director.campaign_id) == 0
+    entry = director.promotion.list(director.campaign_id)[0]
+    assert entry["state"] == "DECIDED"
+    assert entry["detail"]["verdict_id"] == "vd_1"
+
+
+def test_an_unmeasured_gate_settles_as_inconclusive_not_failed(
+    director: ResearchDirector,
+) -> None:
+    start(director)
+    candidate = propose_until(director, Bucket.EXPLORE_HYPOTHESIS)
+    assert candidate is not None
+    director.observe(
+        ObservationInput(
+            candidate=candidate,
+            strategy_id="s_thin",
+            experiment_id="exp_1",
+            status="judged",
+            trades=96,
+            net_pnl=1_400.0,
+            grid_size=9,
+            conformance_passed=True,
+            determinism_reproduced=True,
+            real_data=True,
+            decision="INCONCLUSIVE",
+            gates=(("G5", "INCONCLUSIVE", "Deflated Sharpe"),),
+        )
+    )
+    outcomes = director.promotion.outcomes(director.campaign_id)
+    assert outcomes["INCONCLUSIVE"] == 1
+    assert outcomes["FAIL"] == 0
 
 
 def test_the_journal_records_what_actually_happened(director: ResearchDirector) -> None:

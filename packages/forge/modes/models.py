@@ -228,6 +228,13 @@ _AI = ModeDescriptor(
                 ("evidence",)),
         Section("missions", "Automation", "Objectives, declared steps, run verbatim",
                 "Work", ()),
+        Section(
+            "campaigns",
+            "Research Campaign",
+            "The objective, the frontier and what it is doing now",
+            "Autonomous",
+            (),
+        ),
         Section("pipeline", "Engine Pipeline", "The graph, with live counts", "Autonomous", ()),
         Section("memory", "Research Memory", "Classified failures", "Autonomous",
                 ("research_memory",)),

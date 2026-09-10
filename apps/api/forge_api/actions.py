@@ -1853,7 +1853,15 @@ class Actions:
 
     def list_workspaces(self) -> dict[str, Any]:
         rows = self.workspaces.summaries()
-        return {"count": len(rows), "active": self.workspaces.active_id(), "workspaces": rows}
+        return {
+            "count": len(rows),
+            "active": self.workspaces.active_id(),
+            # Which one opens on a cold start. Travels with the list because a
+            # switcher that cannot show it makes "set as default" a button with
+            # no visible effect.
+            "default": self.workspaces.default_id(),
+            "workspaces": rows,
+        }
 
     def describe_workspace(self, workspace_id: str | None = None) -> dict[str, Any]:
         return self._view(self._workspace(workspace_id))
