@@ -33,6 +33,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from fastapi import HTTPException
 from forge.execution.oms import OrderRefused
 from forge.hedgefund.approvals import ApprovalQueue, ApprovalRequest
 from forge.hedgefund.audit import AuditLog, Outcome
@@ -199,6 +200,9 @@ class Actions:
         # need them refuse by name rather than raising an attribute error.
         self.ledger = ledger
         self.lab: Any = None
+        # The validation runner, attached by `forge_api.strategies` so the action
+        # and the HTTP route call one function rather than two.
+        self.validation: Callable[..., dict[str, Any]] | None = None
         self.store = store
         self.log = log
         self.market = market
@@ -237,6 +241,7 @@ class Actions:
         confirmed: bool = False,
         actor: Actor = Actor.HUMAN,
         origin: str = "",
+        approval_id: str = "",
     ) -> dict[str, Any]:
         """Run one action.
 
@@ -245,6 +250,11 @@ class Actions:
         surface asking can show the right prompt. An agent cannot set this on
         its own behalf: it has to come back through a person, which is the whole
         point of the boundary.
+
+        `approval_id` is set only when this call *is* the execution of a held
+        request. It goes onto the audit row so the chain from proposal, through
+        the person who authorised it, to what happened, is followable by one id
+        — which is the question the audit log exists to answer.
 
         `actor` is the second, independent gate, and it is the one that knows
         about modes. A surface a person drives passes `HUMAN`; the assistant,
@@ -261,7 +271,7 @@ class Actions:
         if judgement.ruling is Ruling.DENY:
             self._audit(
                 actor, origin, action, arguments, judgement, Outcome.DENIED,
-                error=judgement.reason,
+                error=judgement.reason, approval_id=approval_id,
             )
             raise ActionError(judgement.reason)
         if judgement.ruling is Ruling.REQUIRE_APPROVAL:
@@ -310,6 +320,7 @@ class Actions:
             Outcome.OK if record["ok"] else Outcome.ERROR,
             result=record.get("result"),
             error=str(record.get("error", "")),
+            approval_id=approval_id,
         )
         if not record["ok"]:
             raise ActionError(str(record["error"]))
@@ -408,7 +419,7 @@ class Actions:
             request_id,
             lambda name, args: self.call(
                 name, args, confirmed=True, actor=Actor.HUMAN,
-                origin=f"approval {request_id}",
+                origin=f"approval {request_id}", approval_id=request_id,
             ),
             decided_by=decided_by,
             note=note,
@@ -653,6 +664,7 @@ class Actions:
         self._register_lab()
         self._register_workspace()
         self._register_builder()
+        self._register_validation()
         self._register_modes()
         self._register_prop()
         self._register_fund()
@@ -1790,6 +1802,11 @@ class Actions:
     def delete_workspace(self, workspace_id: str) -> dict[str, Any]:
         workspace = self._workspace(workspace_id)
         removed = self.workspaces.delete(workspace.workspace_id)
+        if removed and self.modes is not None:
+            # Every mode pointing at it, not only the open one. A mode left
+            # holding a pointer to a deleted layout opens on nothing until it is
+            # re-seeded, and the operator has no way to know why.
+            self.modes.forget_workspace(workspace.workspace_id)
         return {"workspace_id": workspace.workspace_id, "deleted": removed}
 
     def add_panel(
@@ -2016,6 +2033,67 @@ class Actions:
             "markets_without_archives": list(unknown),
         }
 
+
+    def attach_validation(self, runner: Callable[..., dict[str, Any]]) -> None:
+        self.validation = runner
+
+    def _register_validation(self) -> None:
+        self._add(
+            "validate_strategy",
+            "Run the walk-forward, CSCV and CPCV stack over a strategy's parameter grid "
+            "and store the evidence the judge reads. Produces evidence, never a verdict.",
+            {
+                "strategy_id": {"type": "string"},
+                "dataset": {"type": "string", "optional": True},
+                "bar_count": {"type": "integer", "optional": True},
+                "max_trials": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "Configurations to search. Every trial is a full backtest.",
+                },
+                "folds": {"type": "integer", "optional": True},
+            },
+            self.validate_strategy,
+            mutating=True,
+        )
+
+    def validate_strategy(
+        self,
+        strategy_id: Any,
+        dataset: Any = None,
+        bar_count: Any = None,
+        max_trials: Any = None,
+        folds: Any = None,
+    ) -> dict[str, Any]:
+        if self.validation is None:
+            raise ActionError(
+                "the validation stack is not attached in this process, so validation "
+                "cannot be run from here"
+            )
+        options: dict[str, Any] = {}
+        if dataset is not None:
+            options["dataset"] = _str(dataset, "dataset")
+        if bar_count is not None:
+            options["bar_count"] = _bounded(bar_count, 60_000, 2_000, 2_000_000, "bar_count")
+        if max_trials is not None:
+            options["max_trials"] = _bounded(max_trials, 16, 2, 120, "max_trials")
+        if folds is not None:
+            options["folds"] = _bounded(folds, 6, 2, 20, "folds")
+        try:
+            return self.validation(_str(strategy_id, "strategy_id"), **options)
+        except HTTPException as exc:
+            # The route's refusals are written for a person and say which
+            # requirement was not met. Reusing them keeps the agent's answer and
+            # the interface's answer the same sentence.
+            detail = exc.detail
+            reason = (
+                detail.get("detail") or detail.get("code")
+                if isinstance(detail, dict)
+                else str(detail)
+            )
+            raise ActionError(str(reason)) from exc
+        except ValidationError as exc:
+            raise ActionError(f"invalid validation options: {exc.errors()[0]['msg']}") from exc
 
     # ── modes ────────────────────────────────────────────────────────────────
     def _register_modes(self) -> None:

@@ -91,6 +91,15 @@ class ModeStore:
         Called on every entry, not only the first, so a stance change is the
         same operation as a mode change and there is one code path holding the
         validation.
+
+        **Entering without naming a stance takes the cautious one, every time.**
+        Deliberately unlike the workspace pointer above, which a mode remembers.
+        A layout is a convenience and restoring it is a kindness; a stance
+        decides whether the machine may reach the book unattended, and silently
+        resuming that because somebody clicked back into the mode is not a
+        kindness. Autonomy is asked for each time it is used — the chooser puts
+        the question in front of the operator before they enter, and
+        `set_stance` changes it once inside.
         """
         resolved = parse_stance(mode, stance.value if stance else None)
         with closing(self._connect()) as db, db:

@@ -103,7 +103,12 @@ def estimate(
     target, intensity = _constant_correlation_target(centred, sample, observations)
     shrunk = intensity * target + (1.0 - intensity) * sample
     note = ""
-    if observations < assets * 2:
+    # Ten observations per asset is the usual rule of thumb for a covariance
+    # estimate anyone should size against. Below it the sample matrix is not
+    # singular — `MINIMUM_OBSERVATIONS` already refused that case — but shrinkage
+    # is supplying most of the structure, and the reader has to be told that the
+    # correlations they are looking at are largely the target's.
+    if observations < assets * 10:
         note = (
             f"{observations} observations for {assets} assets: the sample estimate is "
             "poorly conditioned and shrinkage is carrying most of the structure"
