@@ -89,18 +89,17 @@ class Judgement:
         }
 
 
-#: What an AI actor may run unattended in Hedge Fund mode on the autonomous
-#: stance: the research-to-proposal half of the loop, plus reading anything.
+#: Actions whose effect is a proposal, an experiment or a measurement. They
+#: create research, they rearrange a screen, they produce a portfolio nobody has
+#: traded — none of them moves money, deletes an operator's work, or changes a
+#: control. An AI actor may run these unattended in every mode: an assistant that
+#: has to ask permission to run a backtest is not assisting.
 #:
-#: The list stops where consequence begins. Preparing orders is here; screening
-#: them through the gate is here, because the gate is the thing that refuses;
-#: *submitting* them is not, and neither is anything that deletes an operator's
-#: work. Autonomy means the loop runs without being nudged, not that the last
-#: door is unlocked.
-#:
-#: `tests/modes/test_permissions.py` asserts every name here is a registered
-#: action, so this cannot quietly come to allowlist a verb that no longer exists.
-AUTONOMOUS_WORKFLOW: frozenset[str] = frozenset(
+#: `tests/modes/test_permissions.py` asserts every name in all three sets is a
+#: registered action, so a list here cannot quietly come to allowlist a verb
+#: that no longer exists — or, worse, keep permitting one that was renamed into
+#: something more dangerous.
+PREPARATORY: frozenset[str] = frozenset(
     {
         # research and alpha
         "search_papers",
@@ -110,15 +109,18 @@ AUTONOMOUS_WORKFLOW: frozenset[str] = frozenset(
         "create_strategy_from_blueprint",
         "backtest_strategy",
         "run_analysis",
-        "run_agent",
+        "export_strategy",
         # validation
         "validate_strategy",
-        # portfolio, risk and the gate
+        # portfolio, risk and the gate. Screening is here because the gate is
+        # the thing that *refuses*: running it can only ever narrow what is
+        # permitted, so needing approval to run it would be backwards.
         "construct_portfolio",
         "calculate_risk",
         "prepare_orders",
         "screen_orders",
-        # layout: rearranging panels is not consequential in any mode
+        "assess_prop_account",
+        # layout. Rearranging panels is not consequential in any mode.
         "add_panel",
         "remove_panel",
         "move_panel",
@@ -127,7 +129,33 @@ AUTONOMOUS_WORKFLOW: frozenset[str] = frozenset(
         "add_indicator",
         "link_panels",
         "build_workspace",
+        "create_workspace",
         "open_workspace",
+        "rename_workspace",
+        "clone_workspace",
+    }
+)
+
+#: Workflow automation: starting the autonomous engine, dispatching a specialist.
+#: These commit the machine to doing work on its own for a while, which is what
+#: the AI and Hedge Fund modes are *for* and is not what somebody opened Normal
+#: mode to get. Held for a person in Normal and Prop Firm.
+AUTOMATION: frozenset[str] = frozenset(
+    {
+        "start_engine",
+        "stop_engine",
+        "run_agent",
+    }
+)
+
+#: Consequential: it reaches the book. Permitted to an AI actor on exactly one
+#: configuration — Hedge Fund mode on the autonomous stance — and even there it
+#: passes the pre-trade gate first, because the gate is deterministic and this
+#: policy is not what keeps a bad order out.
+CONSEQUENTIAL: frozenset[str] = frozenset(
+    {
+        "submit_orders",
+        "cancel_order",
     }
 )
 
@@ -173,45 +201,49 @@ def evaluate(
     if not facts.mutating:
         return ruled(Ruling.ALLOW, "read-only")
 
-    # 5. Writing, by mode.
-    if mode is WorkspaceMode.NORMAL:
+    # 5. Destroys work, or changes configuration that outlives the session.
+    #    Held in every mode, autonomous included: autonomy is about running the
+    #    loop without being nudged, not about deleting things unattended.
+    if facts.risk == "confirm":
         return ruled(
             Ruling.REQUIRE_APPROVAL,
-            "Normal mode keeps AI assistance advisory; a person applies the change",
+            f"'{facts.name}' destroys work or changes lasting configuration, which needs "
+            "a person in every mode",
         )
 
-    if mode is WorkspaceMode.PROP_FIRM:
+    # 6. Preparation: a proposal, an experiment, a measurement, a layout.
+    if facts.name in PREPARATORY:
+        return ruled(Ruling.ALLOW, "preparatory: it proposes or measures, it does not commit")
+
+    # 7. Automation, in the two modes that exist to run it.
+    if facts.name in AUTOMATION:
+        if mode in {WorkspaceMode.AI, WorkspaceMode.HEDGE_FUND}:
+            return ruled(Ruling.ALLOW, f"{mode.value} mode grants workflow automation")
         return ruled(
             Ruling.REQUIRE_APPROVAL,
-            "in Prop Firm mode the account rule engine is authoritative and AI proposes only",
+            f"'{facts.name}' starts unattended work, which {mode.value} mode holds for a person",
         )
 
-    if mode is WorkspaceMode.AI:
-        if facts.risk == "confirm":
+    # 8. The book.
+    if facts.name in CONSEQUENTIAL:
+        if mode is WorkspaceMode.HEDGE_FUND and stance is Stance.AUTONOMOUS:
             return ruled(
-                Ruling.REQUIRE_APPROVAL,
-                f"'{facts.name}' destroys work or changes lasting configuration",
+                Ruling.ALLOW,
+                "the autonomous stance permits execution inside the deterministic "
+                "controls, which this policy does not relax",
             )
-        return ruled(Ruling.ALLOW, "AI mode grants the workflow actions")
-
-    # Hedge Fund.
-    if stance is Stance.AUTONOMOUS:
-        if facts.risk == "confirm":
-            return ruled(
-                Ruling.REQUIRE_APPROVAL,
-                f"'{facts.name}' destroys work or changes lasting configuration; "
-                "autonomy does not extend to that",
-            )
-        if facts.name in AUTONOMOUS_WORKFLOW:
-            return ruled(Ruling.ALLOW, "inside the configured autonomous workflow")
         return ruled(
             Ruling.REQUIRE_APPROVAL,
-            f"'{facts.name}' is outside the configured autonomous workflow",
+            f"'{facts.name}' reaches the book; only Hedge Fund mode on the autonomous "
+            "stance runs it without a person",
         )
 
+    # 9. Anything nobody has classified. Held, deliberately: a new mutating
+    #    action becomes available to AI when somebody puts it in a list above,
+    #    not by default the moment it is written.
     return ruled(
         Ruling.REQUIRE_APPROVAL,
-        "human-in-the-loop: consequential actions are prepared by AI and applied by a person",
+        f"'{facts.name}' is not in any permitted set for an AI actor; a person applies it",
     )
 
 
@@ -223,20 +255,25 @@ def summarise(mode: WorkspaceMode, stance: Stance | None = None) -> dict[str, ob
     out of date.
     """
     lines = {
-        WorkspaceMode.NORMAL: "AI assists and explains. Changes are proposed and applied by you.",
+        WorkspaceMode.NORMAL: (
+            "AI researches, backtests and explains. It does not start unattended work "
+            "and it does not reach the book."
+        ),
         WorkspaceMode.PROP_FIRM: (
-            "AI analyses and proposes. The account rule engine is deterministic and "
-            "AI cannot alter it."
+            "AI analyses and proposes. The account rule engine is deterministic, and AI "
+            "cannot alter a rule, a limit or a recorded balance."
         ),
         WorkspaceMode.AI: (
-            "AI runs the research and strategy workflow directly. Destructive and "
-            "configuration changes still need you."
+            "AI runs the research and automation workflow directly. Reaching the book, "
+            "and anything destructive, still needs you."
         ),
         WorkspaceMode.HEDGE_FUND: (
-            "AI prepares consequential actions and you approve them."
+            "AI researches, constructs portfolios and prepares orders on its own. "
+            "Submitting them needs your approval."
             if stance is not Stance.AUTONOMOUS
-            else "AI runs the configured workflow unattended, inside deterministic controls "
-            "it cannot modify."
+            else "AI runs the whole loop unattended, including submission - inside the "
+            "risk engine, the pre-trade gate and the kill switch, none of which it can "
+            "modify."
         ),
     }
     return {

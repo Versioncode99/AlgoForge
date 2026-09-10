@@ -26,6 +26,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from forge.modes.permissions import Actor
 from forge.strategy import TEMPLATES, StrategyLibrary
 
 from forge_api import jsonish
@@ -193,7 +194,10 @@ class Assistant:
             matched = self._local_action(question)
             if matched is not None and self.actions is not None:
                 try:
-                    result = self.actions.call(matched["action"], matched["arguments"])
+                    result = self.actions.call(
+                        matched["action"], matched["arguments"],
+                        actor=Actor.AI, origin="console assistant",
+                    )
                     return {
                         "answer": _render(matched["action"], result),
                         "model": "local-actions",
@@ -248,7 +252,9 @@ class Assistant:
                         parsed.get("arguments") if isinstance(parsed.get("arguments"), dict) else {}
                     )
                     try:
-                        result = self.actions.call(name, arguments)
+                        result = self.actions.call(
+                            name, arguments, actor=Actor.AI, origin="console assistant"
+                        )
                         entry = {
                             "action": name,
                             "arguments": arguments,

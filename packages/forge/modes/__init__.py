@@ -17,7 +17,9 @@ from forge.modes.models import (
     parse_stance,
 )
 from forge.modes.permissions import (
-    AUTONOMOUS_WORKFLOW,
+    AUTOMATION,
+    CONSEQUENTIAL,
+    PREPARATORY,
     ActionFacts,
     Actor,
     Judgement,
@@ -28,9 +30,11 @@ from forge.modes.permissions import (
 from forge.modes.store import SCHEMA_VERSION, ModeSession, ModeStore
 
 __all__ = [
-    "AUTONOMOUS_WORKFLOW",
+    "AUTOMATION",
+    "CONSEQUENTIAL",
     "MODES",
     "MODE_ORDER",
+    "PREPARATORY",
     "SCHEMA_VERSION",
     "ActionFacts",
     "Actor",

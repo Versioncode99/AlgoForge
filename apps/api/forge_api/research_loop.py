@@ -15,6 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from forge.contracts.models import ApiEnvelope
+from forge.modes.permissions import Actor
 
 from forge_api.activity import ActivityLog
 from forge_api.agent_service import AgentService
@@ -169,7 +170,10 @@ class ResearchLoop:
                         if key in candidate
                     }
                     try:
-                        created = self.actions.call("create_family", arguments)
+                        created = self.actions.call(
+                            "create_family", arguments,
+                            actor=Actor.AI, origin="research loop",
+                        )
                     except Exception as exc:
                         self.log.record(
                             "RESEARCH_LOOP",

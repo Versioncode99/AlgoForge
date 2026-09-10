@@ -11,6 +11,7 @@ import argparse
 import inspect
 from typing import Annotated, Any
 
+from forge.modes.permissions import Actor
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -49,7 +50,9 @@ def build_server(actions: Actions, *, allow_write: bool = False) -> MCPServer[An
         description = str(schema["description"])
 
         async def invoke(_action: str = name, **arguments: Any) -> dict[str, Any]:
-            return actions.call(_action, arguments)
+            return actions.call(
+                _action, arguments, actor=Actor.AI, origin="mcp"
+            )
 
         # FastMCP derives the input schema from the signature. Replace the
         # generic **arguments signature with the action registry's declared

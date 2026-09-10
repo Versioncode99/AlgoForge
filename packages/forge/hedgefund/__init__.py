@@ -14,6 +14,7 @@ from forge.hedgefund.approvals import (
     ApprovalStatus,
 )
 from forge.hedgefund.audit import MAX_PAYLOAD, AuditEntry, AuditLog, Outcome
+from forge.hedgefund.config import FundConfig, FundConfigStore, Restriction
 from forge.hedgefund.loop import (
     LOOP,
     STAGES,
@@ -37,7 +38,10 @@ __all__ = [
     "ApprovalStatus",
     "AuditEntry",
     "AuditLog",
+    "FundConfig",
+    "FundConfigStore",
     "Outcome",
+    "Restriction",
     "Stage",
     "StageSpec",
     "StageState",

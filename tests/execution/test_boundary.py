@@ -95,7 +95,28 @@ ORDER_VERBS = re.compile(
 )
 
 
-def test_nothing_defines_an_order_submission_function() -> None:
+#: The one audited path, enumerated by hand.
+#:
+#: AlgoForge now has a *simulated* execution path — Hedge Fund mode routes
+#: cleared orders through an OMS into a local simulator. That is what this scan
+#: was always going to catch, and the module docstring says this is the moment to
+#: think about it rather than to widen the pattern.
+#:
+#: So the pattern is unchanged and the exceptions are named. A reviewer reads
+#: this list to see the entire order-submitting surface of the repository, and
+#: adding to it is a decision somebody makes on purpose. What makes the list
+#: safe is asserted separately below and remains exactly as strict as before: no
+#: broker SDK is importable, `forge.execution` reaches no network, every adapter
+#: reports itself simulated, and `LIVE_EXECUTION_AVAILABLE` is still False.
+SIMULATED_ORDER_PATH = {
+    ("apps/api/forge_api/actions.py", "submit_orders"),
+    ("apps/api/forge_api/actions.py", "cancel_order"),
+    ("apps/api/forge_api/control.py", "submit_orders"),
+    ("apps/api/forge_api/control.py", "cancel_order"),
+}
+
+
+def test_nothing_defines_an_order_submission_function_outside_the_audited_path() -> None:
     offenders: list[str] = []
     for path in python_sources(PACKAGES, API):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -103,10 +124,74 @@ def test_nothing_defines_an_order_submission_function() -> None:
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and ORDER_VERBS.match(
                 node.name
             ):
-                offenders.append(f"{path.relative_to(ROOT)}:{node.lineno} {node.name}")
+                relative = path.relative_to(ROOT).as_posix()
+                if (relative, node.name) in SIMULATED_ORDER_PATH:
+                    continue
+                offenders.append(f"{relative}:{node.lineno} {node.name}")
     assert not offenders, (
-        "Something now defines an order-submission function.\n" + "\n".join(offenders)
+        "Something now defines an order-submission function outside the audited "
+        "simulated path. If this is a real connector, that is a decision to make "
+        "deliberately.\n" + "\n".join(offenders)
     )
+
+
+def test_the_audited_path_is_not_a_list_of_functions_that_no_longer_exist() -> None:
+    """An exception nobody removed is an exception that will excuse the next one.
+
+    A stale entry here silently pre-authorises any future function that happens
+    to take the same name in the same file, which is the failure mode of every
+    allowlist that is only ever added to.
+    """
+    defined = {
+        (path.relative_to(ROOT).as_posix(), node.name)
+        for path in python_sources(PACKAGES, API)
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    stale = sorted(f"{path} {name}" for path, name in SIMULATED_ORDER_PATH - defined)
+    assert not stale, "SIMULATED_ORDER_PATH names functions that do not exist:\n" + "\n".join(
+        stale
+    )
+
+
+def test_every_execution_adapter_reports_itself_simulated() -> None:
+    """The label is on the record, not on the screen.
+
+    A fill that reaches the book saying it came from a venue is the single most
+    damaging thing this half of the application could produce, so the claim is
+    checked here rather than trusted to whatever draws it.
+    """
+    from forge.execution.paper import PaperBroker
+
+    broker = PaperBroker()
+    assert broker.simulated is True
+    assert broker.name == "paper"
+
+
+def test_the_oms_will_not_route_an_order_without_gate_clearance() -> None:
+    """The gate is not advisory, and the OMS is where that is enforced."""
+    import tempfile
+    from datetime import UTC, datetime
+    from pathlib import Path as _Path
+
+    from forge.execution.gate import ProposedOrder, Side
+    from forge.execution.oms import ExecutionStore, OrderManagementSystem, OrderRefused
+    from forge.execution.paper import PaperBroker
+
+    order = ProposedOrder(
+        order_id="o1",
+        symbol="NQ",
+        side=Side.BUY,
+        quantity=1,
+        reference_price=100.0,
+        created_at=datetime.now(UTC),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        oms = OrderManagementSystem(
+            ExecutionStore(_Path(tmp) / "exec.db"), PaperBroker()
+        )
+        with pytest.raises(OrderRefused, match="no pre-trade clearance"):
+            oms.submit(order, None, reference_price=100.0)
 
 
 def test_the_execution_package_places_nothing() -> None:

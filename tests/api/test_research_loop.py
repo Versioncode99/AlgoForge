@@ -11,9 +11,11 @@ from forge_api.settings_store import SettingsStore
 class RecordingActions:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.actors: list[str] = []
 
-    def call(self, name: str, arguments: dict[str, object]):
+    def call(self, name: str, arguments: dict[str, object], **context: object):
         self.calls.append((name, arguments))
+        self.actors.append(str(context.get("actor", "")))
         return {"created": arguments["key"], "runnable": False}
 
 
@@ -60,3 +62,7 @@ def test_cycle_hands_research_to_specialists_and_registers_supported_family(tmp_
     assert status["downstream_tasks"] == 2
     assert actions.calls[0][0] == "create_family"
     assert actions.calls[0][1]["key"] == "inventory_pressure"
+    # The loop is an agent, and the permission policy only means something if the
+    # agent call sites say so. A loop that called as the operator would carry the
+    # operator's permissions with it.
+    assert actions.actors[0] == "ai"
