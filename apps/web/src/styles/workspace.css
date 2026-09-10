@@ -123,6 +123,9 @@
 .heat-cells i:hover { transform:scaleY(1.18); outline:1px solid var(--fg-1); }
 @media(max-width:760px) { .validation-toolbar { align-items:stretch; flex-direction:column; }.validation-toolbar label { min-width:0; width:100%; }.validation-toolbar .btn { margin:0; }.validation-heat { grid-template-columns:1fr; } }
 .stat-tile[data-tone="good"] .stat-value { color: var(--verdict-pass); }
+/* `warn` sits between good and bad: a figure that is not yet a breach and is
+   not comfortable either. Prop headroom and held approvals are both this. */
+.stat-tile[data-tone="warn"] .stat-value { color: var(--warn); }
 .stat-tile[data-tone="bad"] .stat-value { color: var(--verdict-fail); }
 .stat-tile[data-tone="unknown"] .stat-value { color: var(--verdict-unknown); }
 .stat-tile[data-wide="yes"] { grid-column: span 2; }

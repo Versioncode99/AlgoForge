@@ -1,0 +1,271 @@
+/* The mode-selection screen, and the mode chrome inside the shell.
+ *
+ * Restraint is the brief, and here that means specific things rather than a
+ * mood: one accent, no gradient, no glow, no shadow that is doing decoration
+ * rather than elevation, and hairlines instead of filled surfaces wherever a
+ * boundary is all that is needed.
+ *
+ * The four panels are the only large type in the application. That is
+ * deliberate — this is the one screen where the reader is choosing between
+ * things rather than reading a number, so the hierarchy is name first, purpose
+ * second, and everything else at the size the rest of the workstation uses.
+ *
+ * Every colour resolves through tokens.css. Nothing here names one.
+ */
+
+.mode-select {
+  min-height: 100vh;
+  background: var(--bg-0);
+  color: var(--fg-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-10) var(--sp-8) var(--sp-6);
+  overflow-y: auto;
+}
+
+.mode-select-head { display: flex; flex-direction: column; gap: var(--sp-4); max-width: 60ch; }
+.mode-select-head h1 {
+  margin: var(--sp-4) 0 0;
+  font-size: var(--fs-2xl);
+  font-weight: 500;
+  /* Negative tracking at display sizes: Inter is drawn for UI, and at 28px its
+     default spacing reads loose against the mono figures elsewhere. */
+  letter-spacing: -0.02em;
+  color: var(--fg-0);
+  line-height: var(--lh-tight);
+}
+.mode-select-head p { margin: 0; font-size: var(--fs-base); line-height: var(--lh-loose); color: var(--fg-2); }
+
+.mode-select-state { margin: 0; font-size: var(--fs-sm); color: var(--fg-2); }
+.mode-select-state.is-error { color: var(--fail); }
+
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+  align-items: stretch;
+}
+
+.mode-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+  transition: border-color var(--t) var(--ease), background var(--t) var(--ease);
+}
+.mode-panel:hover { border-color: var(--line-strong); background: var(--bg-2); }
+/* Focus travels to the button inside, so the panel takes the ring when anything
+   in it has focus. Without this the outline draws around a 28px button at the
+   bottom of a tall panel and reads as unrelated to the thing being chosen. */
+.mode-panel:focus-within { border-color: var(--accent); }
+
+.mode-panel-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-6);
+  min-width: 0;
+}
+
+.mode-index {
+  font-family: var(--font-mono);
+  font-size: var(--fs-nano);
+  letter-spacing: .16em;
+  color: var(--fg-3);
+}
+.mode-panel h2 {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: var(--fg-0);
+  line-height: var(--lh-tight);
+}
+.mode-tagline { margin: 0; font-size: var(--fs-base); color: var(--fg-1); }
+.mode-purpose {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-loose);
+  color: var(--fg-2);
+}
+
+.mode-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.mode-groups li {
+  font-family: var(--font-mono);
+  font-size: var(--fs-nano);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 2px var(--sp-2);
+}
+
+.mode-stance {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.mode-stance legend {
+  font-family: var(--font-mono);
+  font-size: var(--fs-nano);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  padding: 0 var(--sp-1);
+}
+.mode-stance p { margin: 0; font-size: var(--fs-xs); line-height: var(--lh-loose); color: var(--fg-2); }
+.mode-stance-choices { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.mode-stance-choices label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--fg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-3);
+  cursor: pointer;
+  transition: border-color var(--t) var(--ease), color var(--t) var(--ease);
+}
+.mode-stance-choices label:hover { border-color: var(--line-strong); color: var(--fg-1); }
+.mode-stance-choices label[data-selected='yes'] {
+  border-color: var(--accent);
+  color: var(--fg-0);
+  background: var(--accent-wash);
+}
+/* The native control stays in the accessibility tree and the tab order; only
+   its box is hidden. Replacing it with a div and aria attributes would give up
+   arrow-key navigation inside the group for nothing. */
+.mode-stance-choices input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mode-limits {
+  margin: auto 0 0;
+  padding: var(--sp-3) 0 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.mode-limits li { font-size: var(--fs-xs); line-height: var(--lh); color: var(--fg-3); }
+
+.mode-open {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-4) var(--sp-6);
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--fg-0);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
+}
+.mode-open:hover:not(:disabled) { background: var(--bg-3); }
+.mode-open:disabled { cursor: progress; color: var(--fg-3); }
+.mode-open svg { width: 15px; height: 15px; }
+
+.mode-select-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2) var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+.mode-select-foot > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-family: var(--font-mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+.mode-select-foot svg { width: 13px; height: 13px; }
+
+/* ── the mode's identity inside the shell ─────────────────────────────────── */
+
+.mode-badge {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.mode-badge > b {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg-0);
+  white-space: nowrap;
+}
+.mode-badge .mode-stance-tag {
+  font-family: var(--font-mono);
+  font-size: var(--fs-nano);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  padding: 1px var(--sp-2);
+  color: var(--fg-2);
+}
+/* Autonomous is the one state where the machine acts without being asked, so
+   it is the one state that gets the accent. Everything else in the chrome is
+   neutral by design; if this were also neutral the distinction would live only
+   in a word nobody re-reads. */
+.mode-badge .mode-stance-tag[data-stance='autonomous'] {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  padding: var(--sp-1) var(--sp-2);
+  cursor: pointer;
+  transition: border-color var(--t) var(--ease), color var(--t) var(--ease);
+}
+.mode-switch:hover { border-color: var(--line-strong); color: var(--fg-0); }
+.mode-switch svg { width: 13px; height: 13px; }
+
+@media (max-width: 1080px) {
+  .mode-grid { grid-template-columns: minmax(0, 1fr); }
+  .mode-select { padding: var(--sp-6) var(--sp-4) var(--sp-5); gap: var(--sp-6); }
+  .mode-select-head h1 { font-size: var(--fs-xl); }
+}

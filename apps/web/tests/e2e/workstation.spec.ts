@@ -1,11 +1,25 @@
 import { expect, test } from '@playwright/test'
+import { API, enterMode, leaveMode } from './mode'
 
 /* End-to-end against a live API on 8765 and Vite on 5173. The config starts
  * neither — run both before this suite or every test fails on connection
  * refused rather than on anything about the application. */
 
-const TABS = ['Missions', 'Experiments', 'Strategies', 'Runs', 'Validation Lab', 'Evidence', 'Memory', 'Lineage', 'Data Health', 'Research Library', 'Engine Pipeline', 'Agent Command', 'Prop Simulation', 'Console', 'Settings']
-const REMOVED = ['Verdict', 'Regimes', 'Risk & Monte Carlo', 'Agents', 'Evolution']
+/* The navigation now comes from the mode manifest rather than from a constant
+ * in the shell, so this suite reads the same manifest instead of holding a
+ * second copy of it. A section added in `forge.modes` is covered here the
+ * moment it exists, and one removed stops being asserted rather than failing
+ * forever against a list nobody updated.
+ *
+ * `Agents` left the removed list: it is a real section in AI mode now, and the
+ * thing that was removed was the old fixture-driven screen of the same name. */
+const REMOVED = ['Verdict', 'Regimes', 'Risk & Monte Carlo', 'Evolution']
+
+/* AI mode carries the widest section list, so it is where the tests that are
+ * about the shell rather than about one mode do their work. */
+test.beforeEach(async ({ request }) => {
+  await enterMode(request, 'ai')
+})
 
 /** Strategies opens on the catalogue, so the detail pane is one row-click away.
  *  Returns false when the configured vault holds no strategies at all, which is
@@ -24,14 +38,22 @@ async function openFirstStrategy(page: import('@playwright/test').Page): Promise
   return true
 }
 
-test('every section is reachable and the truth label persists', async ({ page }) => {
-  await page.goto('/')
-  await expect(page.getByText('Active mission')).toBeVisible()
-  await expect(page.getByText('PAPER ONLY').last()).toBeVisible()
-  for (const tab of TABS) {
-    await page.getByRole('link', { name: tab, exact: true }).click()
-    await expect(page.locator(`a[href="#${await page.evaluate(() => location.hash.slice(1))}"]`)).toHaveAttribute('aria-current', 'page')
-    await expect(page.getByText('PAPER ONLY').last()).toBeVisible()
+test('every section every mode declares is reachable, in every mode', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  const manifest = await (await request.get(`${API}/modes`)).json()
+  for (const mode of manifest.data.modes) {
+    await enterMode(request, mode.mode, mode.stances[0] ?? undefined)
+    await page.goto('/')
+    await expect(page.getByText('PAPER ONLY').last()).toBeVisible({ timeout: 30_000 })
+    for (const section of mode.sections) {
+      await page.getByRole('link', { name: section.label, exact: true }).click()
+      await expect(
+        page.locator(`a[href="#${await page.evaluate(() => location.hash.slice(1))}"]`),
+      ).toHaveAttribute('aria-current', 'page')
+      // The paper-only label is chrome, so it must survive every navigation in
+      // every mode. It is the one claim the application makes on every screen.
+      await expect(page.getByText('PAPER ONLY').last()).toBeVisible()
+    }
   }
 })
 
@@ -39,13 +61,14 @@ test('the fixture-driven sections stay removed', async ({ page }) => {
   // Verdict, Regimes and Risk all rendered one seeded run, so they showed the
   // same numbers whatever was selected. Their absence is the feature.
   await page.goto('/')
-  await expect(page.getByText('Active mission')).toBeVisible()
+  await expect(page.getByText('PAPER ONLY').last()).toBeVisible()
   for (const gone of REMOVED) {
     await expect(page.getByRole('link', { name: gone, exact: true })).toHaveCount(0)
   }
 })
 
-test('overview lists the library rather than leaving the page empty', async ({ page }) => {
+test('overview lists the library rather than leaving the page empty', async ({ page, request }) => {
+  await enterMode(request, 'normal')
   await page.goto('/')
   await expect(page.locator('.engine-state')).toContainText('AUTONOMOUS ENGINE')
   await expect(page.getByRole('button', { name: /Start engine/ })).toBeVisible()
@@ -121,10 +144,11 @@ test('an unjudged strategy withholds the pass rather than granting it', async ({
   await expect(page.getByText(/withholds the pass/)).toBeVisible()
 })
 
-test('prop firm runs a matrix over every strategy, not one at a time', async ({ page }) => {
+test('prop firm runs a matrix over every strategy, not one at a time', async ({ page, request }) => {
   test.setTimeout(180_000)
+  await enterMode(request, 'prop_firm')
   await page.goto('/')
-  await page.getByRole('link', { name: 'Prop Simulation', exact: true }).click()
+  await page.getByRole('link', { name: 'Rule Simulation', exact: true }).click()
   await expect(page.getByRole('button', { name: /Run the matrix/ })).toBeVisible()
   await expect(page.getByRole('group', { name: 'Account phase' })).toBeVisible()
 
@@ -180,25 +204,42 @@ test('updates live in settings, not on a tab of their own', async ({ page }) => 
 
 test('validation lab distinguishes selection paths from Monte Carlo', async ({ page }) => {
   await page.goto('/')
-  await page.getByRole('link', { name: 'Validation Lab', exact: true }).click()
+  await page.getByRole('link', { name: 'Validation', exact: true }).click()
   await expect(page.getByText(/Selection risk, temporal stability and path risk/)).toBeVisible()
   await expect(page.getByRole('button', { name: /Run WF \+ CSCV \+ CPCV/ })).toBeVisible()
   await expect(page.getByText(/it is not a Monte Carlo account simulation/)).toBeVisible()
 })
 
-test('capture desktop evidence', async ({ page }, testInfo) => {
+test('capture desktop evidence', async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop-chromium', 'desktop evidence only')
+
+  // The chooser first: it is the screen the product opens on, so it is the one
+  // screenshot that has to exist before any of the others mean anything.
+  await leaveMode(request)
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: /choose your workspace/i })).toBeVisible()
+  await page.screenshot({ path: '../../artifacts/qa/mode-select.png', fullPage: true })
+
+  await enterMode(request, 'normal')
   await page.goto('/')
   await expect(page.getByText('Active mission')).toBeVisible()
   await page.screenshot({ path: '../../artifacts/qa/overview-desktop.png', fullPage: true })
   await page.getByRole('link', { name: 'Strategies', exact: true }).click()
   await expect(page.getByLabel('Filter strategies')).toBeVisible()
   await page.screenshot({ path: '../../artifacts/qa/strategies-desktop.png', fullPage: true })
-  await page.getByRole('link', { name: 'Prop Simulation', exact: true }).click()
-  await expect(page.getByRole('button', { name: /Run the matrix/ })).toBeVisible()
-  await page.screenshot({ path: '../../artifacts/qa/propfirm-desktop.png', fullPage: true })
-  await page.getByRole('link', { name: 'Validation Lab', exact: true }).click()
+  await page.getByRole('link', { name: 'Validation', exact: true }).click()
   await expect(page.getByRole('button', { name: /Run WF \+ CSCV \+ CPCV/ })).toBeVisible()
   await page.waitForTimeout(500)
   await page.screenshot({ path: '../../artifacts/qa/validation-lab-desktop.png', fullPage: true })
+
+  await enterMode(request, 'prop_firm')
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Rule Simulation', exact: true }).click()
+  await expect(page.getByRole('button', { name: /Run the matrix/ })).toBeVisible()
+  await page.screenshot({ path: '../../artifacts/qa/propfirm-desktop.png', fullPage: true })
+
+  await enterMode(request, 'hedge_fund', 'human_in_the_loop')
+  await page.goto('/')
+  await expect(page.getByText('NAV')).toBeVisible({ timeout: 30_000 })
+  await page.screenshot({ path: '../../artifacts/qa/fund-command-desktop.png', fullPage: true })
 })

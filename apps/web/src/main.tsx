@@ -22,6 +22,8 @@ import './styles/workstation.css'
 import './styles/research.css'
 import './styles/trades.css'
 import './styles/lab.css'
+import './styles/modes.css'
+import './styles/fund.css'
 
 /* Before React mounts. The appearance is stored on the server, and the
  * request for it is in flight while the first frame paints — applying the

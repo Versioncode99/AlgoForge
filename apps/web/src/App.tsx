@@ -1,22 +1,38 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  Activity, Archive, BookOpen, BrainCircuit, ChevronLeft, ChevronRight, Database,
-  FileCheck2, FlaskConical, GitBranch, Layers3, LockKeyhole, Menu, MessageSquare,
-  Network, PanelBottomOpen, PlaySquare, Radar, RotateCw, ScrollText, Search, Settings,
-  ShieldCheck, TestTubes, Workflow, CandlestickChart, LayoutGrid, Crosshair,
+  Activity, Grid2x2, LockKeyhole, Menu, PanelBottomOpen, RotateCw, ScrollText, Search,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { getJson } from './api'
-import { CommandPalette, type PaletteRoute } from './components/CommandPalette'
+import { CommandPalette } from './components/CommandPalette'
 import { Wordmark } from './components/Logo'
 import { ViewErrorBoundary } from './components/ViewErrorBoundary'
+import { sectionIcon } from './components/icons'
+import { STANCE_LABEL, useLeaveMode, useModeSession, type ModeKey, type Section } from './modes'
 import { sound } from './sound'
 import { loadAppearance } from './theme'
 import type { ActivityEvent, StrategyListItem, Summary } from './types'
+import { ModeSelect } from './views/ModeSelect'
 import { OverviewView } from './views/Overview'
 
+/* The shell, scoped to a mode.
+ *
+ * Two things changed when the four modes arrived and both are structural.
+ *
+ * The navigation is no longer a constant in this file. It comes from the mode
+ * manifest the API serves, which is the same declaration `forge.modes` uses to
+ * answer an agent asking what is available. One source, so the rail cannot
+ * offer a destination the backend does not know about, and a section added
+ * there appears here without an edit.
+ *
+ * And there is now a state before any of it: no mode chosen. That is a real
+ * state, not a missing one — the product opens on the four choices, and
+ * defaulting to one of them would mean nobody ever sees the others.
+ */
+
 const PropFirmView = lazy(() => import('./views/PropFirm').then(m => ({ default: m.PropFirmView })))
-const ResearchLabView = lazy(() => import('./views/ResearchLab').then(m => ({ default: m.ResearchLabView })))
+const ResearchLibraryView = lazy(() => import('./views/ResearchLab').then(m => ({ default: m.ResearchLabView })))
 const ConsoleView = lazy(() => import('./views/Settings').then(m => ({ default: m.ConsoleView })))
 const SettingsView = lazy(() => import('./views/Settings').then(m => ({ default: m.SettingsView })))
 const StrategiesView = lazy(() => import('./views/Strategies').then(m => ({ default: m.StrategiesView })))
@@ -27,17 +43,17 @@ const ValidationLabView = lazy(() => import('./views/ValidationLab').then(m => (
 const EvidenceView = lazy(() => import('./views/Evidence').then(m => ({ default: m.EvidenceView })))
 const ExperimentsView = lazy(() => import('./views/Experiments').then(m => ({ default: m.ExperimentsView })))
 const RunsView = lazy(() => import('./views/Runs').then(m => ({ default: m.RunsView })))
-const ResearchMemoryView = lazy(() => import('./views/ResearchMemory').then(m => ({ default: m.ResearchMemoryView })))
 const DataWorkspaceView = lazy(() => import('./views/DataWorkspace').then(m => ({ default: m.DataWorkspaceView })))
 const ChartsView = lazy(() => import('./views/Charts').then(m => ({ default: m.ChartsView })))
 const StrategyChartView = lazy(() => import('./views/StrategyChartView').then(m => ({ default: m.StrategyChartView })))
 const ResearchLabWorkbench = lazy(() => import('./views/ResearchLabView').then(m => ({ default: m.ResearchLabWorkbench })))
+const ResearchMemoryView = lazy(() => import('./views/ResearchMemory').then(m => ({ default: m.ResearchMemoryView })))
 const WorkspaceView = lazy(() => import('./views/Workspace').then(m => ({ default: m.WorkspaceView })))
-
-type RouteId = 'overview' | 'missions' | 'experiments' | 'strategies' | 'runs' | 'validation' | 'charts' | 'trades' | 'lab' | 'workspace' |
-  'evidence' | 'memory' | 'lineage' | 'data' | 'research' | 'pipeline' | 'agents' |
-  'prop' | 'console' | 'settings'
-type NavItem = PaletteRoute & { id: RouteId; icon: typeof Activity }
+const PropAccountView = lazy(() => import('./views/PropAccount').then(m => ({ default: m.PropAccountView })))
+const ActionsView = lazy(() => import('./views/Actions').then(m => ({ default: m.ActionsView })))
+const OperatingLogView = lazy(() => import('./views/OperatingLog').then(m => ({ default: m.OperatingLogView })))
+const BookView = lazy(() => import('./views/Book').then(m => ({ default: m.BookView })))
+const FundView = lazy(() => import('./views/Fund').then(m => ({ default: m.FundView })))
 
 /* The id of the main landmark, and the fragment the skip link targets.
  *
@@ -50,77 +66,117 @@ type NavItem = PaletteRoute & { id: RouteId; icon: typeof Activity }
  * impossible to reintroduce quietly. */
 export const MAIN_LANDMARK_ID = 'main-content'
 
-const NAV: { group: string; items: NavItem[] }[] = [
-  { group: 'Research', items: [
-    { id: 'overview', label: 'Overview', group: 'Research', detail: 'Current state', icon: Radar },
-    { id: 'missions', label: 'Missions', group: 'Research', detail: 'Objectives and declared steps', icon: PlaySquare },
-    { id: 'experiments', label: 'Experiments', group: 'Research', detail: 'What was tried', icon: FlaskConical },
-    { id: 'strategies', label: 'Strategies', group: 'Research', detail: 'Build, run and judge', icon: Layers3 },
-    { id: 'runs', label: 'Runs', group: 'Research', detail: 'Immutable execution ledger', icon: Archive },
-  ]},
-  { group: 'Validation', items: [
-    { id: 'validation', label: 'Validation Lab', group: 'Validation', detail: 'Walk-forward, CSCV and CPCV', icon: TestTubes },
-    { id: 'evidence', label: 'Evidence', group: 'Validation', detail: 'Dossiers and decisions', icon: FileCheck2 },
-  ]},
-  { group: 'Research Memory', items: [
-    { id: 'memory', label: 'Memory', group: 'Research Memory', detail: 'Classified failures', icon: BrainCircuit },
-    { id: 'lineage', label: 'Lineage', group: 'Research Memory', detail: 'Experiment ancestry', icon: GitBranch },
-  ]},
-  { group: 'Workstation', items: [
-    { id: 'workspace', label: 'Workspace', group: 'Workstation', detail: 'Your panels, arranged your way', icon: LayoutGrid },
-    { id: 'charts', label: 'Charts', group: 'Workstation', detail: 'Candles over the local archives', icon: CandlestickChart },
-    { id: 'trades', label: 'Strategy Trades', group: 'Workstation', detail: 'Historical trades over the candles they happened on', icon: Crosshair },
-  ]},
-  { group: 'Data', items: [
-    { id: 'data', label: 'Data Health', group: 'Data', detail: 'Coverage and provenance', icon: Database },
-    { id: 'research', label: 'Research Library', group: 'Data', detail: 'Sources and replication gaps', icon: BookOpen },
-    { id: 'lab', label: 'Research Lab', group: 'Data', detail: 'Ask a question, get back to the trades', icon: FlaskConical },
-  ]},
-  { group: 'Autonomous', items: [
-    { id: 'pipeline', label: 'Engine Pipeline', group: 'Autonomous', detail: 'Graph and live counts', icon: Workflow },
-    { id: 'agents', label: 'Agent Command', group: 'Autonomous', detail: 'Specialist operations', icon: Network },
-  ]},
-  { group: 'System', items: [
-    { id: 'prop', label: 'Prop Simulation', group: 'System', detail: 'Deployment risk model', icon: ShieldCheck },
-    { id: 'console', label: 'Console', group: 'System', detail: 'Ask the ledger', icon: MessageSquare },
-    { id: 'settings', label: 'Settings', group: 'System', detail: 'Providers, data and storage', icon: Settings },
-  ]},
-]
-export const ROUTES = NAV.flatMap(group => group.items)
-const ROUTE_IDS = new Set<string>(ROUTES.map(route => route.id))
-const isRouteId = (value: string): value is RouteId => ROUTE_IDS.has(value)
-
-const routeFromHash = (): RouteId => {
-  const id = window.location.hash.slice(1)
-  return isRouteId(id) ? id : 'overview'
+/** Which component answers `(mode, route)`.
+ *
+ * Keyed by mode first so the same word can mean different things in different
+ * environments without either one being renamed into something worse: "Risk" in
+ * Prop Firm is an account's exposure against its contract, and in Hedge Fund it
+ * is the book against the fund's limits. Falling through to the shared map is
+ * what keeps Strategies, Validation and Evidence a single implementation in all
+ * four.
+ */
+function viewFor(mode: ModeKey, route: string): React.ReactNode {
+  const perMode: Record<string, React.ReactNode> = {
+    'prop_firm/account': <PropAccountView section="account" />,
+    'prop_firm/rules': <PropAccountView section="rules" />,
+    'prop_firm/drawdown': <PropAccountView section="drawdown" />,
+    'prop_firm/daily': <PropAccountView section="daily" />,
+    'prop_firm/target': <PropAccountView section="target" />,
+    'prop_firm/risk': <PropAccountView section="risk" />,
+    'prop_firm/simulation': <PropFirmView />,
+    'ai/assistant': <ConsoleView />,
+    'ai/actions': <ActionsView />,
+    'ai/activity': <OperatingLogView />,
+    'hedge_fund/fund': <FundView section="fund" />,
+    'hedge_fund/data': <DataWorkspaceView />,
+    'hedge_fund/research': <ExperimentsView mode="experiments" />,
+    'hedge_fund/alpha': <FundView section="alpha" />,
+    'hedge_fund/portfolio': <FundView section="portfolio" />,
+    'hedge_fund/risk': <FundView section="risk" />,
+    'hedge_fund/gate': <FundView section="gate" />,
+    'hedge_fund/execution': <FundView section="execution" />,
+    'hedge_fund/operations': <FundView section="operations" />,
+    'hedge_fund/performance': <FundView section="performance" />,
+    'hedge_fund/orchestrator': <OperatingLogView />,
+    'hedge_fund/approvals': <FundView section="approvals" />,
+    'hedge_fund/audit': <FundView section="audit" />,
+  }
+  const shared: Record<string, React.ReactNode> = {
+    overview: <OverviewView onRoute={(id) => { window.location.hash = id }} />,
+    workspace: <WorkspaceView />,
+    charts: <ChartsView />,
+    trades: <StrategyChartView />,
+    strategies: <StrategiesView />,
+    runs: <RunsView />,
+    validation: <ValidationLabView />,
+    evidence: <EvidenceView />,
+    positions: <BookView />,
+    book: <BookView />,
+    performance: <FundView section="performance" />,
+    data: <DataWorkspaceView />,
+    research: <ResearchLibraryView />,
+    lab: <ResearchLabWorkbench />,
+    experiments: <ExperimentsView mode="experiments" />,
+    lineage: <ExperimentsView mode="lineage" />,
+    memory: <ResearchMemoryView />,
+    assistant: <ConsoleView />,
+    agents: <AgentCommandView />,
+    missions: <MissionsView />,
+    pipeline: <PipelineView />,
+    activity: <OperatingLogView />,
+    settings: <SettingsView />,
+  }
+  return perMode[`${mode}/${route}`] ?? shared[route] ?? null
 }
 
 export function App() {
-  const [route, setRoute] = useState<RouteId>(routeFromHash)
+  const session = useModeSession()
+  const mode = session.data?.session.mode ?? null
+
+  /* The manifest decides which routes exist, so the hash cannot be validated
+   * until it has loaded. Until then `route` is whatever the URL says and the
+   * shell renders the loading state, rather than rewriting the hash to
+   * something the mode may not have — which is how a deep link becomes an
+   * overview every time the page is refreshed. */
+  const [route, setRoute] = useState(() => window.location.hash.slice(1))
   const [railCollapsed, setRailCollapsed] = useState(false)
   // Separate from `railCollapsed`, because they are different controls for
   // different shapes: collapsed is the docked rail at icon width, open is the
-  // overlay rail on a narrow viewport. Sharing one boolean is what left the
-  // mobile toggle rendered, `display: none` in its only rule, and switched on
-  // by no breakpoint anywhere.
+  // overlay rail on a narrow viewport.
   const [railOpen, setRailOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [eventsOpen, setEventsOpen] = useState(false)
 
+  const sections = useMemo<Section[]>(() => session.data?.descriptor.sections ?? [], [session.data])
+  const groups = useMemo(() => {
+    const ordered: { group: string; items: Section[] }[] = []
+    for (const section of sections) {
+      const existing = ordered.find((entry) => entry.group === section.group)
+      if (existing) existing.items.push(section)
+      else ordered.push({ group: section.group, items: [section] })
+    }
+    return ordered
+  }, [sections])
+
   useEffect(() => {
-    /* A hash that is not a route is left alone rather than treated as one.
-     * The skip link's target is exactly that case: it has to move focus to the
-     * main landmark without the application deciding a navigation happened. */
-    const sync = () => {
-      const id = window.location.hash.slice(1)
-      if (isRouteId(id)) setRoute(id)
-    }
+    const sync = () => setRoute(window.location.hash.slice(1))
     window.addEventListener('hashchange', sync)
-    if (!isRouteId(window.location.hash.slice(1))) {
-      window.history.replaceState(null, '', '#overview')
-    }
     return () => window.removeEventListener('hashchange', sync)
   }, [])
+
+  // Correcting the hash is a separate effect, and it only runs once the
+  // manifest is known. A hash that is not a route in *this* mode is replaced
+  // with the mode's first section rather than left pointing at a blank screen.
+  useEffect(() => {
+    if (!sections.length) return
+    const known = sections.some((section) => section.route === route)
+    if (!known) {
+      const first = sections[0].route
+      window.history.replaceState(null, '', `#${first}`)
+      setRoute(first)
+    }
+  }, [sections, route])
+
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
@@ -158,27 +214,38 @@ export function App() {
   const summary = useQuery({ queryKey: ['summary'], queryFn: () => getJson<Summary>('/summary') })
   const strategies = useQuery({ queryKey: ['strategies'], queryFn: () => getJson<StrategyListItem[]>('/strategies') })
   const events = useQuery({ queryKey: ['activity'], refetchInterval: 5_000, queryFn: () => getJson<ActivityEvent[]>('/activity?limit=80') })
+  const leave = useLeaveMode()
 
-  const activeRoute = ROUTES.find(item => item.id === route) ?? ROUTES[0]
+  const online = health.isSuccess
   const list = strategies.data ?? []
   const tested = list.filter(item => item.latest).length
   const oos = list.filter(item => ['VALIDATION_OOS', 'HOLDOUT'].includes(item.latest?.evidence_tier ?? '')).length
-  const online = health.isSuccess
   /* A count of zero and a count that was never fetched are different facts, and
    * they used to render identically. `counted` is what separates them. */
   const counted = strategies.isSuccess
   const latest = events.data?.[0]
-  const paletteRoutes = useMemo(() => ROUTES.map(({ id, label, group, detail }) => ({ id, label, group, detail })), [])
 
-  return <div className={`app-shell${railCollapsed ? ' is-rail-collapsed' : ''}`} data-rail-open={railOpen}>
+  if (session.isPending) {
+    return <div className="state" role="status">Opening AlgoForge…</div>
+  }
+  if (!mode) {
+    return <ModeSelect />
+  }
+
+  const descriptor = session.data!.descriptor
+  const stance = session.data!.session.stance
+  const active = sections.find((section) => section.route === route) ?? sections[0]
+  const paletteRoutes = sections.map(({ route: id, label, group, detail }) => ({ id, label, group, detail }))
+
+  return <div className={`app-shell${railCollapsed ? ' is-rail-collapsed' : ''}`} data-rail-open={railOpen} data-mode={mode}>
     <a className="skip-link" href={`#${MAIN_LANDMARK_ID}`}>Skip to workspace</a>
     <aside className="workstation-rail">
       <div className="rail-brand">
         <Wordmark />
         <button className="rail-collapse" aria-label={railCollapsed ? 'Expand navigation' : 'Collapse navigation'} onClick={() => setRailCollapsed(value => !value)}>{railCollapsed ? <ChevronRight /> : <ChevronLeft />}</button>
       </div>
-      <nav aria-label="AlgoForge workspaces">
-        {NAV.map(section => <section key={section.group}><h2>{section.group}</h2>{section.items.map(item => { const Icon = item.icon; return <a key={item.id} href={`#${item.id}`} aria-current={route === item.id ? 'page' : undefined} data-label={item.label}><Icon aria-hidden="true" /><span>{item.label}</span></a> })}</section>)}
+      <nav aria-label={`${descriptor.name} workspace`}>
+        {groups.map(section => <section key={section.group}><h2>{section.group}</h2>{section.items.map(item => { const Icon = sectionIcon(item.route); return <a key={item.route} href={`#${item.route}`} aria-current={route === item.route ? 'page' : undefined} data-label={item.label}><Icon aria-hidden="true" /><span>{item.label}</span></a> })}</section>)}
       </nav>
       <button className="rail-search" onClick={() => setPaletteOpen(true)}><Search aria-hidden="true" /><span>Search workspace</span><kbd>Ctrl K</kbd></button>
     </aside>
@@ -186,7 +253,14 @@ export function App() {
 
     <header className="context-bar">
       <button className="rail-mobile-toggle" aria-label="Toggle navigation" aria-expanded={railOpen} onClick={() => setRailOpen(value => !value)}><Menu /></button>
-      <div className="context-title"><span>{activeRoute.group}</span><strong>{activeRoute.label}</strong></div>
+      <div className="mode-badge">
+        <b>{descriptor.name}</b>
+        {stance && <span className="mode-stance-tag" data-stance={stance}>{STANCE_LABEL[stance]}</span>}
+        <button className="mode-switch" onClick={() => leave.mutate()} title="Return to the workspace chooser. Nothing is lost — each mode keeps its own layout.">
+          <Grid2x2 aria-hidden="true" /><span>Switch</span>
+        </button>
+      </div>
+      <div className="context-title"><span>{active?.group}</span><strong>{active?.label}</strong></div>
       <div className="context-facts">
         <span><i className={online ? 'pulse' : 'pulse is-off'} />{online ? health.data?.engine_running ? 'ENGINE RUNNING' : 'API CONNECTED' : health.isPending ? 'CONNECTING' : 'API OFFLINE'}</span>
         <span>DATA <b className={!online ? 'unknown' : health.data?.data_gate?.startsWith('REAL') ? 'good' : 'warn'}>{health.data?.data_gate ?? 'UNKNOWN'}</b></span>
@@ -203,28 +277,10 @@ export function App() {
         <span>The AlgoForge API on port 8765 is not answering. Nothing here is lost — the workspace reappears as soon as it does.</span>
         <button onClick={() => health.refetch()}><RotateCw aria-hidden="true" />Retry now</button>
       </div>}
-      <ViewErrorBoundary view={activeRoute.label} onOverview={() => navigate('overview')}>
-        <Suspense fallback={<div className="state" role="status">Opening {activeRoute.label}…</div>}>
-          <div className="view-content" key={route}>
-            {online && route === 'overview' && <OverviewView onRoute={navigate} />}
-            {online && route === 'missions' && <MissionsView />}
-            {online && (route === 'experiments' || route === 'lineage') && <ExperimentsView mode={route === 'lineage' ? 'lineage' : 'experiments'} />}
-            {online && route === 'strategies' && <StrategiesView />}
-            {online && route === 'runs' && <RunsView />}
-            {online && route === 'validation' && <ValidationLabView />}
-            {online && route === 'evidence' && <EvidenceView />}
-            {online && route === 'memory' && <ResearchMemoryView />}
-            {online && route === 'workspace' && <WorkspaceView />}
-            {online && route === 'charts' && <ChartsView />}
-            {online && route === 'trades' && <StrategyChartView />}
-            {online && route === 'data' && <DataWorkspaceView />}
-            {online && route === 'research' && <ResearchLabView />}
-            {online && route === 'lab' && <ResearchLabWorkbench />}
-            {online && route === 'pipeline' && <PipelineView />}
-            {online && route === 'agents' && <AgentCommandView />}
-            {online && route === 'prop' && <PropFirmView />}
-            {online && route === 'console' && <ConsoleView />}
-            {online && route === 'settings' && <SettingsView />}
+      <ViewErrorBoundary view={active?.label ?? 'Workspace'} onOverview={() => navigate(sections[0]?.route ?? '')}>
+        <Suspense fallback={<div className="state" role="status">Opening {active?.label}…</div>}>
+          <div className="view-content" key={`${mode}/${route}`}>
+            {online && viewFor(mode, route)}
           </div>
         </Suspense>
       </ViewErrorBoundary>
