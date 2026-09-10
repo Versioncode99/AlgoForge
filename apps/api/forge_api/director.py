@@ -40,6 +40,7 @@ source.
 
 from __future__ import annotations
 
+import contextlib
 import random
 import threading
 from collections.abc import Sequence
@@ -701,7 +702,8 @@ class ResearchDirector:
         definition = composition.definition
 
         template_key = f"gen_{archetype.key}_{definition.definition_hash[:8]}"[:50]
-        if template_key not in TEMPLATES:
+        registered_here = template_key not in TEMPLATES
+        if registered_here:
             registered = self._register_template(
                 campaign, composition, template_key, family, worker, sources
             )
@@ -724,10 +726,17 @@ class ResearchDirector:
         ) + subjects_from_templates({k: v for k, v in TEMPLATES.items() if k != template_key})
         verdict = assess(proposal, corpus, claimed=search_kind)
         if not verdict.admitted and search_kind is not SearchKind.PARAMETER:
+            # Take the template back out. It was registered a moment ago to
+            # prove the claim was implementable, and the claim turned out to be
+            # one already on the frontier — leaving it would put a template in
+            # the catalogue that no hypothesis points at, and inflate the
+            # "templates created" count with work that answered nothing.
+            if registered_here:
+                self._withdraw_template(template_key)
             self._event(
                 EventKind.HYPOTHESIS_REJECTED,
                 verdict.reason,
-                detail=verdict.as_dict(),
+                detail={**verdict.as_dict(), "withdrew_template": template_key},
                 level="warn",
                 worker=worker,
             )
@@ -867,6 +876,23 @@ class ResearchDirector:
             worker=worker,
         )
         return None
+
+    def _withdraw_template(self, template_key: str) -> None:
+        """Remove a generated template that no admitted hypothesis needs.
+
+        Reverses `_register_template` exactly: out of the shared catalogue, off
+        disk, and out of the attribution record and the campaign's count. A
+        template left behind here would be reachable by the parameter-refinement
+        bucket forever, which would quietly turn a refused duplicate into a
+        thing the engine keeps testing.
+        """
+        TEMPLATES.pop(template_key, None)
+        with self._lock:
+            self._generated.pop(template_key, None)
+        with contextlib.suppress(KeyError):
+            self.templates.delete(template_key)
+        if self._campaign_id:
+            self.campaigns.record(self._campaign_id, templates_created=-1)
 
     def _admit_blocked(
         self, campaign: Campaign, archetype: Archetype, missing: Sequence[str], worker: int

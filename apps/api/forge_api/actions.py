@@ -74,6 +74,7 @@ from forge.workstation import (
     Panel,
     PanelKind,
     Workspace,
+    WorkspaceImportError,
     WorkspaceProfile,
     WorkspaceStore,
     catalogue,
@@ -222,6 +223,9 @@ class Actions:
         self.prop_accounts = prop_accounts
         self.fund = fund
         self._lock = threading.Lock()
+        # Set for the duration of one `call`, so an action can attribute what it
+        # writes without every signature growing an actor argument.
+        self._actor_local = threading.local()
         self.history: list[dict[str, Any]] = []
         self._registry: dict[str, Action] = {}
         self._register_all()
@@ -289,6 +293,10 @@ class Actions:
                 f"It takes: {', '.join(sorted(action.parameters)) or 'no arguments'}."
             )
         started = time.time()
+        # Who is running this, for the duration of this call only. Workspace
+        # version history reads it so an edit the agent made is attributable
+        # without threading an actor argument through every action signature.
+        self._actor_local.actor = actor
         try:
             result = action.run(**args)
             record = {"action": name, "ok": True, "arguments": args, "result": result}
@@ -301,6 +309,8 @@ class Actions:
                 "arguments": args,
                 "error": f"{type(exc).__name__}: {exc}",
             }
+        finally:
+            self._actor_local.actor = Actor.HUMAN
         record["elapsed_seconds"] = round(time.time() - started, 3)
         record["at"] = time.time()
         with self._lock:
@@ -1603,6 +1613,86 @@ class Actions:
             mutating=True,
         )
         self._add(
+            "set_default_workspace",
+            "Choose which workspace opens when AlgoForge starts. Different from opening "
+            "one: opening is for now, the default is for every cold start.",
+            {"workspace_id": {"type": "string"}},
+            self.set_default_workspace,
+            mutating=True,
+        )
+        self._add(
+            "export_workspace",
+            "Export a workspace as a portable document. Carries the layout only - no "
+            "research, no credentials, and no ids that would collide on the way back in.",
+            {"workspace_id": {"type": "string"}},
+            self.export_workspace,
+        )
+        self._add(
+            "import_workspace",
+            "Create a workspace from an exported document. Every panel is validated by "
+            "the same models the rest of the store uses, so an import cannot introduce a "
+            "panel kind that does not render.",
+            {
+                "document": {"type": "object", "description": "The exported payload."},
+                "name": {"type": "string", "optional": True, "description": "Rename on import."},
+            },
+            self.import_workspace,
+            mutating=True,
+        )
+        self._add(
+            "workspace_history",
+            "Every saved state of a workspace, newest first, with what changed, who "
+            "changed it and which version came before. Omit workspace_id for the open one.",
+            {"workspace_id": {"type": "string", "optional": True}},
+            self.workspace_history,
+        )
+        self._add(
+            "restore_workspace_version",
+            "Put a previous state back. Recorded as a new version on top rather than a "
+            "rewind, so the work in between stays readable and the restore is undoable.",
+            {
+                "version": {"type": "integer", "description": "From workspace_history."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.restore_workspace_version,
+            mutating=True,
+        )
+        self._add(
+            "duplicate_workspace_version",
+            "Copy a previous state into a new workspace, leaving the original alone.",
+            {
+                "version": {"type": "integer"},
+                "name": {"type": "string", "description": "What to call the copy."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.duplicate_workspace_version,
+            mutating=True,
+        )
+        self._add(
+            "collapse_panel",
+            "Fold a panel to its title bar, or unfold it. The geometry is kept, so "
+            "unfolding restores exactly what was there.",
+            {
+                "panel_id": {"type": "string"},
+                "collapsed": {"type": "boolean", "optional": True, "description": "Defaults true."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.collapse_panel,
+            mutating=True,
+        )
+        self._add(
+            "reorder_panel",
+            "Move a panel within the stacking order. Later panels draw over earlier ones, "
+            "so moving one to the end is 'bring to front'.",
+            {
+                "panel_id": {"type": "string"},
+                "position": {"type": "integer", "description": "0 is the back of the stack."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.reorder_panel,
+            mutating=True,
+        )
+        self._add(
             "delete_workspace",
             "Delete a workspace and its layout. Research is not touched: a workspace "
             "holds no experiments, artifacts or evidence.",
@@ -1749,8 +1839,12 @@ class Actions:
             "panels": [self._panel_view(p) for p in workspace.panels],
         }
 
-    def _save_workspace(self, workspace: Workspace) -> dict[str, Any]:
-        self.workspaces.save(workspace)
+    def _current_actor(self) -> str:
+        """Who is running the action in progress, for version attribution."""
+        return str(getattr(self._actor_local, "actor", Actor.HUMAN))
+
+    def _save_workspace(self, workspace: Workspace, summary: str = "") -> dict[str, Any]:
+        self.workspaces.save(workspace, summary=summary, actor=self._current_actor())
         return self._view(workspace)
 
     def list_workspace_templates(self) -> dict[str, Any]:
@@ -1792,12 +1886,103 @@ class Actions:
 
     def rename_workspace(self, workspace_id: str, name: str) -> dict[str, Any]:
         workspace = self._workspace(workspace_id)
-        return self._save_workspace(workspace.renamed(_str(name, "name", limit=120)))
+        label = _str(name, "name", limit=120)
+        return self._save_workspace(
+            workspace.renamed(label), f"renamed from '{workspace.name}' to '{label}'"
+        )
 
     def clone_workspace(self, workspace_id: str, name: str) -> dict[str, Any]:
         workspace = self._workspace(workspace_id)
         clone = self.workspaces.clone(workspace.workspace_id, _str(name, "name", limit=120))
         return self._view(clone)
+
+    def set_default_workspace(self, workspace_id: str) -> dict[str, Any]:
+        """Choose which workspace opens on a cold start.
+
+        Deliberately not the same as opening one: a workspace opened once to
+        check something must not become the one that greets the operator every
+        morning.
+        """
+        workspace = self._workspace(workspace_id)
+        self.workspaces.set_default(workspace.workspace_id)
+        return {**self._view(workspace), "is_default": True}
+
+    def export_workspace(self, workspace_id: str) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        return {
+            "workspace_id": workspace.workspace_id,
+            "name": workspace.name,
+            "document": self.workspaces.export(workspace.workspace_id),
+        }
+
+    def import_workspace(self, document: Any, name: str | None = None) -> dict[str, Any]:
+        try:
+            imported = self.workspaces.import_workspace(
+                document,
+                name=_str(name, "name", limit=120) if name else None,
+                actor=self._current_actor(),
+            )
+        except WorkspaceImportError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._view(imported)
+
+    def workspace_history(self, workspace_id: str | None = None) -> dict[str, Any]:
+        """Every saved state of one workspace, newest first."""
+        workspace = self._workspace(workspace_id)
+        versions = self.workspaces.versions(workspace.workspace_id)
+        return {
+            "workspace_id": workspace.workspace_id,
+            "name": workspace.name,
+            "count": len(versions),
+            "versions": versions,
+        }
+
+    def restore_workspace_version(
+        self, version: int, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        """Put a previous state back, as a new version on top of the history."""
+        workspace = self._workspace(workspace_id)
+        try:
+            restored = self.workspaces.restore(
+                workspace.workspace_id, int(version), actor=self._current_actor()
+            )
+        except KeyError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._view(restored)
+
+    def duplicate_workspace_version(
+        self, version: int, name: str, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        try:
+            copy = self.workspaces.duplicate_version(
+                workspace.workspace_id, int(version), _str(name, "name", limit=120)
+            )
+        except KeyError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._view(copy)
+
+    def collapse_panel(
+        self, panel_id: str, collapsed: bool = True, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        try:
+            updated = workspace.collapsing(_str(panel_id, "panel_id", limit=80), bool(collapsed))
+        except KeyError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._save_workspace(
+            updated, f"{'collapsed' if collapsed else 'expanded'} {panel_id}"
+        )
+
+    def reorder_panel(
+        self, panel_id: str, position: int, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        try:
+            updated = workspace.reordered(_str(panel_id, "panel_id", limit=80), int(position))
+        except KeyError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._save_workspace(updated, f"moved {panel_id} to position {position}")
 
     def delete_workspace(self, workspace_id: str) -> dict[str, Any]:
         workspace = self._workspace(workspace_id)
@@ -1853,13 +2038,12 @@ class Actions:
             updated = workspace.with_panel(panel)
         except ValueError as exc:
             raise ActionError(str(exc)) from exc
-        return self._save_workspace(updated)
+        return self._save_workspace(updated, f"added {panel.panel_id}")
 
     def remove_panel(self, panel_id: str, workspace_id: str | None = None) -> dict[str, Any]:
         workspace = self._workspace(workspace_id)
-        return self._save_workspace(
-            workspace.without_panel(self._panel_id(workspace, panel_id))
-        )
+        resolved = self._panel_id(workspace, panel_id)
+        return self._save_workspace(workspace.without_panel(resolved), f"removed {resolved}")
 
     def move_panel(
         self, panel_id: str, x: int, y: int, workspace_id: str | None = None
@@ -1890,7 +2074,10 @@ class Actions:
             moved = Panel.model_validate(moved.model_dump())
         except (ValueError, TypeError) as exc:
             raise ActionError(f"That geometry does not fit the grid: {exc}") from exc
-        return self._save_workspace(workspace.replacing_panel(moved))
+        return self._save_workspace(
+            workspace.replacing_panel(moved),
+            f"moved {moved.panel_id} to {moved.width}x{moved.height} at ({moved.x}, {moved.y})",
+        )
 
     def set_panel_setting(
         self, panel_id: str, key: str, value: str, workspace_id: str | None = None
@@ -1898,9 +2085,11 @@ class Actions:
         workspace = self._workspace(workspace_id)
         panel = workspace.require(self._panel_id(workspace, panel_id))
         name = _str(key, "key", limit=40, lower=True)
-        settings = {**panel.settings, name: _str(value, "value", limit=200)}
+        resolved = _str(value, "value", limit=200)
+        settings = {**panel.settings, name: resolved}
         return self._save_workspace(
-            workspace.replacing_panel(panel.model_copy(update={"settings": settings}))
+            workspace.replacing_panel(panel.model_copy(update={"settings": settings})),
+            f"set {panel.panel_id} {name} to {resolved}",
         )
 
     def add_indicator(
@@ -1919,7 +2108,8 @@ class Actions:
             existing.append(name)
         settings = {**panel.settings, "indicators": existing}
         return self._save_workspace(
-            workspace.replacing_panel(panel.model_copy(update={"settings": settings}))
+            workspace.replacing_panel(panel.model_copy(update={"settings": settings})),
+            f"added the {name} indicator to {panel.panel_id}",
         )
 
     def link_panels(
@@ -1933,7 +2123,11 @@ class Actions:
             raise ActionError("'panel_ids' must be a non-empty list of panel ids.")
         ids = tuple(self._panel_id(workspace, item) for item in panel_ids)
         name = _str(group, "group", limit=40, lower=True) if group else None
-        return self._save_workspace(workspace.linked(name, ids))
+        return self._save_workspace(
+            workspace.linked(name, ids),
+            f"{'linked' if name else 'unlinked'} {', '.join(ids)}"
+            + (f" as '{name}'" if name else ""),
+        )
 
 
     def _register_builder(self) -> None:

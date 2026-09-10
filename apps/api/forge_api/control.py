@@ -136,6 +136,19 @@ class CreateWorkspaceRequest(BaseModel):
     activate: bool = True
 
 
+class ImportWorkspaceRequest(BaseModel):
+    document: dict[str, Any]
+    name: str | None = None
+
+
+class CollapsePanelRequest(BaseModel):
+    collapsed: bool = True
+
+
+class ReorderPanelRequest(BaseModel):
+    position: int
+
+
 class RenameWorkspaceRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
@@ -1733,10 +1746,17 @@ def build_control_router(
         is a side effect nobody asked for, and the caller needs to be able to
         tell "nothing open yet" from "here is your layout".
         """
-        active = workspaces.active()
+        # `restore_session` is what makes a workspace survive a restart: it
+        # returns the last one open, falling back to the operator's default, and
+        # marks whichever it found as active. It still creates nothing — a
+        # genuinely empty installation gets an honest null.
+        active = workspaces.restore_session()
         return ApiEnvelope(
             data=None if active is None else actions.call("describe_workspace"),
-            meta={"count": workspaces.count()},
+            meta={
+                "count": workspaces.count(),
+                "default_workspace_id": workspaces.default_id(),
+            },
         )
 
     @router.post("/workspaces/build", response_model=ApiEnvelope[dict[str, Any]])
@@ -1799,6 +1819,87 @@ def build_control_router(
     ) -> ApiEnvelope[dict[str, Any]]:
         return ApiEnvelope(
             data=_action("rename_workspace", {"workspace_id": workspace_id, "name": body.name})
+        )
+
+    @router.post("/workspaces/{workspace_id}/default", response_model=ApiEnvelope[dict[str, Any]])
+    def set_default_workspace(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("set_default_workspace", {"workspace_id": workspace_id}))
+
+    @router.get("/workspaces/{workspace_id}/export", response_model=ApiEnvelope[dict[str, Any]])
+    def export_workspace(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("export_workspace", {"workspace_id": workspace_id}))
+
+    @router.post("/workspaces/import", response_model=ApiEnvelope[dict[str, Any]])
+    def import_workspace(body: ImportWorkspaceRequest) -> ApiEnvelope[dict[str, Any]]:
+        arguments: dict[str, Any] = {"document": body.document}
+        if body.name:
+            arguments["name"] = body.name
+        return ApiEnvelope(data=_action("import_workspace", arguments))
+
+    @router.get("/workspaces/{workspace_id}/history", response_model=ApiEnvelope[dict[str, Any]])
+    def workspace_history(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("workspace_history", {"workspace_id": workspace_id}))
+
+    @router.post(
+        "/workspaces/{workspace_id}/history/{version}/restore",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def restore_workspace_version(workspace_id: str, version: int) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "restore_workspace_version",
+                {"workspace_id": workspace_id, "version": version},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/history/{version}/duplicate",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def duplicate_workspace_version(
+        workspace_id: str, version: int, body: RenameWorkspaceRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "duplicate_workspace_version",
+                {"workspace_id": workspace_id, "version": version, "name": body.name},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/collapse",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def collapse_panel(
+        workspace_id: str, panel_id: str, body: CollapsePanelRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "collapse_panel",
+                {
+                    "workspace_id": workspace_id,
+                    "panel_id": panel_id,
+                    "collapsed": body.collapsed,
+                },
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/order",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def reorder_panel(
+        workspace_id: str, panel_id: str, body: ReorderPanelRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "reorder_panel",
+                {
+                    "workspace_id": workspace_id,
+                    "panel_id": panel_id,
+                    "position": body.position,
+                },
+            )
         )
 
     @router.delete("/workspaces/{workspace_id}", response_model=ApiEnvelope[dict[str, Any]])

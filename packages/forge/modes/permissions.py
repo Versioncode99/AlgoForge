@@ -125,6 +125,8 @@ PREPARATORY: frozenset[str] = frozenset(
         "remove_panel",
         "move_panel",
         "resize_panel",
+        "collapse_panel",
+        "reorder_panel",
         "set_panel_setting",
         "add_indicator",
         "link_panels",
@@ -133,6 +135,19 @@ PREPARATORY: frozenset[str] = frozenset(
         "open_workspace",
         "rename_workspace",
         "clone_workspace",
+        # Which workspace opens on a cold start. Configuration that outlives the
+        # session, but it is a screen preference reversible in one click and it
+        # reaches no evidence, no order and no rule set.
+        "set_default_workspace",
+        # Layout history and portability. `restore_workspace_version` is here
+        # rather than with the destructive actions because the history is
+        # append-only: a restore is recorded as a new version on top, so it
+        # destroys nothing and is itself reversible.
+        "workspace_history",
+        "restore_workspace_version",
+        "duplicate_workspace_version",
+        "export_workspace",
+        "import_workspace",
     }
 )
 

@@ -80,15 +80,12 @@ from forge.research.promotion import (
 )
 from forge.research.promotion import assess as assess_promotion
 from forge.research.split import chronological_split, source_data_hash
-from forge.research.synthesis import (
-    ARCHETYPES,
-    Archetype,
-    Composition,
-    SynthesisError,
-    archetypes_for,
-    compose,
-    structural_variants,
-)
+
+# `forge.research.synthesis` is deliberately NOT re-exported here. It imports the
+# strategy IR, and `forge.strategy.models` imports `forge.research.models`, so
+# pulling it into this package's __init__ makes the two packages import each
+# other at module scope — which works or explodes depending on which one the
+# process happens to touch first. Import it as `forge.research.synthesis`.
 from forge.research.validation import (
     ValidationEvidence,
     expand_grid,
@@ -104,12 +101,10 @@ from forge.research.walkforward import (
 )
 
 __all__ = [
-    "ARCHETYPES",
     "DEFAULT_WEIGHTS",
     "MECHANISM_ALPHA",
     "MINIMUM_TRADES_FOR_CONTROL",
     "AllocationAdvice",
-    "Archetype",
     "Bucket",
     "Campaign",
     "CampaignError",
@@ -118,7 +113,6 @@ __all__ = [
     "Claim",
     "CombinatorialPlan",
     "CombinatorialSplit",
-    "Composition",
     "CostEstimate",
     "EdgeKind",
     "EventKind",
@@ -158,18 +152,15 @@ __all__ = [
     "SourceStore",
     "StoppingCriteria",
     "Subject",
-    "SynthesisError",
     "ValidationEvidence",
     "WalkForwardFold",
     "WalkForwardPlan",
     "WalkForwardResult",
     "adapt",
-    "archetypes_for",
     "assess_novelty",
     "assess_promotion",
     "chronological_split",
     "combinatorial_purged_plan",
-    "compose",
     "containment",
     "derive",
     "derive_many",
@@ -183,7 +174,6 @@ __all__ = [
     "retrieve",
     "run_validation",
     "source_data_hash",
-    "structural_variants",
     "subjects_from_families",
     "subjects_from_hypotheses",
     "subjects_from_templates",
