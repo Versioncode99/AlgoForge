@@ -285,7 +285,17 @@
 
 .prop-verdict { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
 .prop-verdict b { font-size: var(--fs-base); font-weight: 500; color: var(--fg-0); }
-.prop-verdict span { font-size: var(--fs-xs); color: var(--fg-2); flex: 1 1 30ch; }
+/* `:not(.measure-pill)` because the pill is also a span, and without the
+   exclusion it inherited `flex: 1 1 30ch` and stretched a four-letter status
+   across half the panel. */
+.prop-verdict > span:not(.measure-pill) {
+  font-size: var(--fs-xs);
+  color: var(--fg-2);
+  flex: 1 1 30ch;
+}
+/* Stated rather than relied on: a pill is sized by its label wherever it lands,
+   including inside a flex row. */
+.measure-pill { flex: 0 0 auto; }
 
 .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-2); }
 
@@ -319,17 +329,22 @@
   list-style: none;
   margin: 0;
   padding: var(--sp-3) var(--sp-4);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
-  gap: var(--sp-1);
+  /* A grid, not a wrapping flex row. Content-sized cards made every row a
+     different height and left an arrow at the end of each row pointing at
+     nothing — eleven ordered stages read as a ragged pile rather than as a
+     sequence. Equal columns line the ordinals up, which is what carries the
+     order. */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
+  gap: var(--sp-2);
 }
-.loop-track > li { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.loop-track > li { display: flex; align-items: stretch; gap: var(--sp-1); min-width: 0; }
 .loop-track a {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 3px;
-  min-width: 128px;
+  min-width: 0;
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
@@ -341,7 +356,26 @@
 .loop-index { font-family: var(--font-mono); font-size: var(--fs-nano); letter-spacing: .12em; color: var(--fg-3); }
 .loop-track b { font-size: var(--fs-xs); font-weight: 500; color: var(--fg-0); }
 .loop-track em { font-style: normal; font-size: var(--fs-nano); color: var(--fg-3); }
-.loop-arrow { width: 12px; height: 12px; color: var(--fg-3); flex: none; }
+.loop-track .measure-pill {
+  /* The summary wraps rather than truncating. "0 STRATEGY SPE…" is the state
+     of a stage rendered unreadable to save a line, and the grid equalises row
+     heights anyway — so wrapping costs nothing and keeps the board legible. */
+  max-width: 100%;
+  white-space: normal;
+  line-height: var(--lh-tight);
+}
+.loop-close {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0 var(--sp-4) var(--sp-3);
+  font-size: var(--fs-nano);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.loop-close svg { width: 12px; height: 12px; }
 /* A stage that is blocked, halted or unmeasured borders in its own colour. On a
    board of twelve, the one that needs attention has to be findable without
    reading every label. */

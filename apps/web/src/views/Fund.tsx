@@ -103,13 +103,19 @@ function CommandCentre() {
               <a href={`#${stage.route}`} data-status={stage.status} title={stage.purpose}>
                 <span className="loop-index">{String(index + 1).padStart(2, '0')}</span>
                 <b>{stage.label}</b>
-                <StatusPill label={stage.summary} tone={STAGE_TONE[stage.status]} />
+                <StatusPill label={stage.summary} tone={STAGE_TONE[stage.status]} title={stage.summary} />
                 {stage.detail && <em>{stage.detail}</em>}
               </a>
-              {index < fund.stages.length - 1 && <ArrowRight className="loop-arrow" aria-hidden="true" />}
             </li>
           ))}
         </ol>
+        {/* The ordinals carry the order; this carries the fact that it closes.
+            Arrows between the cards could not: a grid does not know where a row
+            ends, so every wrap left one pointing at nothing. */}
+        <p className="loop-close">
+          <ArrowRight aria-hidden="true" />
+          Feedback returns to Research — the loop runs continuously rather than once.
+        </p>
       </section>
 
       <Limitations items={fund.limitations} />

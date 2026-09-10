@@ -220,6 +220,11 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  /* The context bar is one fixed-height row and does not wrap, so every group
+     in it has to be able to give way. Without `flex: 0 1 auto` and a zero
+     min-width the badge held its full size and pushed the section title under
+     the status chips at phone width. */
+  flex: 0 1 auto;
   min-width: 0;
 }
 .mode-badge > b {
@@ -227,6 +232,8 @@
   font-weight: 600;
   color: var(--fg-0);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mode-badge .mode-stance-tag {
   font-family: var(--font-mono);
@@ -263,6 +270,31 @@
 }
 .mode-switch:hover { border-color: var(--line-strong); color: var(--fg-0); }
 .mode-switch svg { width: 13px; height: 13px; }
+
+/* ── the chrome, as the viewport narrows ──────────────────────────────────
+   The bar sheds content by priority rather than wrapping, because its row is a
+   fixed height in the shell grid and a second line would be clipped. What goes
+   first is what the rest of the screen already says. */
+@media (max-width: 900px) {
+  /* The group eyebrow: the rail already groups, and the section name alone
+     still orients. */
+  .context-title span { display: none; }
+  .mode-badge > b { font-size: var(--fs-xs); max-width: 12ch; }
+  /* Human-in-the-loop is the default and its absence is unremarkable.
+     Autonomous is the one state where the machine acts without being asked, so
+     it keeps its place in the chrome at every width. */
+  .mode-badge .mode-stance-tag:not([data-stance='autonomous']) { display: none; }
+  .mode-switch span { display: none; }
+  .mode-switch { padding-inline: var(--sp-1); }
+}
+
+@media (max-width: 640px) {
+  /* The connection chip goes last of the facts. The screen already shouts when
+     the API is unreachable — a full-width alert above the content — so the chip
+     is a convenience here rather than the signal. */
+  .context-facts { display: none; }
+  .mode-badge > b { max-width: 10ch; }
+}
 
 @media (max-width: 1080px) {
   .mode-grid { grid-template-columns: minmax(0, 1fr); }
