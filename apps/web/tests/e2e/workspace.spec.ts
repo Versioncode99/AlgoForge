@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { enterMode } from './mode'
 
 /* The workstation, driven the way a person drives it.
  *
@@ -15,6 +16,7 @@ const API = process.env.ALGOFORGE_API_URL ?? 'http://127.0.0.1:8765/api/v1'
  * working, which is a different test. Deleting workspaces touches no research:
  * that is the whole point of keeping layouts in their own store. */
 test.beforeEach(async ({ request }) => {
+  await enterMode(request, 'normal')
   const listed = await request.get(`${API}/workspaces`)
   const body = await listed.json()
   for (const item of body?.data?.workspaces ?? []) {

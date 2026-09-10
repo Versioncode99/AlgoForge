@@ -345,6 +345,7 @@ def build_router(
     log: ActivityLog,
     market: MarketService,
     research_ledger: ResearchLedger,
+    actions: Any = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["strategies"])
 
@@ -1486,6 +1487,18 @@ def build_router(
                     "with the remaining gates."
                 ),
             },
+        )
+
+    # The action registry gets the *same function*, not a second implementation.
+    # §19's rule applied to the one place it matters most: an agent invoking
+    # validation must reach the walk-forward, CSCV and CPCV stack the interface
+    # reaches, or "AI can validate" would mean a weaker AI validation system —
+    # which is precisely what the judge exists to prevent.
+    if actions is not None:
+        actions.attach_validation(
+            lambda strategy_id, **options: validate_strategy(
+                strategy_id, ValidationRequest(**options)
+            ).data
         )
 
     @router.get(

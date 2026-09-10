@@ -179,7 +179,7 @@ export function OverviewView({ onRoute }: { onRoute?: (id: string) => void }) {
           <PanelHead title="Research memory" meta={memory.data ? `${memory.data.total} constraints` : 'loading'}>
             <button className="text-action" onClick={() => onRoute?.('memory')}>Open memory <ArrowRight aria-hidden="true" /></button>
           </PanelHead>
-          {!memory.data?.constraints.length ? (
+          {!memory.data?.constraints?.length ? (
             <div className="panel-body evidence-absent">
               <BrainCircuit aria-hidden="true" />
               <div>

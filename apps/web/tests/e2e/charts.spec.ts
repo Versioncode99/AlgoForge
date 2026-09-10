@@ -1,4 +1,10 @@
 import { expect, test } from '@playwright/test'
+import { enterMode } from './mode'
+
+// Charts and the panel grid are Normal mode's surfaces.
+test.beforeEach(async ({ request }) => {
+  await enterMode(request, 'normal')
+})
 
 /* The chart, against whatever archives this machine actually holds.
  *

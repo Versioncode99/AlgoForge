@@ -100,7 +100,7 @@ export function Stat({
   label: string
   value: React.ReactNode
   note?: string
-  tone?: 'plain' | 'good' | 'bad' | 'unknown'
+  tone?: 'plain' | 'good' | 'warn' | 'bad' | 'unknown'
   wide?: boolean
 }) {
   return (

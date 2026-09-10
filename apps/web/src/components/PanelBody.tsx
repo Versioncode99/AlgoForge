@@ -1,5 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { getJson } from '../api'
+import { useApprovals, useAudit, useFundOperations, useFundRisk, useFundState } from '../fund'
+import { usePropStatus, LEVEL_LABEL, LEVEL_TONE } from '../prop'
+import { StatusPill } from './measures'
 import { ChartPanel, type TimeframeKey } from './PriceChart'
 import type { DatasetInfo } from '../types'
 
@@ -226,6 +229,247 @@ function WatchlistPanel({ settings, onSetting }: { settings: Record<string, unkn
   )
 }
 
+
+/* ── the fund and the account, at panel scale ─────────────────────────────
+ *
+ * These read the same endpoints the full screens do. A panel is a smaller view
+ * of one truth, not a summary computed separately — a workspace panel that
+ * disagreed with the screen it links to would be worse than no panel.
+ *
+ * The execution surfaces below are no longer scaffolding. They were, correctly,
+ * while there was no book: this build now has a simulated one, and what they
+ * draw is labelled simulated on the record rather than only in a caption. */
+
+function FundSummaryPanel() {
+  const state = useFundState()
+  if (state.isPending) return <Loading />
+  if (state.isError) return <Failed error={state.error} />
+  const fund = state.data!
+  return (
+    <div className="panel-fund">
+      <div className="panel-figures">
+        <span><em>NAV</em><b>{fund.nav.toLocaleString(undefined, { maximumFractionDigits: 0 })}</b></span>
+        <span><em>Gross</em><b>{(fund.gross_exposure * 100).toFixed(0)}%</b></span>
+        <span><em>Net</em><b>{(fund.net_exposure * 100).toFixed(0)}%</b></span>
+        <span><em>Leverage</em><b>{fund.leverage.toFixed(2)}×</b></span>
+        <span>
+          <em>Risk</em>
+          <StatusPill
+            label={fund.risk.enabled ? (fund.risk.within_limits ? 'WITHIN' : 'BREACH') : 'HALTED'}
+            tone={fund.risk.enabled && fund.risk.within_limits ? 'good' : 'bad'}
+          />
+        </span>
+        <span><em>Execution</em><b>{fund.execution_mode}</b></span>
+      </div>
+      <ol className="panel-loop">
+        {fund.stages.map((stage) => (
+          <li key={stage.stage} data-status={stage.status}>
+            <a href={`#${stage.route}`}>{stage.label}</a>
+            <span>{stage.summary}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+function PortfolioPanel() {
+  const operations = useFundOperations()
+  if (operations.isPending) return <Loading />
+  if (operations.isError) return <Failed error={operations.error} />
+  const positions = operations.data!.book.positions
+  if (!positions.length) {
+    return <Empty message="The book is flat. Construct a portfolio on the Portfolio screen to propose one." />
+  }
+  return (
+    <table className="panel-table">
+      <tbody>
+        {positions.map((position) => (
+          <tr key={position.symbol}>
+            <td className="mono">{position.symbol}</td>
+            <td>{position.quantity}</td>
+            <td className="mono">{position.average_price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function PretradeGatePanel() {
+  const screened = useQuery({
+    queryKey: ['fund-screened'],
+    queryFn: () => getJson<{ decision: { order_id: string; symbol: string; decision: string; reasons: string[] } }[]>('/fund/orders/screened'),
+  })
+  if (screened.isPending) return <Loading />
+  if (screened.isError) return <Failed error={screened.error} />
+  const rows = screened.data ?? []
+  if (!rows.length) return <Empty message="Nothing has been screened. Prepare a rebalance to fill this." />
+  return (
+    <ul className="panel-list">
+      {rows.map((row) => (
+        <li key={row.decision.order_id}>
+          <StatusPill
+            label={row.decision.decision === 'allow' ? 'CLEARED' : 'BLOCKED'}
+            tone={row.decision.decision === 'allow' ? 'good' : 'bad'}
+          />
+          <span className="mono">{row.decision.symbol}</span>
+          <em>{row.decision.reasons[0] ?? 'every check passed'}</em>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function ApprovalsPanel() {
+  const approvals = useApprovals()
+  if (approvals.isPending) return <Loading />
+  if (approvals.isError) return <Failed error={approvals.error} />
+  const pending = approvals.data?.pending ?? []
+  if (!pending.length) return <Empty message="Nothing is waiting for you." />
+  return (
+    <ul className="panel-list">
+      {pending.map((request) => (
+        <li key={request.request_id}>
+          <StatusPill label="HELD" tone="warn" />
+          <span className="mono">{request.action}</span>
+          <em>{request.reason}</em>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function AuditPanel() {
+  const audit = useAudit(40)
+  if (audit.isPending) return <Loading />
+  if (audit.isError) return <Failed error={audit.error} />
+  const entries = audit.data?.entries ?? []
+  if (!entries.length) return <Empty message="No action has been recorded yet." />
+  return (
+    <ul className="panel-list">
+      {entries.map((entry) => (
+        <li key={entry.entry_id}>
+          <time className="mono">{entry.at.slice(11, 19)}</time>
+          <span className="mono">{entry.action}</span>
+          <em>{entry.actor === 'ai' ? 'assistant' : 'you'} · {entry.outcome.replace(/_/g, ' ')}</em>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function PropPanel() {
+  const status = usePropStatus()
+  if (status.isPending) return <Loading />
+  if (status.isError) return <Failed error={status.error} />
+  const assessment = status.data?.assessment
+  if (!assessment) {
+    return <Empty message={status.data?.reason ?? 'No account is configured. Prop Firm mode evaluates a rule set you supply.'} />
+  }
+  return (
+    <div className="panel-fund">
+      <div className="panel-figures">
+        <span><em>Equity</em><b>{assessment.equity.toLocaleString(undefined, { maximumFractionDigits: 0 })}</b></span>
+        <span><em>Floor</em><b>{assessment.loss_floor.toLocaleString(undefined, { maximumFractionDigits: 0 })}</b></span>
+        <span><em>Buffer</em><b>{(assessment.equity - assessment.loss_floor).toLocaleString(undefined, { maximumFractionDigits: 0 })}</b></span>
+        <span>
+          <em>Status</em>
+          <StatusPill label={LEVEL_LABEL[assessment.level]} tone={LEVEL_TONE[assessment.level]} />
+        </span>
+      </div>
+      <ul className="panel-list">
+        {assessment.statuses.filter((rule) => rule.level !== 'not_assessed').map((rule) => (
+          <li key={rule.key}>
+            <StatusPill label={LEVEL_LABEL[rule.level]} tone={LEVEL_TONE[rule.level]} />
+            <span>{rule.label}</span>
+            <em>{rule.detail}</em>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function RiskPanel() {
+  const risk = useFundRisk()
+  if (risk.isPending) return <Loading />
+  if (risk.isError) return <Failed error={risk.error} />
+  const assessment = risk.data?.risk
+  if (!assessment) return <Empty message="The risk engine returned nothing." />
+  return (
+    <ul className="panel-list">
+      {assessment.measures.map((measure) => (
+        <li key={measure.key}>
+          <StatusPill
+            label={
+              measure.value === null ? 'NOT MEASURED'
+                : measure.ceiling !== null && measure.value > measure.ceiling ? 'BREACH' : 'OK'
+            }
+            tone={
+              measure.value === null ? 'unknown'
+                : measure.ceiling !== null && measure.value > measure.ceiling ? 'bad' : 'good'
+            }
+          />
+          <span>{measure.label}</span>
+          <em className="mono">
+            {measure.value === null ? measure.note : measure.value.toFixed(4)}
+            {measure.ceiling !== null && measure.value !== null ? ` / ${measure.ceiling}` : ''}
+          </em>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function BookPanel({ what }: { what: 'positions' | 'orders' | 'account' }) {
+  const operations = useFundOperations()
+  if (operations.isPending) return <Loading />
+  if (operations.isError) return <Failed error={operations.error} />
+  const data = operations.data!
+  if (what === 'account') {
+    return (
+      <div className="panel-figures">
+        <span><em>Cash</em><b>{data.book.cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}</b></span>
+        <span><em>Realised</em><b>{data.book.realised_pnl.toLocaleString(undefined, { maximumFractionDigits: 2 })}</b></span>
+        <span><em>Commission</em><b>{data.book.commission_paid.toLocaleString(undefined, { maximumFractionDigits: 2 })}</b></span>
+        <span><em>Venue</em><b>{data.book.venues.join(', ') || 'none yet'}</b></span>
+        <span><em>Fills</em><b>{data.book.simulated ? 'SIMULATED' : 'MIXED'}</b></span>
+      </div>
+    )
+  }
+  if (what === 'positions') {
+    if (!data.book.positions.length) return <Empty message="Flat. No position is open in the simulated book." />
+    return (
+      <table className="panel-table">
+        <tbody>
+          {data.book.positions.map((position) => (
+            <tr key={position.symbol}>
+              <td className="mono">{position.symbol}</td>
+              <td>{position.quantity}</td>
+              <td className="mono">{position.average_price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )
+  }
+  if (!data.orders.length) return <Empty message="No order has reached the OMS." />
+  return (
+    <table className="panel-table">
+      <tbody>
+        {data.orders.map((order) => (
+          <tr key={order.order_id}>
+            <td className="mono">{order.symbol}</td>
+            <td>{order.side.toUpperCase()} {order.quantity}</td>
+            <td>{order.status}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 export function PanelBody({ kind, settings, datasets, onSetting }: PanelProps) {
   switch (kind) {
     case 'chart': {
@@ -283,24 +527,39 @@ export function PanelBody({ kind, settings, datasets, onSetting }: PanelProps) {
     case 'watchlist':
       return <WatchlistPanel settings={settings} onSetting={onSetting} />
 
-    // Execution surfaces. Deliberately inert: this build is paper-only and has
-    // no connector, so anything drawn here would be fiction about an account.
+    // The simulated book. These were inert while there was no book at all;
+    // there is one now, and everything drawn here comes from fills a local
+    // simulator produced and labelled as such.
+    case 'positions':
+      return <BookPanel what="positions" />
+    case 'orders':
+      return <BookPanel what="orders" />
+    case 'account':
+      return <BookPanel what="account" />
+    case 'risk':
+      return <RiskPanel />
+    case 'prop':
+      return <PropPanel />
+    case 'fund_summary':
+      return <FundSummaryPanel />
+    case 'portfolio':
+      return <PortfolioPanel />
+    case 'pretrade_gate':
+      return <PretradeGatePanel />
+    case 'approvals':
+      return <ApprovalsPanel />
+    case 'audit':
+      return <AuditPanel />
+
+    // Still genuinely absent. Depth and an order ticket need a live quote and a
+    // venue, and this build has neither — so they say so rather than drawing
+    // something that would be indistinguishable from a connected panel.
     case 'dom':
     case 'order_ticket':
-    case 'positions':
-    case 'orders':
-    case 'account':
       return (
         <NotBuilt
           what={kind.replace('_', ' ')}
-          why="No broker connector exists in this build, and AlgoForge is paper-only. Depth, orders and positions will appear here when a connector is added — never before."
-        />
-      )
-    case 'risk':
-      return (
-        <NotBuilt
-          what="Risk"
-          why="Prop rule simulation lives in Prop Simulation today. A live risk panel needs positions, which needs a connector."
+          why="Depth and order entry need a live quote stream and a venue. AlgoForge is paper-only and has neither, so nothing is drawn here rather than something that would look connected."
         />
       )
     case 'replay':

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from forge.contracts.hashing import stable_id
+from forge.modes.permissions import Actor
 from forge.strategy import TEMPLATES
 from forge.vault import VaultMirror
 
@@ -239,12 +240,16 @@ class Orchestrator:
             "actions": self.actions.schemas(),
             "specialist_roles": self.agents.roles(),
             "templates": templates,
-            "families": self.actions.call("list_families"),
+            "families": self.actions.call(
+                "list_families", actor=Actor.AI, origin="orchestrator"
+            ),
             "engine": {
                 "running": self.actions.engine.state.running,
                 "dataset": self.actions.engine.state.config.dataset,
             },
-            "research_sample": self.actions.call("read_research", {"limit": 10}),
+            "research_sample": self.actions.call(
+                "read_research", {"limit": 10}, actor=Actor.AI, origin="orchestrator"
+            ),
         }
         payload = json.dumps(context)[:60_000]
         # Two attempts. A reasoning model often narrates before the object on the
@@ -449,7 +454,9 @@ class Orchestrator:
             key: _resolve(value, results) for key, value in (step.get("arguments") or {}).items()
         }
         step["arguments"] = arguments
-        outcome = self.actions.call(step["action"], arguments)
+        outcome = self.actions.call(
+            step["action"], arguments, actor=Actor.AI, origin="orchestrator"
+        )
 
         # Long actions hand back a job rather than a result. A mission has to wait
         # for it: a later step reading {{stepN.net_pnl}} against a job handle would

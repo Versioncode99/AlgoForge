@@ -29,9 +29,29 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from fastapi import HTTPException
+from forge.execution.oms import OrderRefused
+from forge.hedgefund.approvals import ApprovalQueue, ApprovalRequest
+from forge.hedgefund.audit import AuditLog, Outcome
+from forge.hedgefund.config import FundConfig
+from forge.modes.models import MODE_ORDER, Stance, WorkspaceMode, parse_stance
+from forge.modes.models import catalogue as mode_catalogue
+from forge.modes.models import descriptor as mode_descriptor
+from forge.modes.permissions import (
+    ActionFacts,
+    Actor,
+    Judgement,
+    Ruling,
+    evaluate,
+    summarise,
+)
+from forge.modes.store import ModeStore
+from forge.prop.account import AccountRules, AccountState, ClosedTrade, state_from_trades
+from forge.prop.account import assess as prop_assess
 from forge.research import chronological_split
 from forge.strategy import (
     DESCRIBED_TARGETS,
@@ -63,12 +83,28 @@ from forge.workstation import (
     new_panel_id,
     template,
 )
+from pydantic import ValidationError
 
+from forge_api.fund import FundError
 from forge_api.jobs import REGISTRY, JobHandle
 
 
 class ActionError(Exception):
     """A refusal with a reason the caller can show verbatim."""
+
+
+class ApprovalRequired(ActionError):
+    """The call was held for a person. Nothing ran.
+
+    A subclass of `ActionError` so every existing handler keeps showing the
+    reason rather than returning a 500, and a carrier for the request so a
+    surface that knows about approvals can offer the decision instead of only
+    reporting the refusal.
+    """
+
+    def __init__(self, message: str, *, request: ApprovalRequest) -> None:
+        super().__init__(message)
+        self.request = request
 
 
 class ActionRisk(StrEnum):
@@ -99,6 +135,12 @@ class Action:
     run: Callable[..., dict[str, Any]]
     mutating: bool = False
     risk: ActionRisk = ActionRisk.SAFE
+    #: Changes a deterministic control: a risk limit, a prop rule set, the fund
+    #: configuration, the kill switch, the operating mode or the stance.
+    #: `forge.modes.permissions` denies every protected action to an AI actor in
+    #: every mode and every stance, which is what makes "AI cannot raise its own
+    #: limits" a property of the code rather than an intention.
+    protected: bool = False
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -106,6 +148,7 @@ class Action:
             "description": self.summary,
             "mutating": self.mutating,
             "risk": str(self.risk),
+            "protected": self.protected,
             "requires_confirmation": self.risk is not ActionRisk.SAFE,
             "parameters": {
                 "type": "object",
@@ -144,6 +187,11 @@ class Actions:
         mirror: VaultMirror,
         workspaces: WorkspaceStore,
         ledger: Any = None,
+        modes: ModeStore | None = None,
+        approvals: ApprovalQueue | None = None,
+        audit: AuditLog | None = None,
+        prop_accounts: Any = None,
+        fund: Any = None,
     ) -> None:
         self.workspace = workspace
         self.library = library
@@ -152,6 +200,9 @@ class Actions:
         # need them refuse by name rather than raising an attribute error.
         self.ledger = ledger
         self.lab: Any = None
+        # The validation runner, attached by `forge_api.strategies` so the action
+        # and the HTTP route call one function rather than two.
+        self.validation: Callable[..., dict[str, Any]] | None = None
         self.store = store
         self.log = log
         self.market = market
@@ -161,6 +212,15 @@ class Actions:
         self.templates = templates
         self.mirror = mirror
         self.workspaces = workspaces
+        # The mode session, the approval queue and the audit log. Optional so a
+        # test can build a bare registry, and checked by name at the point of
+        # use: a registry without them still enforces the policy, it simply has
+        # nowhere to hold a call that needs a person and says so.
+        self.modes = modes
+        self.approvals = approvals
+        self.audit = audit
+        self.prop_accounts = prop_accounts
+        self.fund = fund
         self._lock = threading.Lock()
         self.history: list[dict[str, Any]] = []
         self._registry: dict[str, Action] = {}
@@ -179,6 +239,9 @@ class Actions:
         arguments: dict[str, Any] | None = None,
         *,
         confirmed: bool = False,
+        actor: Actor = Actor.HUMAN,
+        origin: str = "",
+        approval_id: str = "",
     ) -> dict[str, Any]:
         """Run one action.
 
@@ -187,10 +250,32 @@ class Actions:
         surface asking can show the right prompt. An agent cannot set this on
         its own behalf: it has to come back through a person, which is the whole
         point of the boundary.
+
+        `approval_id` is set only when this call *is* the execution of a held
+        request. It goes onto the audit row so the chain from proposal, through
+        the person who authorised it, to what happened, is followable by one id
+        — which is the question the audit log exists to answer.
+
+        `actor` is the second, independent gate, and it is the one that knows
+        about modes. A surface a person drives passes `HUMAN`; the assistant,
+        the orchestrator, the research loop and MCP pass `AI`, and their calls
+        are ruled on by `forge.modes.permissions` against whichever mode is open.
+        A caller cannot set `HUMAN` on an agent's behalf any more than it can set
+        `confirmed` — those call sites are fixed in this repository, and the
+        boundary is only as good as they are.
         """
         action = self._registry.get(name)
         if action is None:
             raise ActionError(f"No action named '{name}'. Available: {', '.join(self.names())}.")
+        judgement = self.permission(name, actor=actor)
+        if judgement.ruling is Ruling.DENY:
+            self._audit(
+                actor, origin, action, arguments, judgement, Outcome.DENIED,
+                error=judgement.reason, approval_id=approval_id,
+            )
+            raise ActionError(judgement.reason)
+        if judgement.ruling is Ruling.REQUIRE_APPROVAL:
+            raise self._hold(action, dict(arguments or {}), judgement, actor, origin)
         if action.risk is not ActionRisk.SAFE and not confirmed:
             raise ActionError(
                 f"'{name}' is a {action.risk} action and needs explicit confirmation "
@@ -227,9 +312,148 @@ class Actions:
                 f"{name} — {'ok' if record['ok'] else record.get('error', 'failed')}"[:400],
                 "info" if record["ok"] else "fail",
             )
+        # Every call is audited, not only the mutating ones. The activity log
+        # answers "what is happening"; this answers "who did that, and was it
+        # allowed", and a read an agent performed is part of that answer.
+        self._audit(
+            actor, origin, action, args, judgement,
+            Outcome.OK if record["ok"] else Outcome.ERROR,
+            result=record.get("result"),
+            error=str(record.get("error", "")),
+            approval_id=approval_id,
+        )
         if not record["ok"]:
             raise ActionError(str(record["error"]))
         return dict(result)
+
+    # ── permissions, approval and audit ──────────────────────────────────────
+    def context(self) -> tuple[WorkspaceMode, Stance | None]:
+        """Which mode the policy should rule against.
+
+        With no mode entered, AI mode's policy applies. That is the posture of a
+        headless agent run — workflow actions permitted, destructive ones held,
+        protected ones denied — and it is deliberately not the most permissive
+        reading: "no mode selected" must never mean "no policy".
+        """
+        if self.modes is None:
+            return WorkspaceMode.AI, None
+        session = self.modes.session()
+        if session.mode is None:
+            return WorkspaceMode.AI, None
+        return session.mode, session.stance
+
+    def permission(self, name: str, *, actor: Actor = Actor.HUMAN) -> Judgement:
+        """Rule on one action without running it.
+
+        Exposed so a surface can grey out what an agent may not do, and so the
+        Actions screen can show the policy rather than describe it.
+        """
+        action = self._registry.get(name)
+        if action is None:
+            raise ActionError(f"No action named '{name}'.")
+        mode, stance = self.context()
+        return evaluate(
+            ActionFacts(
+                name=action.name,
+                mutating=action.mutating,
+                risk=str(action.risk),
+                protected=action.protected,
+            ),
+            actor=actor,
+            mode=mode,
+            stance=stance,
+        )
+
+    def _hold(
+        self,
+        action: Action,
+        args: dict[str, Any],
+        judgement: Judgement,
+        actor: Actor,
+        origin: str,
+    ) -> ActionError:
+        """Queue the call for a person and return the error to raise.
+
+        Returns rather than raises so the call site reads as `raise self._hold(...)`
+        and a reader can see that nothing continues past it.
+        """
+        if self.approvals is None:
+            self._audit(
+                actor, origin, action, args, judgement, Outcome.DENIED,
+                error="no approval queue is configured",
+            )
+            return ActionError(
+                f"{judgement.reason}. No approval queue is configured in this process, "
+                f"so '{action.name}' cannot be held for review either."
+            )
+        request = self.approvals.submit(
+            action=action.name,
+            arguments=args,
+            reason=judgement.reason,
+            requested_by=str(actor),
+            origin=origin,
+            mode=judgement.mode.value,
+            stance=judgement.stance.value if judgement.stance else "",
+            summary=action.summary[:300],
+        )
+        self._audit(
+            actor, origin, action, args, judgement, Outcome.PENDING_APPROVAL,
+            approval_id=request.request_id,
+        )
+        return ApprovalRequired(
+            f"{judgement.reason}. '{action.name}' is waiting for approval as "
+            f"{request.request_id}; it has not run.",
+            request=request,
+        )
+
+    def approve(self, request_id: str, *, decided_by: str = "operator", note: str = "") -> Any:
+        """Run a held action as the operator.
+
+        The action executes with `actor=HUMAN` because a human is what
+        authorised it, and the audit row says so — with the approval id attached,
+        so the chain from proposal to authorisation to result is followable.
+        """
+        if self.approvals is None:
+            raise ActionError("no approval queue is configured")
+        return self.approvals.approve(
+            request_id,
+            lambda name, args: self.call(
+                name, args, confirmed=True, actor=Actor.HUMAN,
+                origin=f"approval {request_id}", approval_id=request_id,
+            ),
+            decided_by=decided_by,
+            note=note,
+        )
+
+    def _audit(
+        self,
+        actor: Actor,
+        origin: str,
+        action: Action,
+        arguments: Any,
+        judgement: Judgement,
+        outcome: Outcome,
+        *,
+        result: Any = None,
+        error: str = "",
+        approval_id: str = "",
+    ) -> None:
+        if self.audit is None:
+            return
+        self.audit.record(
+            actor=str(actor),
+            origin=origin,
+            mode=judgement.mode.value,
+            stance=judgement.stance.value if judgement.stance else "",
+            action=action.name,
+            arguments=arguments,
+            ruling=judgement.ruling.value,
+            ruling_reason=judgement.reason,
+            outcome=outcome,
+            result=result,
+            error=error,
+            approval_id=approval_id,
+        )
 
     def recent(self, limit: int = 40) -> list[dict[str, Any]]:
         with self._lock:
@@ -245,8 +469,11 @@ class Actions:
         *,
         mutating: bool = False,
         risk: ActionRisk = ActionRisk.SAFE,
+        protected: bool = False,
     ) -> None:
-        self._registry[name] = Action(name, summary, parameters, run, mutating, risk)
+        self._registry[name] = Action(
+            name, summary, parameters, run, mutating, risk, protected
+        )
 
     def _register_all(self) -> None:
         self._add(
@@ -437,6 +664,10 @@ class Actions:
         self._register_lab()
         self._register_workspace()
         self._register_builder()
+        self._register_validation()
+        self._register_modes()
+        self._register_prop()
+        self._register_fund()
 
     def _register_ir(self) -> None:
         """The Strategy IR verbs.
@@ -1571,6 +1802,11 @@ class Actions:
     def delete_workspace(self, workspace_id: str) -> dict[str, Any]:
         workspace = self._workspace(workspace_id)
         removed = self.workspaces.delete(workspace.workspace_id)
+        if removed and self.modes is not None:
+            # Every mode pointing at it, not only the open one. A mode left
+            # holding a pointer to a deleted layout opens on nothing until it is
+            # re-seeded, and the operator has no way to know why.
+            self.modes.forget_workspace(workspace.workspace_id)
         return {"workspace_id": workspace.workspace_id, "deleted": removed}
 
     def add_panel(
@@ -1796,6 +2032,668 @@ class Actions:
             # should know which of their markets did not get one.
             "markets_without_archives": list(unknown),
         }
+
+
+    def attach_validation(self, runner: Callable[..., dict[str, Any]]) -> None:
+        self.validation = runner
+
+    def _register_validation(self) -> None:
+        self._add(
+            "validate_strategy",
+            "Run the walk-forward, CSCV and CPCV stack over a strategy's parameter grid "
+            "and store the evidence the judge reads. Produces evidence, never a verdict.",
+            {
+                "strategy_id": {"type": "string"},
+                "dataset": {"type": "string", "optional": True},
+                "bar_count": {"type": "integer", "optional": True},
+                "max_trials": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "Configurations to search. Every trial is a full backtest.",
+                },
+                "folds": {"type": "integer", "optional": True},
+            },
+            self.validate_strategy,
+            mutating=True,
+        )
+
+    def validate_strategy(
+        self,
+        strategy_id: Any,
+        dataset: Any = None,
+        bar_count: Any = None,
+        max_trials: Any = None,
+        folds: Any = None,
+    ) -> dict[str, Any]:
+        if self.validation is None:
+            raise ActionError(
+                "the validation stack is not attached in this process, so validation "
+                "cannot be run from here"
+            )
+        options: dict[str, Any] = {}
+        if dataset is not None:
+            options["dataset"] = _str(dataset, "dataset")
+        if bar_count is not None:
+            options["bar_count"] = _bounded(bar_count, 60_000, 2_000, 2_000_000, "bar_count")
+        if max_trials is not None:
+            options["max_trials"] = _bounded(max_trials, 16, 2, 120, "max_trials")
+        if folds is not None:
+            options["folds"] = _bounded(folds, 6, 2, 20, "folds")
+        try:
+            return self.validation(_str(strategy_id, "strategy_id"), **options)
+        except HTTPException as exc:
+            # The route's refusals are written for a person and say which
+            # requirement was not met. Reusing them keeps the agent's answer and
+            # the interface's answer the same sentence.
+            detail = exc.detail
+            reason = (
+                detail.get("detail") or detail.get("code")
+                if isinstance(detail, dict)
+                else str(detail)
+            )
+            raise ActionError(str(reason)) from exc
+        except ValidationError as exc:
+            raise ActionError(f"invalid validation options: {exc.errors()[0]['msg']}") from exc
+
+    # ── modes ────────────────────────────────────────────────────────────────
+    def _register_modes(self) -> None:
+        self._add(
+            "list_modes",
+            "The four operating environments, their purpose, their sections and the "
+            "workspace each one opens with.",
+            {},
+            self.list_modes,
+        )
+        self._add(
+            "current_mode",
+            "Which mode is open, on which stance, and what an AI actor may do inside it.",
+            {},
+            self.current_mode,
+        )
+        self._add(
+            "enter_mode",
+            "Open an operating mode, seeding its default workspace the first time. "
+            "Protected: an AI actor changing the mode would be changing its own "
+            "permissions, so this is refused to one in every mode.",
+            {
+                "mode": {
+                    "type": "string",
+                    "description": "normal, prop_firm, ai or hedge_fund.",
+                },
+                "stance": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "Hedge Fund only: human_in_the_loop or autonomous.",
+                },
+            },
+            self.enter_mode,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "set_stance",
+            "Switch Hedge Fund mode between human-in-the-loop and autonomous. Protected "
+            "for the same reason as enter_mode.",
+            {"stance": {"type": "string", "description": "human_in_the_loop or autonomous."}},
+            self.set_stance,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "leave_mode",
+            "Return to the mode-selection screen. Nothing is forgotten: each mode keeps "
+            "its own layout and stance.",
+            {},
+            self.leave_mode,
+            mutating=True,
+            protected=True,
+        )
+
+    def list_modes(self) -> dict[str, Any]:
+        return {"modes": mode_catalogue()}
+
+    def current_mode(self) -> dict[str, Any]:
+        mode, stance = self.context()
+        session = self.modes.session().as_dict() if self.modes else {
+            "mode": None, "stance": None, "workspace_id": None
+        }
+        return {
+            "session": session,
+            "descriptor": mode_descriptor(mode).as_dict(),
+            "policy": summarise(mode, stance),
+            "policy_applies": session["mode"] is not None,
+        }
+
+    def _require_modes(self) -> ModeStore:
+        if self.modes is None:
+            raise ActionError("no mode store is configured in this process")
+        return self.modes
+
+    def enter_mode(self, mode: Any, stance: Any = None) -> dict[str, Any]:
+        store = self._require_modes()
+        try:
+            chosen = WorkspaceMode(_str(mode, "mode", lower=True))
+        except ValueError:
+            valid = ", ".join(m.value for m in MODE_ORDER)
+            raise ActionError(f"No mode '{mode}'. Modes: {valid}.") from None
+        try:
+            resolved = parse_stance(chosen, None if stance is None else str(stance))
+        except ValueError as exc:
+            raise ActionError(str(exc)) from exc
+        session = store.enter(chosen, resolved)
+        workspace = self._seed_workspace(chosen, store)
+        return {
+            "session": store.session().as_dict(),
+            "descriptor": mode_descriptor(chosen).as_dict(),
+            "workspace": None if workspace is None else self._view(workspace),
+            "policy": summarise(chosen, session.stance),
+        }
+
+    def _seed_workspace(self, mode: WorkspaceMode, store: ModeStore) -> Workspace | None:
+        """Open this mode's layout, creating it from the template on first entry.
+
+        The pointer is checked against the workspace store rather than trusted:
+        a layout deleted while another mode was open leaves a pointer at nothing,
+        and re-seeding is the recovery. Silently opening whatever workspace
+        happened to be active would be the other option, and it is how a fund
+        layout gets replaced by a chart.
+        """
+        remembered = store.workspace_for(mode)
+        if remembered and self.workspaces.get(remembered) is not None:
+            self.workspaces.set_active(remembered)
+            return self.workspaces.get(remembered)
+        descriptor = mode_descriptor(mode)
+        try:
+            seed = template(descriptor.workspace_template)
+        except KeyError:
+            return None
+        created = self.workspaces.create(
+            f"{descriptor.name} Workspace", panels=seed.panels, template_key=seed.key
+        )
+        self.workspaces.set_active(created.workspace_id)
+        store.remember_workspace(mode, created.workspace_id)
+        return created
+
+    def set_stance(self, stance: Any) -> dict[str, Any]:
+        store = self._require_modes()
+        session = store.session()
+        if session.mode is None:
+            raise ActionError("no mode is open, so there is no stance to set")
+        try:
+            chosen = Stance(_str(stance, "stance", lower=True))
+            resolved = store.set_stance(session.mode, chosen)
+        except ValueError as exc:
+            raise ActionError(str(exc)) from exc
+        return {
+            "session": store.session().as_dict(),
+            "policy": summarise(session.mode, resolved),
+        }
+
+    def leave_mode(self) -> dict[str, Any]:
+        return {"session": self._require_modes().leave().as_dict()}
+
+    # ── prop accounts ────────────────────────────────────────────────────────
+    def _register_prop(self) -> None:
+        self._add(
+            "list_prop_accounts",
+            "Configured funded-account rule sets, and which one is selected.",
+            {},
+            self.list_prop_accounts,
+        )
+        self._add(
+            "prop_account_status",
+            "Where the selected account stands against its own rules right now: every "
+            "rule, its buffer, and whether trading is permitted.",
+            {
+                "account_id": {"type": "string", "optional": True},
+                "proposed_contracts": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "Ask the question one trade ahead.",
+                },
+            },
+            self.prop_account_status,
+        )
+        self._add(
+            "assess_prop_account",
+            "Replay a strategy's backtested trades through an account's rules and report "
+            "whether it would have survived. Computes; records nothing.",
+            {
+                "strategy_id": {"type": "string"},
+                "account_id": {"type": "string", "optional": True},
+            },
+            self.assess_prop_account,
+            mutating=True,
+        )
+        self._add(
+            "create_prop_account",
+            "Configure a funded or evaluation account from a rule set. Protected: the "
+            "rule engine is authoritative in Prop Firm mode and AI may not write to it.",
+            {"rules": {"type": "object", "description": "An AccountRules document."}},
+            self.create_prop_account,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "update_prop_rules",
+            "Replace an account's rule set. Protected for the same reason.",
+            {
+                "account_id": {"type": "string"},
+                "rules": {"type": "object"},
+            },
+            self.update_prop_rules,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "record_prop_state",
+            "Record what the account looks like now. Protected: a balance an AI could "
+            "write is a rule engine an AI could satisfy.",
+            {
+                "account_id": {"type": "string"},
+                "state": {"type": "object", "description": "An AccountState document."},
+                "source": {
+                    "type": "string",
+                    "description": "Where the numbers came from, in words.",
+                },
+            },
+            self.record_prop_state,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "select_prop_account",
+            "Choose which configured account the Prop Firm workspace shows.",
+            {"account_id": {"type": "string"}},
+            self.select_prop_account,
+            mutating=True,
+            protected=True,
+        )
+
+    def _require_accounts(self) -> Any:
+        if self.prop_accounts is None:
+            raise ActionError("no prop account store is configured in this process")
+        return self.prop_accounts
+
+    def list_prop_accounts(self) -> dict[str, Any]:
+        store = self._require_accounts()
+        return {
+            "accounts": [account.as_dict() for account in store.all_accounts()],
+            "selected": store.selected_id(),
+        }
+
+    def _account(self, account_id: Any) -> Any:
+        store = self._require_accounts()
+        if account_id is None:
+            account = store.selected()
+            if account is None:
+                raise ActionError(
+                    "no prop account is selected. Configure one first: the rule engine "
+                    "has nothing to evaluate against."
+                )
+            return account
+        account = store.get(_str(account_id, "account_id"))
+        if account is None:
+            raise ActionError(f"No prop account '{account_id}'.")
+        return account
+
+    def prop_account_status(
+        self, account_id: Any = None, proposed_contracts: Any = None
+    ) -> dict[str, Any]:
+        store = self._require_accounts()
+        account = self._account(account_id)
+        latest = store.latest(account.account_id)
+        if latest is None:
+            return {
+                "account": account.as_dict(),
+                "assessment": None,
+                # Not a zeroed account. Nobody has said what this account holds,
+                # and rendering it flat at its starting balance would show a
+                # comfortable drawdown buffer for a position that might be open.
+                "reason": (
+                    "no state has been recorded for this account, so there is nothing to "
+                    "assess. Record a balance, or derive one from a strategy's trades."
+                ),
+            }
+        state, source = latest
+        assessment = prop_assess(
+            account.rules,
+            state,
+            proposed_contracts=_bounded(proposed_contracts, 0, 0, 10_000, "proposed_contracts"),
+        )
+        return {
+            "account": account.as_dict(),
+            "state": state.model_dump(mode="json"),
+            "state_source": source,
+            "assessment": assessment.as_dict(),
+        }
+
+    def assess_prop_account(self, strategy_id: Any, account_id: Any = None) -> dict[str, Any]:
+        account = self._account(account_id)
+        wanted = _str(strategy_id, "strategy_id")
+        latest = self.store.latest(wanted)
+        if latest is None:
+            raise ActionError(f"'{wanted}' has no backtest to replay.")
+        trades = [
+            ClosedTrade(
+                exit_time=datetime.fromisoformat(str(trade["exit_time"])),
+                pnl=float(trade["net_pnl"]),
+                contracts=1,
+            )
+            for trade in latest.get("trades", [])
+            if trade.get("exit_time")
+        ]
+        if not trades:
+            raise ActionError(
+                f"'{wanted}' produced no trades, so there is no path to replay through "
+                "the account rules."
+            )
+        state = state_from_trades(account.rules, trades)
+        assessment = prop_assess(account.rules, state)
+        return {
+            "strategy_id": wanted,
+            "account": account.as_dict(),
+            "state": state.model_dump(mode="json"),
+            "assessment": assessment.as_dict(),
+            "limitations": [
+                "Derived from closed backtested trades: there is no open position and no "
+                "unrealised P&L in this replay, so intraday rules are evaluated only at "
+                "the points where a trade closed.",
+                "Backtest fills are modelled, not calibrated against a broker.",
+            ],
+        }
+
+    def create_prop_account(self, rules: Any) -> dict[str, Any]:
+        store = self._require_accounts()
+        return {"account": store.create(_parse_rules(rules)).as_dict()}
+
+    def update_prop_rules(self, account_id: Any, rules: Any) -> dict[str, Any]:
+        store = self._require_accounts()
+        account_id = _str(account_id, "account_id")
+        try:
+            return {"account": store.update(account_id, _parse_rules(rules)).as_dict()}
+        except KeyError as exc:
+            raise ActionError(f"No prop account '{account_id}'.") from exc
+
+    def record_prop_state(self, account_id: Any, state: Any, source: Any) -> dict[str, Any]:
+        store = self._require_accounts()
+        if not isinstance(state, dict):
+            raise ActionError("'state' must be an AccountState object.")
+        try:
+            parsed = AccountState.model_validate(state)
+        except ValidationError as exc:
+            raise ActionError(
+                f"That is not a valid account state: {exc.errors()[0]['msg']}"
+            ) from exc
+        account_id = _str(account_id, "account_id")
+        try:
+            store.record(account_id, parsed, source=_str(source, "source"))
+        except (KeyError, ValueError) as exc:
+            raise ActionError(str(exc)) from exc
+        return self.prop_account_status(account_id)
+
+    def select_prop_account(self, account_id: Any) -> dict[str, Any]:
+        store = self._require_accounts()
+        account_id = _str(account_id, "account_id")
+        try:
+            store.select(account_id)
+        except KeyError as exc:
+            raise ActionError(f"No prop account '{account_id}'.") from exc
+        return {"selected": account_id}
+
+    # ── the fund ─────────────────────────────────────────────────────────────
+    def _register_fund(self) -> None:
+        self._add(
+            "fund_state",
+            "NAV, exposure, risk status and the state of every stage of the fund loop.",
+            {},
+            self.fund_state,
+        )
+        self._add(
+            "fund_config",
+            "Capital, limits, constraints, universe and restricted list, plus who last "
+            "changed them.",
+            {},
+            self.fund_config,
+        )
+        self._add(
+            "set_fund_config",
+            "Replace the fund configuration. Protected: these are the deterministic "
+            "controls, and an AI actor that could widen them would not be constrained "
+            "by them.",
+            {
+                "config": {"type": "object", "description": "A FundConfig document."},
+                "note": {"type": "string", "optional": True},
+            },
+            self.set_fund_config,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "construct_portfolio",
+            "Size the eligible signals into a portfolio inside the configured "
+            "constraints, at a stated cost. Proposes; trades nothing.",
+            {"capital": {"type": "number", "optional": True}},
+            self.construct_portfolio,
+            mutating=True,
+        )
+        self._add(
+            "calculate_risk",
+            "Measure the book, or a named proposal, against the enforceable limits.",
+            {"portfolio_id": {"type": "string", "optional": True}},
+            self.calculate_risk,
+        )
+        self._add(
+            "prepare_orders",
+            "The rebalance that would reach a proposal from the current book. Prepared "
+            "only: nothing is screened and nothing is placed.",
+            {"portfolio_id": {"type": "string"}},
+            self.prepare_orders,
+            mutating=True,
+        )
+        self._add(
+            "screen_orders",
+            "Run prepared orders through the deterministic pre-trade gate. Every check "
+            "runs and every reason is reported.",
+            {"portfolio_id": {"type": "string"}},
+            self.screen_orders,
+            mutating=True,
+        )
+        self._add(
+            "submit_orders",
+            "Route cleared orders through the OMS to the execution adapter. Refused for "
+            "anything the gate did not clear, and simulated in this build.",
+            {
+                "order_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Order ids the gate has cleared.",
+                }
+            },
+            self.submit_orders,
+            mutating=True,
+        )
+        self._add(
+            "cancel_order",
+            "Cancel a working order. Reaches the book, so only Hedge Fund mode on the "
+            "autonomous stance runs it without a person.",
+            {"order_id": {"type": "string"}},
+            self.cancel_order,
+            mutating=True,
+        )
+        self._add(
+            "fund_operations",
+            "The book, reconciliation, orders, fills and the audit summary.",
+            {},
+            self.fund_operations,
+        )
+        self._add(
+            "fund_performance",
+            "Attribution: where the return came from, and what risk generated it.",
+            {},
+            self.fund_performance,
+        )
+        self._add(
+            "audit_log",
+            "Who did what, on what, with what result — including what was refused.",
+            {"limit": {"type": "integer", "optional": True}},
+            self.audit_log,
+        )
+        self._add(
+            "pending_approvals",
+            "Consequential actions an AI actor has proposed and a person has not yet "
+            "decided on.",
+            {},
+            self.pending_approvals,
+        )
+
+    def _require_fund(self) -> Any:
+        if self.fund is None:
+            raise ActionError("no fund service is configured in this process")
+        return self.fund
+
+    def fund_state(self) -> dict[str, Any]:
+        _, stance = self.context()
+        state: dict[str, Any] = self._require_fund().state(
+            stance=stance.value if stance else None
+        )
+        return state
+
+    def fund_config(self) -> dict[str, Any]:
+        fund = self._require_fund()
+        return {
+            "config": fund.config.as_dict(),
+            "history": fund.config_store.history(20),
+        }
+
+    def set_fund_config(self, config: Any, note: Any = None) -> dict[str, Any]:
+        fund = self._require_fund()
+        if not isinstance(config, dict):
+            raise ActionError("'config' must be a FundConfig object.")
+        try:
+            parsed = FundConfig.model_validate(config)
+        except ValidationError as exc:
+            raise ActionError(
+                f"That is not a valid fund configuration: {exc.errors()[0]['msg']}"
+            ) from exc
+        saved = fund.save_config(
+            parsed, changed_by="operator", note="" if note is None else str(note)
+        )
+        return {"config": saved.as_dict()}
+
+    def construct_portfolio(self, capital: Any = None) -> dict[str, Any]:
+        fund = self._require_fund()
+        money = None
+        if capital is not None:
+            try:
+                money = float(capital)
+            except (TypeError, ValueError) as exc:
+                raise ActionError("'capital' must be a number.") from exc
+            if money <= 0:
+                raise ActionError("'capital' must be positive.")
+        try:
+            return {"portfolio": fund.construct_portfolio(capital=money).as_dict()}
+        except FundError as exc:
+            raise ActionError(str(exc)) from exc
+
+    def calculate_risk(self, portfolio_id: Any = None) -> dict[str, Any]:
+        fund = self._require_fund()
+        try:
+            assessment = fund.risk(
+                portfolio_id=None if portfolio_id is None else _str(portfolio_id, "portfolio_id")
+            )
+        except FundError as exc:
+            raise ActionError(str(exc)) from exc
+        return {"risk": assessment.as_dict()}
+
+    def prepare_orders(self, portfolio_id: Any) -> dict[str, Any]:
+        fund = self._require_fund()
+        try:
+            orders = fund.prepare_orders(_str(portfolio_id, "portfolio_id"))
+        except FundError as exc:
+            raise ActionError(str(exc)) from exc
+        return {
+            "orders": [order.model_dump(mode="json") for order in orders],
+            "note": "prepared only. Nothing is screened or placed until screen_orders runs.",
+        }
+
+    def screen_orders(self, portfolio_id: Any) -> dict[str, Any]:
+        fund = self._require_fund()
+        try:
+            orders = fund.prepare_orders(_str(portfolio_id, "portfolio_id"))
+            decisions = fund.screen(orders)
+        except FundError as exc:
+            raise ActionError(str(exc)) from exc
+        return {
+            "screened": [
+                {"order": order.model_dump(mode="json"), "decision": decision.as_dict()}
+                for order, decision in zip(orders, decisions, strict=True)
+            ],
+            "cleared": [d.order_id for d in decisions if d.allowed],
+            "blocked": [d.order_id for d in decisions if not d.allowed],
+        }
+
+    def submit_orders(self, order_ids: Any) -> dict[str, Any]:
+        fund = self._require_fund()
+        if not isinstance(order_ids, list) or not order_ids:
+            raise ActionError("'order_ids' must be a non-empty list of order ids.")
+        results = fund.submit(tuple(str(value) for value in order_ids))
+        return {
+            "results": results,
+            "accepted": sum(1 for row in results if row["accepted"]),
+            "refused": sum(1 for row in results if not row["accepted"]),
+            "execution_mode": "PAPER",
+        }
+
+    def cancel_order(self, order_id: Any) -> dict[str, Any]:
+        fund = self._require_fund()
+        try:
+            cancelled = fund.oms.cancel(_str(order_id, "order_id"))
+        except OrderRefused as exc:
+            raise ActionError(str(exc)) from exc
+        return {"order": cancelled.model_dump(mode="json")}
+
+    def fund_operations(self) -> dict[str, Any]:
+        operations: dict[str, Any] = self._require_fund().operations()
+        return operations
+
+    def fund_performance(self) -> dict[str, Any]:
+        performance: dict[str, Any] = self._require_fund().performance()
+        return performance
+
+    def audit_log(self, limit: Any = None) -> dict[str, Any]:
+        if self.audit is None:
+            raise ActionError("no audit log is configured in this process")
+        count = _bounded(limit, 100, 1, 1000, "limit")
+        return {
+            "entries": [entry.as_dict() for entry in self.audit.recent(count)],
+            "summary": self.audit.summary(),
+        }
+
+    def pending_approvals(self) -> dict[str, Any]:
+        if self.approvals is None:
+            raise ActionError("no approval queue is configured in this process")
+        return {
+            "pending": [request.as_dict() for request in self.approvals.pending()],
+            "history": [request.as_dict() for request in self.approvals.history(50)],
+        }
+
+
+def _parse_rules(rules: Any) -> AccountRules:
+    """Validate a rule-set document, refusing with the field that is wrong.
+
+    Pydantic's own message is used rather than a generic one: an operator typing
+    a contract into a form needs to know that `maximum_loss` must be positive,
+    not that "the rules are invalid".
+    """
+    if not isinstance(rules, dict):
+        raise ActionError("'rules' must be an account rule-set object.")
+    try:
+        return AccountRules.model_validate(rules)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        where = ".".join(str(part) for part in first["loc"]) or "rules"
+        raise ActionError(f"That is not a valid rule set: {where} — {first['msg']}") from exc
 
 
 def _bounded(value: Any, fallback: int, low: int, high: int, field: str) -> int:

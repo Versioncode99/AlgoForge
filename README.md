@@ -2,9 +2,100 @@
 
 AlgoForge is a private, local, paper-only desktop application for building, running and judging trading strategies. It writes strategies to disk as real Python, backtests them on real market data, judges them through a deterministic gate ladder, and simulates how they would fare under funded-account rules.
 
+It opens on four operating environments rather than one workspace. Every one of them reaches the same data, the same strategies and the same judge; what changes is what the screen is arranged around, and how much an assistant may do on your behalf.
+
+| Mode | For | What it is arranged around |
+| --- | --- | --- |
+| **Normal** | Conventional trading and research | Charts, the book, strategies and their evidence |
+| **Prop Firm** | A funded or evaluation account | One question: how close am I to breaching |
+| **AI** | Research and workflow automation | The bounded action registry, and what an assistant may call |
+| **Hedge Fund** | Institutional-style quantitative work | The loop: data, research, alpha, validation, portfolio, risk, gate, execution, operations, performance |
+
+Modes are not tiers and nothing is locked: every mode can reach validation, and switching modes never deletes work. Each remembers its own layout, so leaving one and returning is a return rather than a reset.
+
 **Market data is real.** CME futures come from Databento (cost-checked before each download; roughly $0.025 per week of MNQ 1-minute bars) and crypto from Binance public endpoints (free). A seeded, deliberately edge-free synthetic dataset is available for offline work and can never clear the judge's G0 data gate.
 
 **Fills are modelled, not calibrated.** Backtests apply commission and ATR-proportional slippage, but they have not been reconciled against a live platform. Calibrate against NinjaTrader's Strategy Analyzer before trusting any number. No live-order, account-signup, payment, KYC, or production-broker capability exists.
+
+## The four modes
+
+**Normal** is the least opinionated: it supplies the tools and leaves the
+arrangement to you.
+
+**Prop Firm** evaluates a rule set *you* supply against the account's recorded
+state — starting balance, daily loss limit, static or trailing drawdown, profit
+target, contract and position caps, session windows, consistency, and any
+firm-specific limit expressed over a metric the account state actually measures.
+AlgoForge asserts nothing about what any named firm's live contract says, ships
+no firm's numbers as a default, and refuses to invent a balance: an account
+nobody has recorded reads "nothing has been recorded" rather than showing a
+comfortable buffer against a starting balance that may not be current. A rule
+that cannot be checked reports `NOT MEASURED`, on the same three-valued
+discipline the judge uses.
+
+**AI** reaches the same bounded action registry the interface uses. There is no
+verb here the interface does not also have, and no arbitrary-code verb at all.
+The Actions screen shows the policy per action, computed by the same function
+that enforces it.
+
+**Hedge Fund** is the whole quantitative loop, and it asks one more question on
+the way in: *human in the loop*, or *autonomous*. On either stance the
+deterministic controls are the same and an assistant cannot change them.
+
+## What an assistant may do, and where that is decided
+
+`packages/forge/modes/permissions.py` is a pure function of four facts — who is
+asking, which mode, which stance, and what the action is. Nothing a model
+generates can set any of them.
+
+* **Preparation** — research, backtests, validation, portfolio construction,
+  order preparation, screening — is permitted in every mode. An assistant that
+  must ask before running a backtest is not assisting.
+* **Automation** — starting the engine, dispatching a specialist — belongs to
+  the AI and Hedge Fund modes.
+* **Reaching the book** is permitted on exactly one configuration: Hedge Fund on
+  the autonomous stance, and even there the order still passes the pre-trade
+  gate.
+* **Protected controls** — risk limits, prop rules, the fund configuration, the
+  kill switch, the operating mode and the stance itself — are denied to an
+  assistant in every mode and on every stance. The mode and stance actions are
+  protected precisely so an agent cannot widen its own permissions by switching
+  to the stance that would grant them.
+
+Anything else that writes is held in an approval queue with the arguments it
+would have used. Approving runs it *as you, now*, so it re-validates against
+current state. Every call — allowed, held, denied or failed — lands in an
+append-only audit log with the ruling and the reason, so an unattended run is
+answerable rather than merely logged.
+
+## The fund loop
+
+Data, research, alpha, validation, portfolio construction, risk, the pre-trade
+gate, execution, operations, performance, feedback — and back to research. Each
+stage reports a state read from a real record, and a stage nobody could measure
+says so rather than drawing a plausible number.
+
+Three properties hold across it:
+
+* **The judge stays authoritative.** Portfolio construction refuses to size a
+  signal whose strategy the judge failed, and the gate refuses an order from
+  one, both reading the verdict through the same path the Evidence screen uses.
+* **Nothing routes around the gate.** A cleared order leaves the gate with a
+  clearance bound to a hash of that exact order. The OMS recomputes the hash and
+  refuses anything that does not match, so an order edited after screening is
+  refused. There is no flag, argument or privileged caller that skips it.
+* **Every fill is simulated, on the record.** The only adapter is a local
+  simulator; `simulated`, the venue and the pricing basis are fields on the fill
+  rather than a caption, so they cannot be lost by a component that forgets to
+  draw them. An open position's unrealised P&L is reported absent rather than
+  zero — this build has no mark-to-market feed, and a zero would read as flat.
+
+No Bloomberg, EMSX, Charles River, Axioma or Barra is required, or faked. Where
+one would sit — a commercial factor model, a broker — there is a typed seam and
+a stated limitation. Covariance is estimated locally with Ledoit-Wolf shrinkage
+and refuses to produce an estimate at all when the sample is too thin, rather
+than handing the optimiser a singular matrix whose null space looks like a very
+good portfolio.
 
 ## Development prerequisites
 

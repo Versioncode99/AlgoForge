@@ -352,3 +352,92 @@
 .hm-finding .hm-note { font-size: 10px; color: var(--fg-3); }
 
 .hm-legend { margin: 6px 0 0; font-size: 11px; color: var(--fg-3); }
+
+/* ── the fund and the account, at panel scale ────────────────────────────────
+ *
+ * A panel is 44px per grid row and can be four rows tall, so these are the
+ * tightest layouts in the application. Everything here is a list or a figure
+ * strip: a table with six columns is unreadable at this size, and a chart with
+ * no room for an axis is decoration.
+ *
+ * The status pill is shared with the full screens rather than restyled smaller.
+ * A reader moving from the panel to the screen it links to should recognise the
+ * same vocabulary, and two sizes of the same pill is one more thing to keep in
+ * step for no gain. */
+
+.panel-fund { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0; }
+
+.panel-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+.panel-figures > span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.panel-figures em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: var(--fs-nano);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.panel-figures b {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--fg-0);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-loop {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--sp-3) var(--sp-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  overflow-y: auto;
+}
+.panel-loop li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  min-width: 92px;
+}
+.panel-loop a { font-size: var(--fs-nano); color: var(--fg-0); text-decoration: none; }
+.panel-loop a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.panel-loop span { font-size: var(--fs-nano); color: var(--fg-3); }
+.panel-loop li[data-status='blocked'],
+.panel-loop li[data-status='halted'] { border-color: var(--fail); }
+.panel-loop li[data-status='warning'] { border-color: var(--warn); }
+.panel-loop li[data-status='unknown'] { border-style: dashed; }
+
+.panel-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
+.panel-list li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: 3px var(--sp-3);
+  border-bottom: 1px solid var(--bg-2);
+  font-size: var(--fs-nano);
+  color: var(--fg-1);
+  min-width: 0;
+}
+.panel-list li:last-child { border-bottom: 0; }
+/* The trailing detail is the part that must give way when the panel is narrow:
+   the pill and the name are what make the row identifiable. */
+.panel-list em {
+  font-style: normal;
+  color: var(--fg-3);
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.panel-list time { color: var(--fg-3); flex: none; }

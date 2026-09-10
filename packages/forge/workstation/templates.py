@@ -128,7 +128,71 @@ _TEMPLATES: tuple[WorkspaceTemplate, ...] = (
     ),
 )
 
-TEMPLATES: dict[str, WorkspaceTemplate] = {t.key: t for t in _TEMPLATES}
+#: The default layout each operating mode is seeded with the first time it is
+#: entered (§22). Kept beside the hand-picked templates above rather than in
+#: `forge.modes`, because they are the same kind of object and a second registry
+#: of layouts is a second place for a panel kind to go stale.
+#:
+#: These four are still templates, not modes: a workspace built from one can be
+#: rearranged into anything, and `template_key` remains provenance. What the
+#: mode contributes is only *which one is seeded*.
+_MODE_TEMPLATES: tuple[WorkspaceTemplate, ...] = (
+    WorkspaceTemplate(
+        key="normal_desk",
+        name="Trading Desk",
+        summary="A chart, what you are watching, your book, and the strategies behind it.",
+        panels=(
+            _panel(PanelKind.CHART, 0, 0, 8, 9, symbol="NQ", timeframe="5m"),
+            _panel(PanelKind.WATCHLIST, 8, 0, 4, 4, symbols="NQ, ES, GC"),
+            _panel(PanelKind.POSITIONS, 8, 4, 4, 5),
+            _panel(PanelKind.STRATEGIES, 0, 9, 7, 5),
+            _panel(PanelKind.ACTIVITY, 7, 9, 5, 5),
+        ),
+    ),
+    WorkspaceTemplate(
+        key="prop_desk",
+        name="Prop Desk",
+        summary="The account's rule status first, then the chart it is being traded on.",
+        panels=(
+            # The prop panel is widest and first because the mode exists to answer
+            # one question, and the answer should not be something the operator
+            # scrolls to.
+            _panel(PanelKind.PROP, 0, 0, 8, 8),
+            _panel(PanelKind.RISK, 8, 0, 4, 8),
+            _panel(PanelKind.CHART, 0, 8, 7, 6, symbol="MNQ", timeframe="1m"),
+            _panel(PanelKind.POSITIONS, 7, 8, 5, 6),
+        ),
+    ),
+    WorkspaceTemplate(
+        key="ai_desk",
+        name="AI Workspace",
+        summary="The specialists, what they have done, and the work they have done it to.",
+        panels=(
+            _panel(PanelKind.AGENT, 0, 0, 7, 8),
+            _panel(PanelKind.ACTIVITY, 7, 0, 5, 8),
+            _panel(PanelKind.STRATEGIES, 0, 8, 6, 6),
+            _panel(PanelKind.EXPERIMENTS, 6, 8, 6, 6),
+        ),
+    ),
+    WorkspaceTemplate(
+        key="fund_command",
+        name="Fund Command",
+        summary="NAV and the loop across the top, then portfolio, risk and the gate.",
+        panels=(
+            _panel(PanelKind.FUND_SUMMARY, 0, 0, 12, 5),
+            _panel(PanelKind.PORTFOLIO, 0, 5, 5, 6),
+            _panel(PanelKind.RISK, 5, 5, 4, 6),
+            _panel(PanelKind.PRETRADE_GATE, 9, 5, 3, 6),
+            _panel(PanelKind.APPROVALS, 0, 11, 4, 5),
+            _panel(PanelKind.AUDIT, 4, 11, 5, 5),
+            _panel(PanelKind.ACTIVITY, 9, 11, 3, 5),
+        ),
+    ),
+)
+
+TEMPLATES: dict[str, WorkspaceTemplate] = {
+    t.key: t for t in (*_TEMPLATES, *_MODE_TEMPLATES)
+}
 
 
 def template(key: str) -> WorkspaceTemplate:
@@ -139,4 +203,4 @@ def template(key: str) -> WorkspaceTemplate:
 
 
 def catalogue() -> list[dict[str, Any]]:
-    return [t.as_dict() for t in _TEMPLATES]
+    return [t.as_dict() for t in (*_TEMPLATES, *_MODE_TEMPLATES)]

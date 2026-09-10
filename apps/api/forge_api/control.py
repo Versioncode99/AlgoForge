@@ -13,7 +13,17 @@ from forge.analytics.resample import compare as compare_resamples
 from forge.capabilities import nautilus_capability
 from forge.contracts.models import ApiEnvelope
 from forge.data.live import ProviderError
+from forge.execution.oms import ExecutionStore
+from forge.hedgefund.approvals import ApprovalError, ApprovalQueue
+from forge.hedgefund.audit import AuditLog
+from forge.hedgefund.config import FundConfigStore
+from forge.hedgefund.loop import describe as describe_loop
+from forge.modes.models import MODE_ORDER
+from forge.modes.models import catalogue as mode_catalogue
+from forge.modes.permissions import Actor
+from forge.modes.store import ModeStore
 from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
+from forge.prop.accounts import PropAccountStore
 from forge.prop.engine import MAX_BACKTEST_BARS, MIN_TRADING_DAYS
 from forge.research import ResearchLedger
 from forge.research.knowledge import (
@@ -34,11 +44,12 @@ from forge.vault import VaultMirror, Workspace
 from forge.workstation import WorkspaceStore
 from pydantic import BaseModel, Field
 
-from forge_api.actions import ActionError, Actions
+from forge_api.actions import ActionError, Actions, ApprovalRequired
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
 from forge_api.assistant import Assistant
 from forge_api.engine import AutonomousEngine, EngineConfig
+from forge_api.fund import FundService
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.ledger_view import LedgerError, TradeLedgerService
 from forge_api.ledger_view import _TradeShim as _Shim
@@ -234,6 +245,47 @@ class BuildWorkspaceRequest(BaseModel):
     preferred_export: str | None = None
 
 
+class EnterModeRequest(BaseModel):
+    stance: str | None = None
+
+
+class StanceRequest(BaseModel):
+    stance: str
+
+
+class PropAccountRequest(BaseModel):
+    rules: dict[str, Any]
+
+
+class PropStateRequest(BaseModel):
+    state: dict[str, Any]
+    #: Required, not defaulted. "the operator typed it" and "derived from a
+    #: strategy's trades" are different claims about the same row, and a reader
+    #: months later needs to know which one they are looking at.
+    source: str
+
+
+class FundConfigRequest(BaseModel):
+    config: dict[str, Any]
+    note: str = ""
+
+
+class ConstructRequest(BaseModel):
+    capital: float | None = None
+
+
+class PortfolioRequest(BaseModel):
+    portfolio_id: str
+
+
+class SubmitOrdersRequest(BaseModel):
+    order_ids: list[str]
+
+
+class DecisionRequest(BaseModel):
+    note: str = ""
+
+
 class PropMatrixRequest(BaseModel):
     """Run every backtested strategy against every rule set at once."""
 
@@ -303,6 +355,10 @@ class ControlSurface:
     agents: AgentService
     actions: Actions
     orchestrator: Orchestrator
+    modes: ModeStore
+    fund: FundService
+    approvals: ApprovalQueue
+    audit: AuditLog
 
 
 def build_control_router(
@@ -327,6 +383,55 @@ def build_control_router(
     workspaces = WorkspaceStore(workspace.data / "workspaces.db")
     agents = AgentService(workspace.store, log, settings_store, mirror)
     engine.agents = agents
+    # The mode session, the prop accounts, the fund's protected configuration and
+    # the two records that make an autonomous run answerable. All application
+    # state, so all in the app-owned data root beside the layouts.
+    modes = ModeStore(workspace.data / "modes.db")
+    prop_accounts = PropAccountStore(workspace.data / "prop-accounts.db")
+    audit = AuditLog(workspace.data / "audit.db")
+    approvals = ApprovalQueue(workspace.data / "approvals.db")
+    fund_config = FundConfigStore(workspace.data / "fund-config.db")
+    execution_store = ExecutionStore(
+        workspace.data / "execution.db", starting_cash=fund_config.get().starting_cash
+    )
+
+    def verdict_for(strategy_id: str) -> str | None:
+        """The judge's decision for one strategy, through the dossier's own path.
+
+        Not a second judging implementation and not a cached copy: the fund reads
+        the same verdict the Evidence screen shows, so a strategy the judge
+        failed cannot be sized by a portfolio that believes otherwise. A strategy
+        that has never been judged returns `None`, which construction and the
+        pre-trade gate both treat as ineligible rather than as permission.
+        """
+        from forge_api.dossier import build_dossier
+
+        try:
+            dossier = build_dossier(
+                root=root,
+                library=library,
+                store=store,
+                experiments=engine.experiments,
+                memory=engine.memory,
+                snapshots=engine.snapshots,
+                scope=engine._scope(),
+                strategy_id=strategy_id,
+            )
+        except (KeyError, ValueError, OSError):
+            return None
+        section = dossier.get("verdict") or {}
+        decision = section.get("decision") if section.get("available") else None
+        return str(decision) if decision else None
+
+    fund = FundService(
+        config_store=fund_config,
+        execution_store=execution_store,
+        audit=audit,
+        library=library,
+        backtests=store,
+        market=market,
+        verdict_for=verdict_for,
+    )
     actions = Actions(
         workspace=workspace,
         library=library,
@@ -339,6 +444,11 @@ def build_control_router(
         templates=templates,
         mirror=mirror,
         workspaces=workspaces,
+        modes=modes,
+        approvals=approvals,
+        audit=audit,
+        prop_accounts=prop_accounts,
+        fund=fund,
     )
     orchestrator = Orchestrator(
         workspace.data / "missions.db", actions, agents, settings_store, log, mirror
@@ -1106,6 +1216,18 @@ def build_control_router(
         """
         try:
             return actions.call(name, arguments, confirmed=confirmed)
+        except ApprovalRequired as exc:
+            # A distinct code, because this is not a refusal the caller should
+            # give up on: the call is queued and a person can still say yes. The
+            # interface shows it as a pending item rather than as an error.
+            raise HTTPException(
+                409,
+                {
+                    "code": "approval_required",
+                    "reason": str(exc),
+                    "approval_id": exc.request.request_id,
+                },
+            ) from exc
         except ActionError as exc:
             raise HTTPException(409, {"code": "action_refused", "reason": str(exc)}) from exc
 
@@ -1738,6 +1860,238 @@ def build_control_router(
             )
         )
 
+    # ── modes ────────────────────────────────────────────────────────────────
+    # The shell reads these to draw the home screen and the mode's navigation.
+    # Everything they return comes from `forge.modes`, so the interface and an
+    # agent asking the same question get the same answer.
+
+    @router.get("/modes", response_model=ApiEnvelope[dict[str, Any]])
+    def list_modes() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data={"modes": mode_catalogue(), "loop": describe_loop()},
+            meta={"order": [mode.value for mode in MODE_ORDER]},
+        )
+
+    @router.get("/modes/session", response_model=ApiEnvelope[dict[str, Any]])
+    def mode_session() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("current_mode", {}))
+
+    @router.post("/modes/{mode}/enter", response_model=ApiEnvelope[dict[str, Any]])
+    def enter_mode(mode: str, body: EnterModeRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action("enter_mode", {"mode": mode, "stance": body.stance}, confirmed=True)
+        )
+
+    @router.post("/modes/stance", response_model=ApiEnvelope[dict[str, Any]])
+    def set_stance(body: StanceRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("set_stance", {"stance": body.stance}, confirmed=True))
+
+    @router.post("/modes/leave", response_model=ApiEnvelope[dict[str, Any]])
+    def leave_mode() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("leave_mode", {}, confirmed=True))
+
+    @router.get("/modes/permissions", response_model=ApiEnvelope[dict[str, Any]])
+    def mode_permissions() -> ApiEnvelope[dict[str, Any]]:
+        """What an AI actor may do with each registered action, right now.
+
+        Computed from the same policy that enforces it rather than described
+        separately, because a permissions screen that can disagree with the
+        enforcement is worse than none.
+        """
+        mode, stance = actions.context()
+        rows = []
+        for schema in actions.schemas():
+            judgement = actions.permission(schema["name"], actor=Actor.AI)
+            rows.append(
+                {
+                    "action": schema["name"],
+                    "summary": schema["description"],
+                    "mutating": schema["mutating"],
+                    "risk": schema["risk"],
+                    "protected": schema["protected"],
+                    "ruling": judgement.ruling.value,
+                    "reason": judgement.reason,
+                }
+            )
+        return ApiEnvelope(
+            data={"mode": mode.value, "stance": stance.value if stance else None, "actions": rows}
+        )
+
+    # ── prop accounts ────────────────────────────────────────────────────────
+    @router.get("/prop/accounts", response_model=ApiEnvelope[dict[str, Any]])
+    def prop_accounts_list() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("list_prop_accounts", {}))
+
+    @router.post("/prop/accounts", response_model=ApiEnvelope[dict[str, Any]])
+    def prop_account_create(body: PropAccountRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action("create_prop_account", {"rules": body.rules}, confirmed=True)
+        )
+
+    @router.put("/prop/accounts/{account_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def prop_account_update(
+        account_id: str, body: PropAccountRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "update_prop_rules",
+                {"account_id": account_id, "rules": body.rules},
+                confirmed=True,
+            )
+        )
+
+    @router.post("/prop/accounts/{account_id}/select", response_model=ApiEnvelope[dict[str, Any]])
+    def prop_account_select(account_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action("select_prop_account", {"account_id": account_id}, confirmed=True)
+        )
+
+    @router.post("/prop/accounts/{account_id}/state", response_model=ApiEnvelope[dict[str, Any]])
+    def prop_account_record(
+        account_id: str, body: PropStateRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "record_prop_state",
+                {"account_id": account_id, "state": body.state, "source": body.source},
+                confirmed=True,
+            )
+        )
+
+    @router.get("/prop/accounts/status", response_model=ApiEnvelope[dict[str, Any]])
+    def prop_account_status(
+        account_id: str | None = None, proposed_contracts: int = 0
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "prop_account_status",
+                {"account_id": account_id, "proposed_contracts": proposed_contracts},
+            )
+        )
+
+    @router.get("/prop/accounts/{account_id}/history", response_model=ApiEnvelope[list[Any]])
+    def prop_account_history(account_id: str) -> ApiEnvelope[list[Any]]:
+        if prop_accounts.get(account_id) is None:
+            raise HTTPException(404, f"No prop account '{account_id}'.")
+        return ApiEnvelope(data=prop_accounts.history(account_id))
+
+    @router.post(
+        "/prop/accounts/replay/{strategy_id}", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def prop_account_replay(
+        strategy_id: str, account_id: str | None = None
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "assess_prop_account", {"strategy_id": strategy_id, "account_id": account_id}
+            )
+        )
+
+    # ── the fund ─────────────────────────────────────────────────────────────
+    @router.get("/fund/state", response_model=ApiEnvelope[dict[str, Any]])
+    def fund_state() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("fund_state", {}))
+
+    @router.get("/fund/config", response_model=ApiEnvelope[dict[str, Any]])
+    def read_fund_config() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("fund_config", {}))
+
+    @router.put("/fund/config", response_model=ApiEnvelope[dict[str, Any]])
+    def write_fund_config(body: FundConfigRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "set_fund_config", {"config": body.config, "note": body.note}, confirmed=True
+            )
+        )
+
+    @router.get("/fund/signals", response_model=ApiEnvelope[dict[str, Any]])
+    def fund_signals() -> ApiEnvelope[dict[str, Any]]:
+        signals, notes = fund.signals()
+        return ApiEnvelope(
+            data={
+                "signals": [signal.model_dump(mode="json") for signal in signals],
+                "limitations": notes,
+            }
+        )
+
+    @router.post("/fund/portfolio", response_model=ApiEnvelope[dict[str, Any]])
+    def construct_portfolio(body: ConstructRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("construct_portfolio", {"capital": body.capital}))
+
+    @router.get("/fund/risk", response_model=ApiEnvelope[dict[str, Any]])
+    def fund_risk(portfolio_id: str | None = None) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("calculate_risk", {"portfolio_id": portfolio_id}))
+
+    @router.post("/fund/orders/prepare", response_model=ApiEnvelope[dict[str, Any]])
+    def prepare_orders(body: PortfolioRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("prepare_orders", {"portfolio_id": body.portfolio_id}))
+
+    @router.post("/fund/orders/screen", response_model=ApiEnvelope[dict[str, Any]])
+    def screen_orders(body: PortfolioRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("screen_orders", {"portfolio_id": body.portfolio_id}))
+
+    @router.get("/fund/orders/screened", response_model=ApiEnvelope[list[Any]])
+    def screened_orders() -> ApiEnvelope[list[Any]]:
+        return ApiEnvelope(data=fund.screened())
+
+    @router.post("/fund/orders/submit", response_model=ApiEnvelope[dict[str, Any]])
+    def submit_orders(body: SubmitOrdersRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action("submit_orders", {"order_ids": body.order_ids}, confirmed=True),
+            meta={
+                "execution": "SIMULATED",
+                "note": (
+                    "Fills come from a local simulator. No broker, venue or OMS vendor is "
+                    "connected in this build."
+                ),
+            },
+        )
+
+    @router.post("/fund/orders/{order_id}/cancel", response_model=ApiEnvelope[dict[str, Any]])
+    def cancel_order(order_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("cancel_order", {"order_id": order_id}, confirmed=True))
+
+    @router.get("/fund/operations", response_model=ApiEnvelope[dict[str, Any]])
+    def fund_operations() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("fund_operations", {}))
+
+    @router.get("/fund/performance", response_model=ApiEnvelope[dict[str, Any]])
+    def fund_performance() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("fund_performance", {}))
+
+    # ── approvals and audit ──────────────────────────────────────────────────
+    @router.get("/approvals", response_model=ApiEnvelope[dict[str, Any]])
+    def list_approvals() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("pending_approvals", {}))
+
+    @router.post("/approvals/{request_id}/approve", response_model=ApiEnvelope[dict[str, Any]])
+    def approve(request_id: str, body: DecisionRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Run a held action as the operator.
+
+        409 rather than 404 on an expired or already-decided request: the id was
+        real, and the reason it cannot run now is the thing the caller needs to
+        read.
+        """
+        try:
+            decided = actions.approve(request_id, note=body.note or "")
+        except ApprovalError as exc:
+            raise HTTPException(409, {"code": "approval_refused", "reason": str(exc)}) from exc
+        except ActionError as exc:
+            raise HTTPException(409, {"code": "action_refused", "reason": str(exc)}) from exc
+        return ApiEnvelope(data=decided.as_dict())
+
+    @router.post("/approvals/{request_id}/reject", response_model=ApiEnvelope[dict[str, Any]])
+    def reject(request_id: str, body: DecisionRequest) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            decided = approvals.reject(request_id, note=body.note or "")
+        except ApprovalError as exc:
+            raise HTTPException(409, {"code": "approval_refused", "reason": str(exc)}) from exc
+        return ApiEnvelope(data=decided.as_dict())
+
+    @router.get("/audit", response_model=ApiEnvelope[dict[str, Any]])
+    def read_audit(limit: int = 100) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("audit_log", {"limit": limit}))
+
     return ControlSurface(
         router=router,
         engine=engine,
@@ -1745,4 +2099,8 @@ def build_control_router(
         agents=agents,
         actions=actions,
         orchestrator=orchestrator,
+        modes=modes,
+        fund=fund,
+        approvals=approvals,
+        audit=audit,
     )

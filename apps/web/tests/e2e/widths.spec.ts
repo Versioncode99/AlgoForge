@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { enterMode } from './mode'
 
 // Horizontal overflow and console errors across the desktop widths the brief
 // names. Density is the goal, so this checks the page body never scrolls
@@ -6,13 +7,20 @@ import { expect, test } from '@playwright/test'
 // wide table scrolling inside its own container is correct.
 const WIDTHS = [1280, 1440, 1920, 2560]
 const VIEWS = [
-  ['Overview', 'Overview'],
   ['Strategies', 'Strategies'],
   ['Experiments', 'Experiments'],
   ['Evidence', 'Evidence'],
-  ['Data Health', 'Data Health'],
-  ['Agent Command', 'Agent Command'],
+  ['Actions', 'Actions'],
+  ['Activity', 'Activity'],
+  ['Agents', 'Agents'],
 ] as const
+
+// AI mode carries every view below. A view that is not in the open mode's rail
+// is skipped rather than failed, which is what the `count() === 0` guard in the
+// loop is for.
+test.beforeEach(async ({ request }) => {
+  await enterMode(request, 'ai')
+})
 
 for (const width of WIDTHS) {
   test(`no horizontal overflow or console errors at ${width}`, async ({ page }) => {
