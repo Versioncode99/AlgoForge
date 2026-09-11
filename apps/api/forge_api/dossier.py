@@ -254,6 +254,73 @@ def _memory_section(memory: Any, scope: str, template: str | None) -> dict[str, 
     )
 
 
+def latest_verdict(
+    *,
+    root: Path,
+    library: Any,
+    experiments: Any,
+    scope: str,
+    spec: Any,
+    runs: list[dict[str, Any]],
+) -> tuple[Verdict | None, str]:
+    """The judge's verdict on a strategy's newest run, or why there is not one.
+
+    Extracted from `build_dossier` so that the Strategy Passport reads the same
+    verdict this document does. Two paths computing a verdict from one body of
+    evidence is the arrangement where a document titled "why you should trust
+    this" comes to disagree with the gate that decides it.
+
+    Returns `(None, reason)` rather than raising: a strategy nobody has
+    backtested has no verdict, which is a fact about the strategy and not an
+    error.
+    """
+    from forge_api.conformance_store import conformance_verdict, suite_hash
+    from forge_api.preregistration_store import claim_holds_for_run
+    from forge_api.strategies import judge_evidence
+
+    if not runs:
+        return None, "no backtest has been run for this strategy"
+    latest = runs[0]
+    pnl = tuple(float(trade["net_pnl"]) for trade in latest.get("trades", []))
+    if not pnl:
+        return None, "the most recent backtest produced no trades to judge"
+
+    evidence_args = judge_evidence(
+        root, spec.strategy_id, code_hash=str(latest.get("code_hash", ""))
+    )
+    # Read the same stored evidence the judge route reads.
+    code_hash = str(latest.get("code_hash", ""))
+    receipt = latest.get("data_quality")
+    verdict = Judge().evaluate(
+        JudgeInput(
+            run_id=str(latest["backtest_id"]),
+            tier=str(latest.get("evidence_tier", "LEGACY_IN_SAMPLE")),
+            pnl=pnl,
+            trial_count=max(1, experiments.count(scope)),
+            data_gate_passed=(
+                False
+                if latest.get("evidence_tier") in {None, "SYNTHETIC"}
+                else (receipt.get("accepted") if isinstance(receipt, dict) else None)
+            ),
+            preregistered=claim_holds_for_run(spec, latest),
+            implementation_tests_passed=conformance_verdict(
+                root,
+                spec.strategy_id,
+                code_hash=code_hash,
+                test_hash=suite_hash(library.get_tests(spec.strategy_id)),
+            ),
+            # This assembles; it never computes. Re-running the determinism and
+            # mechanism checks here would make opening a record an experiment,
+            # so both read as unmeasured unless a judge run recorded them.
+            engine_consistent=None,
+            mechanism_aligned=None,
+            lookahead_detected=not latest.get("lookahead_clean", True),
+            **evidence_args,
+        )
+    )
+    return verdict, ""
+
+
 def build_dossier(
     *,
     root: Path,
@@ -266,60 +333,18 @@ def build_dossier(
     snapshots: Any = None,
 ) -> dict[str, Any]:
     """Assemble the dossier for one strategy. Raises KeyError if it does not exist."""
-    from forge_api.conformance_store import conformance_verdict, suite_hash
-    from forge_api.preregistration_store import claim_holds_for_run
-    from forge_api.strategies import judge_evidence, load_evidence
+    from forge_api.strategies import load_evidence
 
     spec = library.get_spec(strategy_id)
     runs = store.for_strategy(strategy_id)
-
-    verdict: Verdict | None = None
-    verdict_absent = "no backtest has been run for this strategy"
-    if runs:
-        latest = runs[0]
-        pnl = tuple(float(trade["net_pnl"]) for trade in latest.get("trades", []))
-        if not pnl:
-            verdict_absent = "the most recent backtest produced no trades to judge"
-        else:
-            evidence_args = judge_evidence(
-                root,
-                strategy_id,
-                code_hash=str(latest.get("code_hash", "")),
-            )
-            # Read the same stored evidence the judge route reads. A dossier
-            # that computed a friendlier verdict than the judge would be the
-            # worst possible artifact: a document titled "why you should trust
-            # this" disagreeing with the gate that decides it.
-            code_hash = str(latest.get("code_hash", ""))
-            receipt = latest.get("data_quality")
-            verdict = Judge().evaluate(
-                JudgeInput(
-                    run_id=str(latest["backtest_id"]),
-                    tier=str(latest.get("evidence_tier", "LEGACY_IN_SAMPLE")),
-                    pnl=pnl,
-                    trial_count=max(1, experiments.count(scope)),
-                    data_gate_passed=(
-                        False
-                        if latest.get("evidence_tier") in {None, "SYNTHETIC"}
-                        else (receipt.get("accepted") if isinstance(receipt, dict) else None)
-                    ),
-                    preregistered=claim_holds_for_run(spec, latest),
-                    implementation_tests_passed=conformance_verdict(
-                        root,
-                        strategy_id,
-                        code_hash=code_hash,
-                        test_hash=suite_hash(library.get_tests(strategy_id)),
-                    ),
-                    # The dossier assembles; it never computes. Re-running the
-                    # determinism and mechanism checks here would make opening a
-                    # record an experiment, so both read as unmeasured unless a
-                    # judge run recorded them.
-                    engine_consistent=None,
-                    mechanism_aligned=None,
-                    lookahead_detected=not latest.get("lookahead_clean", True),
-                    **evidence_args,
-                )
-            )
+    verdict, verdict_absent = latest_verdict(
+        root=root,
+        library=library,
+        experiments=experiments,
+        scope=scope,
+        spec=spec,
+        runs=runs,
+    )
 
     return {
         "strategy_id": strategy_id,

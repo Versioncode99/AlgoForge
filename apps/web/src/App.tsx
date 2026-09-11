@@ -175,18 +175,28 @@ export function App() {
     return () => window.removeEventListener('hashchange', sync)
   }, [])
 
-  // Correcting the hash is a separate effect, and it only runs once the
-  // manifest is known. A hash that is not a route in *this* mode is replaced
-  // with the mode's first section rather than left pointing at a blank screen.
+  /* Correcting the hash is a separate effect, and it only runs once the
+   * manifest is known *and settled*. A hash that is not a route in this mode is
+   * replaced with the mode's first section rather than left pointing at a blank
+   * screen.
+   *
+   * Two guards, and the second matters more than it looks. No mode entered
+   * means the opening screen is up, where the hash is not a route at all and
+   * `sections` still describes whichever mode the session last carried. A route
+   * chosen there for the mode about to be *entered* was compared against that
+   * stale manifest, found unknown, and rewritten — which is how the front
+   * door's "start here" landed somebody on the previous mode's first section
+   * every single time. Correcting against a manifest that does not govern the
+   * screen in front of the reader is never right, so it waits. */
   useEffect(() => {
-    if (!sections.length) return
+    if (!sections.length || !mode || session.isFetching) return
     const known = sections.some((section) => section.route === route)
     if (!known) {
       const first = sections[0].route
       window.history.replaceState(null, '', `#${first}`)
       setRoute(first)
     }
-  }, [sections, route])
+  }, [sections, route, mode, session.isFetching])
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {

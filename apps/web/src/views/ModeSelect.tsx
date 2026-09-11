@@ -2,6 +2,14 @@ import { useState } from 'react'
 import { ArrowRight, LockKeyhole } from 'lucide-react'
 import { Wordmark } from '../components/Logo'
 import {
+  type ExpertiseLevel,
+  type IntentDescriptor,
+  readExpertise,
+  useExpertise,
+  useIntents,
+  writeExpertise,
+} from '../explain'
+import {
   STANCE_DETAIL,
   STANCE_LABEL,
   type ModeDescriptor,
@@ -23,6 +31,19 @@ import {
  * is the only mode where the answer changes what an agent may do without you.
  * It is asked here rather than after entry: choosing it inside the mode would
  * mean the mode opens on a stance nobody picked.
+ *
+ * Two bands sit around the grid.
+ *
+ * **What do you want to do?** Each option is a *route into the action
+ * registry*, chosen from a closed list the API publishes — not a sentence
+ * parsed by a model. Picking one enters the mode it belongs to and lands on the
+ * section it names, and it shows its caveat before it does either: "no live
+ * broker connector exists in this build" belongs at the front door, not three
+ * screens in.
+ *
+ * **How much do you want to see?** Guided, Advanced and Quant over one engine.
+ * A preference, not a permission: it changes what is on screen and nothing
+ * about what the system will do, and no level hides a refusal.
  */
 
 const ORDER: ModeKey[] = ['normal', 'prop_firm', 'ai', 'hedge_fund']
@@ -30,19 +51,47 @@ const ORDER: ModeKey[] = ['normal', 'prop_firm', 'ai', 'hedge_fund']
 export function ModeSelect() {
   const modes = useModes()
   const enter = useEnterMode()
+  const intents = useIntents()
+  const expertise = useExpertise()
   const [stance, setStance] = useState<Stance>('human_in_the_loop')
   const [pending, setPending] = useState<ModeKey | null>(null)
+  const [depth, setDepth] = useState<ExpertiseLevel>(() => readExpertise())
+  const [intent, setIntent] = useState<IntentDescriptor | null>(null)
 
-  const open = (mode: ModeDescriptor) => {
+  const open = (mode: ModeDescriptor, route?: string) => {
     setPending(mode.mode)
+    // The hash is set *before* entering, not in a success callback. Entering a
+    // mode unmounts this screen, and React Query drops the callbacks passed to
+    // `mutate` once the component that called it is gone — so a success handler
+    // here never ran, and an intent silently landed wherever the hash already
+    // pointed. Nothing reads the hash while this screen is up, and the shell's
+    // own correction keeps a route the entered mode actually has.
+    if (route) window.location.hash = route
     enter.mutate(
       { mode: mode.mode, stance: mode.stances.length ? stance : null },
       { onSettled: () => setPending(null) },
     )
   }
 
-  const byKey = new Map((modes.data?.modes ?? []).map((mode) => [mode.mode, mode]))
-  const ordered = ORDER.map((key) => byKey.get(key)).filter(Boolean) as ModeDescriptor[]
+  const chooseDepth = (level: ExpertiseLevel) => {
+    setDepth(level)
+    writeExpertise(level)
+  }
+
+  const followIntent = (chosen: IntentDescriptor) => {
+    // The first mode the intent has a route in, which is the manifest's own
+    // order rather than a preference expressed here.
+    const modeKey = chosen.modes[0] as ModeKey | undefined
+    const target = modeKey ? byKeyFor(modes.data?.modes)?.get(modeKey) : undefined
+    if (!target || !modeKey) return
+    open(target, chosen.sections[modeKey]?.[0])
+  }
+
+  const ordered = ORDER.map((key) => byKeyFor(modes.data?.modes)?.get(key)).filter(
+    Boolean,
+  ) as ModeDescriptor[]
+  const offered = intents.data?.intents ?? []
+  const depths = expertise.data?.levels ?? []
 
   return (
     <div className="mode-select">
@@ -68,6 +117,46 @@ export function ModeSelect() {
         </p>
       )}
 
+      {/* Both bands render only once their declaration has arrived in the
+        * shape they expect. An API answering with something else must not take
+        * down the screen somebody uses to get in. */}
+      {offered.length > 0 && (
+        <section className="front-door" aria-label="What do you want to do?">
+          <h2>What do you want to do?</h2>
+          <ul>
+            {offered.map((item) => (
+              <li key={item.intent}>
+                <button
+                  type="button"
+                  data-active={intent?.intent === item.intent ? 'yes' : undefined}
+                  onClick={() => setIntent(intent?.intent === item.intent ? null : item)}
+                >
+                  {item.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {intent && (
+            <div className="front-door-detail">
+              <p>{intent.detail}</p>
+              {intent.caveat && <p className="front-door-caveat">{intent.caveat}</p>}
+              <p className="front-door-actions">
+                Runs: {intent.actions.join(', ')}
+              </p>
+              <button
+                type="button"
+                className="front-door-go"
+                disabled={enter.isPending}
+                onClick={() => followIntent(intent)}
+              >
+                Start in <b>{modeName(modes.data?.modes, intent.modes[0])}</b>
+                <ArrowRight aria-hidden="true" />
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
       <div className="mode-grid">
         {ordered.map((mode, index) => (
           <ModePanel
@@ -89,6 +178,31 @@ export function ModeSelect() {
         </p>
       )}
 
+      {depths.length > 0 && (
+        <section className="depth-band" aria-label="How much do you want to see?">
+          <h2>How much do you want to see?</h2>
+          <p>
+            The same engine and the same refusals at every depth. Nothing below is
+            removed by choosing a shallower one — refusals, limitations, what was not
+            measured and what your firm has not permitted appear at all three.
+          </p>
+          <ul>
+            {depths.map((level) => (
+              <li key={level.level}>
+                <button
+                  type="button"
+                  data-active={depth === level.level ? 'yes' : undefined}
+                  onClick={() => chooseDepth(level.level)}
+                >
+                  <b>{level.label}</b>
+                  <span>{level.detail}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <footer className="mode-select-foot">
         <span>
           <LockKeyhole aria-hidden="true" /> Paper only
@@ -100,6 +214,20 @@ export function ModeSelect() {
       </footer>
     </div>
   )
+}
+
+/** A mode's own display name, from the manifest rather than from a transform.
+ *
+ * `prop_firm` title-cased is "Prop Firm" by luck; `ai` is "Ai", which is wrong.
+ * The manifest already carries the name, so use it.
+ */
+function modeName(descriptors: ModeDescriptor[] | undefined, key: string | undefined) {
+  if (!key) return ''
+  return byKeyFor(descriptors).get(key as ModeKey)?.name ?? key.replace(/_/g, ' ')
+}
+
+function byKeyFor(descriptors: ModeDescriptor[] | undefined) {
+  return new Map((descriptors ?? []).map((mode) => [mode.mode, mode]))
 }
 
 function ModePanel({

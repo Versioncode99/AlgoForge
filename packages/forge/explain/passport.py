@@ -340,12 +340,45 @@ def build(sources: PassportSources) -> Passport:
     if sources.verdict is not None:
         sections.extend(_verdict_sections(sources.verdict))
     else:
-        sections.append(
-            Section(
-                kind=SectionKind.VERDICT,
-                title="Verdict",
-                measured=False,
-                what_would_measure_it="run the judge over a completed out-of-sample run",
+        # Absence is a section here too. An earlier version built VERDICT,
+        # GATES and FAILURES only inside `_verdict_sections`, so an unjudged
+        # strategy's passport simply had no "what did not hold" — which is the
+        # exact shape this module exists to avoid: shorter rather than weaker.
+        sections.extend(
+            (
+                Section(
+                    kind=SectionKind.VERDICT,
+                    title="Verdict",
+                    measured=False,
+                    what_would_measure_it=(
+                        "run the judge over a completed out-of-sample run"
+                    ),
+                ),
+                Section(
+                    kind=SectionKind.GATES,
+                    title="G0-G13",
+                    measured=False,
+                    what_would_measure_it=(
+                        "the gate ladder is produced by a judge run; there has not been one"
+                    ),
+                ),
+                Section(
+                    kind=SectionKind.FAILURES,
+                    title="What did not hold",
+                    measured=False,
+                    what_would_measure_it=(
+                        "nothing has been tested, so nothing has failed and nothing has "
+                        "passed. This is not a clean bill."
+                    ),
+                ),
+                Section(
+                    kind=SectionKind.EVIDENCE,
+                    title="Measurements",
+                    measured=False,
+                    what_would_measure_it=(
+                        "no run has produced a measurement for this strategy"
+                    ),
+                ),
             )
         )
 

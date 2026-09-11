@@ -126,3 +126,27 @@ class TestRendering:
     def test_the_dictionary_form_names_the_unmeasured_sections(self) -> None:
         payload = build(sources()).as_dict()
         assert "verdict" in payload["unmeasured"]
+
+
+class TestAnUnjudgedPassportIsWeakerNotShorter:
+    """Found by the API test: the four verdict-derived sections were built only
+    when a verdict existed, so an unjudged strategy simply had no "what did not
+    hold" — which is the exact shape this module exists to avoid.
+    """
+
+    def test_the_same_section_kinds_appear_with_and_without_a_verdict(self) -> None:
+        judged = build(sources(verdict=Judge().evaluate(judge_input())))
+        unjudged = build(sources())
+        assert {s.kind for s in judged.sections} == {s.kind for s in unjudged.sections}
+
+    def test_the_unjudged_failures_section_is_not_a_clean_bill(self) -> None:
+        unjudged = build(sources())
+        failures = next(s for s in unjudged.sections if s.kind is SectionKind.FAILURES)
+        assert not failures.measured
+        assert "not a clean bill" in failures.what_would_measure_it
+
+    def test_guided_shows_the_failures_section_either_way(self) -> None:
+        for passport in (build(sources()), build(sources(verdict=Judge().evaluate(judge_input())))):
+            kinds = {s.kind for s in passport.at_depth(Depth.GUIDED).sections}
+            assert SectionKind.FAILURES in kinds
+            assert SectionKind.VERDICT in kinds
