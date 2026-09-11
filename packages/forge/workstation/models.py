@@ -15,6 +15,7 @@ must never be able to corrupt evidence.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
@@ -23,6 +24,7 @@ from pydantic import Field, field_validator, model_validator
 
 from forge.contracts.hashing import stable_id
 from forge.contracts.models import FrozenModel
+from forge.workstation.sidebar import Sidebar, default_sidebar_for
 
 # The layout grid. Twelve columns is the usual compromise: divisible by 2, 3, 4
 # and 6, so halves, thirds and quarters all land on whole numbers.
@@ -179,8 +181,30 @@ class WorkspaceProfile(FrozenModel):
     preferred_export: str = ""
 
 
+class WorkspaceKind(StrEnum):
+    """Where a workspace came from.
+
+    Provenance, not capability. A built-in workspace is editable exactly like a
+    user-created one; what the kind buys is that "restore the default layout"
+    has something to restore *to*, and that a listing can offer the four
+    familiar environments above the operator's own.
+    """
+
+    BUILT_IN = "BUILT_IN"
+    USER_CREATED = "USER_CREATED"
+    CLONED = "CLONED"
+
+
 class Workspace(FrozenModel):
-    """A named arrangement of panels, owned by the operator."""
+    """A named arrangement of panels **and navigation**, owned by the operator.
+
+    The sidebar is on here rather than on the mode for the reason
+    `forge.workstation.sidebar` sets out at length: navigation used to be a
+    constant of the mode, so wanting two features from two modes meant switching
+    between them and losing the arrangement each time. A workspace is now a
+    composition of capabilities — a chart, some accounts, a research campaign,
+    an agent monitor — and the rail is part of the composition.
+    """
 
     schema_version: Literal["1"] = "1"
     workspace_id: str
@@ -192,6 +216,25 @@ class Workspace(FrozenModel):
     template_key: str | None = None
     created_at: datetime
     updated_at: datetime
+    #: What this workspace is for, in the operator's own words.
+    description: str = Field(default="", max_length=600)
+    #: One or two characters shown in the switcher. Deliberately free text: an
+    #: emoji, an initial, a ticker.
+    icon: str = Field(default="", max_length=8)
+    kind: WorkspaceKind = WorkspaceKind.USER_CREATED
+    #: The navigation rail. Empty means "fall back to the mode's sections",
+    #: which is how a workspace saved before sidebars existed still opens.
+    sidebar: Sidebar | None = None
+    #: Pinned workspaces sort first in the switcher.
+    pinned: bool = False
+    #: Research campaigns and trading accounts this workspace is about. Links,
+    #: not permissions: putting a campaign here does not start it and putting an
+    #: account here does not connect it.
+    campaign_ids: tuple[str, ...] = ()
+    account_ids: tuple[str, ...] = ()
+    #: The built-in mode this workspace descends from, when it descends from
+    #: one. Used only to rebuild a default sidebar on request.
+    mode: str = ""
 
     @field_validator("panels")
     @classmethod
@@ -263,6 +306,115 @@ class Workspace(FrozenModel):
         index = max(0, min(len(remaining), int(position)))
         remaining.insert(index, moved)
         return self._touch(panels=tuple(remaining))
+
+    # ── the sidebar ──────────────────────────────────────────────────────────
+    # Each of these is a thin wrapper over the same operation on `Sidebar`, for
+    # one reason: a caller holding a workspace should never have to take the
+    # sidebar out, edit it and put it back, because the day somebody forgets the
+    # last step is the day an edit silently does nothing.
+
+    def rail(self) -> Sidebar:
+        """This workspace's sidebar, falling back to its mode's default.
+
+        A workspace saved before sidebars existed has ``None`` here and opens
+        with the rail its mode always had, rather than with nothing.
+        """
+        if self.sidebar is not None:
+            return self.sidebar
+        if self.mode:
+            try:
+                return default_sidebar_for(self.mode)
+            except (KeyError, ValueError):
+                return Sidebar()
+        return Sidebar()
+
+    def with_sidebar(self, sidebar: Sidebar) -> Workspace:
+        return self._touch(sidebar=sidebar)
+
+    def _edit_rail(self, operation: str, *args: Any, **kwargs: Any) -> Workspace:
+        """Apply one sidebar operation and keep the result.
+
+        Errors propagate as `SidebarError`, which the HTTP layer turns into a
+        refusal naming what was wrong. Nothing here is caught and ignored: a
+        sidebar edit that quietly did nothing is worse than one that failed.
+        """
+        rail = getattr(self.rail(), operation)(*args, **kwargs)
+        return self.with_sidebar(rail)
+
+    def adding_sidebar_item(
+        self, route: str, *, group_id: str | None = None, label: str = "",
+        position: int | None = None,
+    ) -> Workspace:
+        return self._edit_rail(
+            "with_item", route, group_id=group_id, label=label, position=position
+        )
+
+    def removing_sidebar_item(self, route: str) -> Workspace:
+        return self._edit_rail("without_item", route)
+
+    def moving_sidebar_item(
+        self, route: str, *, group_id: str, position: int | None = None
+    ) -> Workspace:
+        return self._edit_rail("moved_item", route, group_id=group_id, position=position)
+
+    def renaming_sidebar_item(self, route: str, label: str) -> Workspace:
+        return self._edit_rail("renamed_item", route, label)
+
+    def pinning_sidebar_item(self, route: str, pinned: bool) -> Workspace:
+        return self._edit_rail("pinned_item", route, pinned)
+
+    def hiding_sidebar_item(self, route: str, hidden: bool) -> Workspace:
+        return self._edit_rail("hidden_item", route, hidden)
+
+    def adding_sidebar_group(
+        self, group_id: str, label: str, *, position: int | None = None
+    ) -> Workspace:
+        return self._edit_rail("with_group", group_id, label, position=position)
+
+    def removing_sidebar_group(self, group_id: str) -> Workspace:
+        return self._edit_rail("without_group", group_id)
+
+    def renaming_sidebar_group(self, group_id: str, label: str) -> Workspace:
+        return self._edit_rail("renamed_group", group_id, label)
+
+    def collapsing_sidebar_group(self, group_id: str, collapsed: bool) -> Workspace:
+        return self._edit_rail("collapsed_group", group_id, collapsed)
+
+    def reordering_sidebar_groups(self, group_ids: Sequence[str]) -> Workspace:
+        return self._edit_rail("reordered_groups", group_ids)
+
+    def with_default_sidebar(self) -> Workspace:
+        """Throw the rail away and rebuild it from the mode. Reversible only by undo."""
+        return self.with_sidebar(default_sidebar_for(self.mode) if self.mode else Sidebar())
+
+    # ── links ────────────────────────────────────────────────────────────────
+    def linking_campaign(self, campaign_id: str, linked: bool = True) -> Workspace:
+        """Associate a research campaign with this workspace.
+
+        A link, never a grant: it puts the campaign on this screen and changes
+        nothing about whether it runs or what it is allowed to do.
+        """
+        current = [c for c in self.campaign_ids if c != campaign_id]
+        if linked:
+            current.append(campaign_id)
+        return self._touch(campaign_ids=tuple(current))
+
+    def linking_account(self, account_id: str, linked: bool = True) -> Workspace:
+        current = [a for a in self.account_ids if a != account_id]
+        if linked:
+            current.append(account_id)
+        return self._touch(account_ids=tuple(current))
+
+    def described(self, description: str = "", icon: str = "") -> Workspace:
+        changes: dict[str, Any] = {}
+        if description:
+            changes["description"] = description[:600]
+        if icon:
+            changes["icon"] = icon[:8]
+        return self._touch(**changes) if changes else self
+
+    def pinning(self, pinned: bool) -> Workspace:
+        return self._touch(pinned=bool(pinned))
 
     def linked(self, link_group: str | None, panel_ids: tuple[str, ...]) -> Workspace:
         for panel_id in panel_ids:

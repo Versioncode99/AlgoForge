@@ -84,6 +84,10 @@ from forge.workstation import (
     new_panel_id,
     template,
 )
+from forge.workstation.sidebar import CATALOGUE as SIDEBAR_CATALOGUE
+from forge.workstation.sidebar import Sidebar, SidebarError
+from forge.workstation.sidebar import destinations as sidebar_destinations
+from forge.workstation.sidebar import known as sidebar_known
 from pydantic import ValidationError
 
 from forge_api.fund import FundError
@@ -1602,7 +1606,9 @@ class Actions:
         )
         self._add(
             "create_workspace",
-            "Create a workspace, optionally seeded from a template.",
+            "Create a workspace, optionally seeded from a template and with its own "
+            "sidebar. Pass sidebar_items to compose one in a single call - 'a workspace "
+            "for NQ research and prop trading' is charts + campaigns + agents + desk.",
             {
                 "name": {"type": "string", "description": "What to call it."},
                 "template_key": {
@@ -1611,6 +1617,18 @@ class Actions:
                     "description": "A key from list_workspace_templates. Omit for empty.",
                 },
                 "activate": {"type": "boolean", "optional": True},
+                "description": {"type": "string", "optional": True},
+                "icon": {"type": "string", "optional": True},
+                "mode": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "A built-in mode to inherit the default rail from.",
+                },
+                "sidebar_items": {
+                    "type": "array",
+                    "optional": True,
+                    "description": "Routes from list_sidebar_destinations, grouped for you.",
+                },
             },
             self.create_workspace,
             mutating=True,
@@ -1715,6 +1733,212 @@ class Actions:
                 "workspace_id": {"type": "string", "optional": True},
             },
             self.reorder_panel,
+            mutating=True,
+        )
+        # ── the sidebar ──────────────────────────────────────────────────────
+        # Registered here rather than anywhere AI-specific, because there is
+        # only one implementation: the interface's "add to sidebar" button and
+        # "add the agent monitor to this workspace" asked of the assistant call
+        # the same function. An agent cannot compose a workspace the interface
+        # could not.
+        self._add(
+            "list_sidebar_destinations",
+            "Every destination that can go in a sidebar, from every mode - charts, prop "
+            "accounts, research campaigns, agents, validation, risk. This union is the "
+            "point: a workspace can hold any of them without switching modes.",
+            {},
+            self.list_sidebar_destinations,
+        )
+        self._add(
+            "describe_sidebar",
+            "The sidebar of a workspace: its groups, their items and which are pinned or "
+            "hidden. Omit workspace_id for the one currently open.",
+            {"workspace_id": {"type": "string", "optional": True}},
+            self.describe_sidebar,
+        )
+        self._add(
+            "add_sidebar_item",
+            "Put a destination in the sidebar. Use list_sidebar_destinations for the "
+            "routes. Omit group_id and it joins the first group.",
+            {
+                "route": {"type": "string", "description": "From list_sidebar_destinations."},
+                "workspace_id": {"type": "string", "optional": True},
+                "group_id": {"type": "string", "optional": True},
+                "label": {"type": "string", "optional": True, "description": "Your own wording."},
+                "position": {"type": "integer", "optional": True},
+            },
+            self.add_sidebar_item,
+            mutating=True,
+        )
+        self._add(
+            "remove_sidebar_item",
+            "Take a destination out of the sidebar. Hiding keeps its position; removing "
+            "does not.",
+            {
+                "route": {"type": "string"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.remove_sidebar_item,
+            mutating=True,
+        )
+        self._add(
+            "move_sidebar_item",
+            "Move a sidebar item to another group, or to another position in its own.",
+            {
+                "route": {"type": "string"},
+                "group_id": {"type": "string"},
+                "position": {"type": "integer", "optional": True},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.move_sidebar_item,
+            mutating=True,
+        )
+        self._add(
+            "rename_sidebar_item",
+            "Give a sidebar item your own label. The destination is unchanged.",
+            {
+                "route": {"type": "string"},
+                "label": {"type": "string"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.rename_sidebar_item,
+            mutating=True,
+        )
+        self._add(
+            "pin_sidebar_item",
+            "Pin a sidebar item above its group, or unpin it. Pinned items survive a "
+            "group collapse.",
+            {
+                "route": {"type": "string"},
+                "pinned": {"type": "boolean", "optional": True, "description": "Defaults true."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.pin_sidebar_item,
+            mutating=True,
+        )
+        self._add(
+            "hide_sidebar_item",
+            "Hide a sidebar item without removing it, so showing it again restores its "
+            "position.",
+            {
+                "route": {"type": "string"},
+                "hidden": {"type": "boolean", "optional": True, "description": "Defaults true."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.hide_sidebar_item,
+            mutating=True,
+        )
+        self._add(
+            "add_sidebar_group",
+            "Create a sidebar group - 'MY TRADING', 'RESEARCH', 'BUSINESS'.",
+            {
+                "group_id": {"type": "string", "description": "A short key, lower case."},
+                "label": {"type": "string", "description": "What the operator reads."},
+                "position": {"type": "integer", "optional": True},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.add_sidebar_group,
+            mutating=True,
+        )
+        self._add(
+            "remove_sidebar_group",
+            "Remove a sidebar group and everything in it.",
+            {
+                "group_id": {"type": "string"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.remove_sidebar_group,
+            mutating=True,
+        )
+        self._add(
+            "rename_sidebar_group",
+            "Rename a sidebar group.",
+            {
+                "group_id": {"type": "string"},
+                "label": {"type": "string"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.rename_sidebar_group,
+            mutating=True,
+        )
+        self._add(
+            "collapse_sidebar_group",
+            "Fold a sidebar group, or unfold it.",
+            {
+                "group_id": {"type": "string"},
+                "collapsed": {"type": "boolean", "optional": True, "description": "Defaults true."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.collapse_sidebar_group,
+            mutating=True,
+        )
+        self._add(
+            "reorder_sidebar_groups",
+            "Put the sidebar groups in this order. Any omitted keep their relative order.",
+            {
+                "group_ids": {"type": "array", "description": "Group keys, in the order wanted."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.reorder_sidebar_groups,
+            mutating=True,
+        )
+        self._add(
+            "reset_sidebar",
+            "Throw away a custom sidebar and rebuild the one this workspace's mode ships "
+            "with. The layout is untouched.",
+            {"workspace_id": {"type": "string", "optional": True}},
+            self.reset_sidebar,
+            mutating=True,
+            risk=ActionRisk.CONFIRM,
+        )
+        self._add(
+            "link_campaign_to_workspace",
+            "Associate a research campaign with a workspace so its surfaces open on this "
+            "screen. A link only: it does not start the campaign or change what it may do.",
+            {
+                "campaign_id": {"type": "string"},
+                "linked": {"type": "boolean", "optional": True, "description": "Defaults true."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.link_campaign_to_workspace,
+            mutating=True,
+        )
+        self._add(
+            "link_account_to_workspace",
+            "Associate a trading account with a workspace. A link only: it does not "
+            "connect the account or grant any permission over it.",
+            {
+                "account_id": {"type": "string"},
+                "linked": {"type": "boolean", "optional": True, "description": "Defaults true."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.link_account_to_workspace,
+            mutating=True,
+        )
+        self._add(
+            "describe_this_workspace",
+            "Give a workspace a description and an icon, so the switcher says what it is "
+            "for rather than only what it is called.",
+            {
+                "description": {"type": "string", "optional": True},
+                "icon": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "An emoji, an initial, or a ticker.",
+                },
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.describe_this_workspace,
+            mutating=True,
+        )
+        self._add(
+            "pin_workspace",
+            "Pin a workspace to the top of the switcher, or unpin it.",
+            {
+                "pinned": {"type": "boolean", "optional": True, "description": "Defaults true."},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.pin_workspace,
             mutating=True,
         )
         self._add(
@@ -1862,6 +2086,17 @@ class Actions:
             "template_key": workspace.template_key,
             "updated_at": workspace.updated_at.isoformat(),
             "panels": [self._panel_view(p) for p in workspace.panels],
+            "description": workspace.description,
+            "icon": workspace.icon,
+            "kind": str(workspace.kind),
+            "pinned": workspace.pinned,
+            "mode": workspace.mode,
+            "campaign_ids": list(workspace.campaign_ids),
+            "account_ids": list(workspace.account_ids),
+            # The rail, resolved: a workspace with no sidebar of its own shows
+            # the one its mode always had rather than an empty list.
+            "sidebar": workspace.rail().as_dict(),
+            "sidebar_is_custom": workspace.sidebar is not None,
         }
 
     def _current_actor(self) -> str:
@@ -1896,7 +2131,18 @@ class Actions:
         name: str,
         template_key: str | None = None,
         activate: bool = True,
+        description: str = "",
+        icon: str = "",
+        mode: str = "",
+        sidebar_items: list[str] | None = None,
     ) -> dict[str, Any]:
+        """Create a workspace, optionally seeded and optionally with a rail.
+
+        ``sidebar_items`` is what makes "build me a workspace for NQ research
+        and prop trading" one call rather than a sequence the caller has to get
+        right. Every route is checked against the destination catalogue, so a
+        workspace cannot be created carrying a link to nothing.
+        """
         label = _str(name, "name", limit=120)
         panels: tuple[Panel, ...] = ()
         key = None
@@ -1907,10 +2153,255 @@ class Actions:
             except KeyError as exc:
                 raise ActionError(str(exc)) from exc
             panels = preset.panels
-        workspace = self.workspaces.create(label, panels=panels, template_key=key)
+        rail: Sidebar | None = None
+        if sidebar_items:
+            rail = Sidebar()
+            for route in sidebar_items:
+                cleaned = _str(route, "sidebar_items", limit=60, lower=True)
+                if not sidebar_known(cleaned):
+                    raise ActionError(
+                        f"'{cleaned}' is not a destination. Valid: "
+                        + ", ".join(sorted(SIDEBAR_CATALOGUE))
+                    )
+                group = SIDEBAR_CATALOGUE[cleaned].group
+                group_id = group.lower().replace(" ", "_").replace("&", "and")[:60]
+                if rail.group(group_id) is None:
+                    rail = rail.with_group(group_id, group)
+                rail = rail.with_item(cleaned, group_id=group_id)
+        workspace = self.workspaces.create(
+            label,
+            panels=panels,
+            template_key=key,
+            description=_str(description, "description", limit=600) if description else "",
+            icon=_str(icon, "icon", limit=8) if icon else "",
+            sidebar=rail,
+            mode=_str(mode, "mode", limit=40, lower=True) if mode else "",
+        )
         if activate:
             self.workspaces.set_active(workspace.workspace_id)
         return self._view(workspace)
+
+    # ── the sidebar ──────────────────────────────────────────────────────────
+    # These are the same operations the interface calls. There is deliberately
+    # no AI-only path: "add the agent monitor to this workspace" typed by a
+    # person and asked of the assistant go through this identical registry, so
+    # a capability the interface does not have is not one the agent can invent.
+
+    def list_sidebar_destinations(self) -> dict[str, Any]:
+        """Everything that can go in a rail, from every mode.
+
+        The union, on purpose. The whole complaint this answers is that
+        navigation used to be a property of the mode, so reaching a research
+        screen from a prop workspace meant leaving the prop workspace.
+        """
+        items = sidebar_destinations()
+        return {"count": len(items), "destinations": items}
+
+    def describe_sidebar(self, workspace_id: str | None = None) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        return {
+            "workspace_id": workspace.workspace_id,
+            "custom": workspace.sidebar is not None,
+            **workspace.rail().as_dict(),
+        }
+
+    def _rail_edit(
+        self, workspace_id: str | None, operation: str, summary: str, *args: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        try:
+            updated = getattr(workspace, operation)(*args, **kwargs)
+        except (SidebarError, ValueError) as exc:
+            raise ActionError(str(exc)) from exc
+        return self._save_workspace(updated, summary)
+
+    def add_sidebar_item(
+        self,
+        route: str,
+        workspace_id: str | None = None,
+        group_id: str | None = None,
+        label: str = "",
+        position: int | None = None,
+    ) -> dict[str, Any]:
+        cleaned = _str(route, "route", limit=60, lower=True)
+        return self._rail_edit(
+            workspace_id,
+            "adding_sidebar_item",
+            f"added '{cleaned}' to the sidebar",
+            cleaned,
+            group_id=group_id,
+            label=label[:60],
+            position=position,
+        )
+
+    def remove_sidebar_item(
+        self, route: str, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        cleaned = _str(route, "route", limit=60, lower=True)
+        return self._rail_edit(
+            workspace_id,
+            "removing_sidebar_item",
+            f"removed '{cleaned}' from the sidebar",
+            cleaned,
+        )
+
+    def move_sidebar_item(
+        self,
+        route: str,
+        group_id: str,
+        position: int | None = None,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        cleaned = _str(route, "route", limit=60, lower=True)
+        return self._rail_edit(
+            workspace_id,
+            "moving_sidebar_item",
+            f"moved '{cleaned}' to '{group_id}'",
+            cleaned,
+            group_id=group_id,
+            position=position,
+        )
+
+    def rename_sidebar_item(
+        self, route: str, label: str, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        cleaned = _str(route, "route", limit=60, lower=True)
+        return self._rail_edit(
+            workspace_id,
+            "renaming_sidebar_item",
+            f"renamed '{cleaned}'",
+            cleaned,
+            _str(label, "label", limit=60),
+        )
+
+    def pin_sidebar_item(
+        self, route: str, pinned: bool = True, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        cleaned = _str(route, "route", limit=60, lower=True)
+        return self._rail_edit(
+            workspace_id,
+            "pinning_sidebar_item",
+            f"{'pinned' if pinned else 'unpinned'} '{cleaned}'",
+            cleaned,
+            bool(pinned),
+        )
+
+    def hide_sidebar_item(
+        self, route: str, hidden: bool = True, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        cleaned = _str(route, "route", limit=60, lower=True)
+        return self._rail_edit(
+            workspace_id,
+            "hiding_sidebar_item",
+            f"{'hid' if hidden else 'showed'} '{cleaned}'",
+            cleaned,
+            bool(hidden),
+        )
+
+    def add_sidebar_group(
+        self,
+        group_id: str,
+        label: str,
+        position: int | None = None,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        cleaned = _str(group_id, "group_id", limit=60, lower=True)
+        return self._rail_edit(
+            workspace_id,
+            "adding_sidebar_group",
+            f"added the '{label}' group",
+            cleaned,
+            _str(label, "label", limit=60),
+            position=position,
+        )
+
+    def remove_sidebar_group(
+        self, group_id: str, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        cleaned = _str(group_id, "group_id", limit=60, lower=True)
+        return self._rail_edit(
+            workspace_id,
+            "removing_sidebar_group",
+            f"removed the '{cleaned}' group",
+            cleaned,
+        )
+
+    def rename_sidebar_group(
+        self, group_id: str, label: str, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        cleaned = _str(group_id, "group_id", limit=60, lower=True)
+        return self._rail_edit(
+            workspace_id,
+            "renaming_sidebar_group",
+            f"renamed the '{cleaned}' group",
+            cleaned,
+            _str(label, "label", limit=60),
+        )
+
+    def collapse_sidebar_group(
+        self, group_id: str, collapsed: bool = True, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        cleaned = _str(group_id, "group_id", limit=60, lower=True)
+        return self._rail_edit(
+            workspace_id,
+            "collapsing_sidebar_group",
+            f"{'collapsed' if collapsed else 'expanded'} '{cleaned}'",
+            cleaned,
+            bool(collapsed),
+        )
+
+    def reorder_sidebar_groups(
+        self, group_ids: list[str], workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        return self._rail_edit(
+            workspace_id,
+            "reordering_sidebar_groups",
+            "reordered the sidebar",
+            [_str(g, "group_ids", limit=60, lower=True) for g in group_ids],
+        )
+
+    def reset_sidebar(self, workspace_id: str | None = None) -> dict[str, Any]:
+        """Throw away a custom rail and rebuild the mode's default."""
+        return self._rail_edit(
+            workspace_id, "with_default_sidebar", "restored the default sidebar"
+        )
+
+    def link_campaign_to_workspace(
+        self, campaign_id: str, linked: bool = True, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        cleaned = _str(campaign_id, "campaign_id", limit=80)
+        workspace = self._workspace(workspace_id)
+        return self._save_workspace(
+            workspace.linking_campaign(cleaned, bool(linked)),
+            f"{'linked' if linked else 'unlinked'} campaign {cleaned}",
+        )
+
+    def link_account_to_workspace(
+        self, account_id: str, linked: bool = True, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        cleaned = _str(account_id, "account_id", limit=80)
+        workspace = self._workspace(workspace_id)
+        return self._save_workspace(
+            workspace.linking_account(cleaned, bool(linked)),
+            f"{'linked' if linked else 'unlinked'} account {cleaned}",
+        )
+
+    def describe_this_workspace(
+        self, description: str = "", icon: str = "", workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        return self._save_workspace(
+            workspace.described(description[:600], icon[:8]), "updated the description"
+        )
+
+    def pin_workspace(
+        self, pinned: bool = True, workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        return self._save_workspace(
+            workspace.pinning(bool(pinned)),
+            f"{'pinned' if pinned else 'unpinned'} the workspace",
+        )
 
     def open_workspace(self, workspace_id: str) -> dict[str, Any]:
         workspace = self._workspace(workspace_id)

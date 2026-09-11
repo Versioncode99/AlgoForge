@@ -27,10 +27,17 @@ import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from forge.contracts.hashing import content_hash
-from forge.workstation.models import Panel, Workspace, WorkspaceProfile, new_workspace_id
+from forge.workstation.models import (
+    Panel,
+    Workspace,
+    WorkspaceKind,
+    WorkspaceProfile,
+    new_workspace_id,
+)
+from forge.workstation.sidebar import Sidebar, sidebar_from
 
 #: Bumped when the stored shape changes in a way a reader must know about.
 #: Rows carry it so an older row can be recognised rather than misread.
@@ -81,6 +88,31 @@ class WorkspaceStore:
                 "CREATE INDEX IF NOT EXISTS workspace_versions_ws "
                 "ON workspace_versions(workspace_id, version)"
             )
+            self._migrate(db)
+
+    #: Columns added when a workspace became a composition of capabilities
+    #: rather than a bag of panels. Applied by ALTER TABLE, because an operator
+    #: who has arranged their screen should not be asked to do it again.
+    _ADDED: ClassVar[tuple[tuple[str, str, str], ...]] = (
+        ("description", "TEXT", "''"),
+        ("icon", "TEXT", "''"),
+        ("kind", "TEXT", "'USER_CREATED'"),
+        # NULL rather than '{}': a workspace saved before sidebars existed has
+        # no sidebar, which is different from having an empty one. The first
+        # falls back to its mode's rail; the second is a deliberately bare one.
+        ("sidebar", "TEXT", "NULL"),
+        ("pinned", "INTEGER", "0"),
+        ("campaign_ids", "TEXT", "'[]'"),
+        ("account_ids", "TEXT", "'[]'"),
+        ("mode", "TEXT", "''"),
+    )
+
+    def _migrate(self, db: sqlite3.Connection) -> None:
+        for table in ("workspaces", "workspace_versions"):
+            existing = {str(row[1]) for row in db.execute(f"PRAGMA table_info({table})")}
+            for name, kind, default in self._ADDED:
+                if name not in existing:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind} DEFAULT {default}")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=15)
@@ -108,11 +140,20 @@ class WorkspaceStore:
         """
         with closing(self._connect()) as db, db:
             rows = db.execute(
-                "SELECT workspace_id, name, template_key, updated_at, "
+                "SELECT workspace_id, name, template_key, updated_at, description, icon, "
+                "kind, pinned, mode, campaign_ids, account_ids, "
                 "json_array_length(panels) AS panel_count "
-                "FROM workspaces ORDER BY updated_at DESC"
+                "FROM workspaces ORDER BY pinned DESC, updated_at DESC"
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            {
+                **dict(row),
+                "pinned": bool(row["pinned"]),
+                "campaign_ids": json.loads(row["campaign_ids"] or "[]"),
+                "account_ids": json.loads(row["account_ids"] or "[]"),
+            }
+            for row in rows
+        ]
 
     def count(self) -> int:
         with closing(self._connect()) as db, db:
@@ -129,11 +170,19 @@ class WorkspaceStore:
     ) -> Workspace:
         with closing(self._connect()) as db, db:
             db.execute(
-                "INSERT INTO workspaces VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "INSERT INTO workspaces ("
+                "workspace_id, name, template_key, profile, panels, schema_version, "
+                "created_at, updated_at, description, icon, kind, sidebar, pinned, "
+                "campaign_ids, account_ids, mode"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(workspace_id) DO UPDATE SET "
                 "name=excluded.name, template_key=excluded.template_key, "
                 "profile=excluded.profile, panels=excluded.panels, "
-                "schema_version=excluded.schema_version, updated_at=excluded.updated_at",
+                "schema_version=excluded.schema_version, updated_at=excluded.updated_at, "
+                "description=excluded.description, icon=excluded.icon, kind=excluded.kind, "
+                "sidebar=excluded.sidebar, pinned=excluded.pinned, "
+                "campaign_ids=excluded.campaign_ids, account_ids=excluded.account_ids, "
+                "mode=excluded.mode",
                 (
                     workspace.workspace_id,
                     workspace.name,
@@ -145,6 +194,16 @@ class WorkspaceStore:
                     SCHEMA_VERSION,
                     workspace.created_at.isoformat(),
                     workspace.updated_at.isoformat(),
+                    workspace.description,
+                    workspace.icon,
+                    str(workspace.kind),
+                    json.dumps(workspace.sidebar.model_dump(mode="json"))
+                    if workspace.sidebar is not None
+                    else None,
+                    int(workspace.pinned),
+                    json.dumps(list(workspace.campaign_ids)),
+                    json.dumps(list(workspace.account_ids)),
+                    workspace.mode,
                 ),
             )
         if record_version:
@@ -267,6 +326,11 @@ class WorkspaceStore:
             profile=historical.profile,
             template_key=historical.template_key,
             summary=f"duplicated from version {version} of '{historical.name}'",
+            description=historical.description,
+            icon=historical.icon,
+            kind=WorkspaceKind.CLONED,
+            sidebar=historical.sidebar,
+            mode=historical.mode,
         )
 
     def create(
@@ -278,7 +342,20 @@ class WorkspaceStore:
         template_key: str | None = None,
         summary: str = "",
         actor: str = "operator",
+        description: str = "",
+        icon: str = "",
+        kind: WorkspaceKind = WorkspaceKind.USER_CREATED,
+        sidebar: Sidebar | None = None,
+        mode: str = "",
+        campaign_ids: tuple[str, ...] = (),
+        account_ids: tuple[str, ...] = (),
     ) -> Workspace:
+        """Register a workspace.
+
+        ``sidebar`` left as ``None`` with a ``mode`` set means "the rail this
+        mode always had": the workspace opens familiar and is editable from
+        there. ``None`` with no mode means an empty rail the operator fills.
+        """
         now = datetime.now(UTC)
         workspace = Workspace(
             workspace_id=new_workspace_id(name, now),
@@ -288,6 +365,13 @@ class WorkspaceStore:
             template_key=template_key,
             created_at=now,
             updated_at=now,
+            description=description,
+            icon=icon,
+            kind=kind,
+            sidebar=sidebar,
+            mode=mode,
+            campaign_ids=campaign_ids,
+            account_ids=account_ids,
         )
         return self.save(workspace, summary=summary or "created", actor=actor)
 
@@ -315,6 +399,12 @@ class WorkspaceStore:
         return bool(removed)
 
     def clone(self, workspace_id: str, name: str) -> Workspace:
+        """Copy a workspace whole — panels, rail, links and all.
+
+        Marked ``CLONED`` so a duplicate of a built-in workspace is not itself
+        a built-in one: "restore the default layout" must not offer to overwrite
+        an arrangement the operator built by copying.
+        """
         source = self.get(workspace_id)
         if source is None:
             raise KeyError(workspace_id)
@@ -324,6 +414,13 @@ class WorkspaceStore:
             profile=source.profile,
             template_key=source.template_key,
             summary=f"duplicated from '{source.name}'",
+            description=source.description,
+            icon=source.icon,
+            kind=WorkspaceKind.CLONED,
+            sidebar=source.sidebar,
+            mode=source.mode,
+            campaign_ids=source.campaign_ids,
+            account_ids=source.account_ids,
         )
 
     # ── which one is open ────────────────────────────────────────────────────
@@ -494,6 +591,7 @@ def _describe(workspace: Workspace) -> str:
 
 def _to_workspace(row: dict[str, Any]) -> Workspace:
     profile = row.get("profile")
+    raw_sidebar = row.get("sidebar")
     return Workspace(
         workspace_id=str(row["workspace_id"]),
         name=str(row["name"]),
@@ -502,4 +600,14 @@ def _to_workspace(row: dict[str, Any]) -> Workspace:
         panels=tuple(Panel.model_validate(item) for item in json.loads(row["panels"])),
         created_at=datetime.fromisoformat(str(row["created_at"])),
         updated_at=datetime.fromisoformat(str(row["updated_at"])),
+        description=str(row.get("description") or ""),
+        icon=str(row.get("icon") or ""),
+        kind=WorkspaceKind(str(row.get("kind") or WorkspaceKind.USER_CREATED)),
+        # `None` and an empty sidebar are different: the first falls back to the
+        # mode's rail, the second is a rail the operator emptied on purpose.
+        sidebar=sidebar_from(json.loads(raw_sidebar)) if raw_sidebar else None,
+        pinned=bool(row.get("pinned") or 0),
+        campaign_ids=tuple(json.loads(row.get("campaign_ids") or "[]")),
+        account_ids=tuple(json.loads(row.get("account_ids") or "[]")),
+        mode=str(row.get("mode") or ""),
     )

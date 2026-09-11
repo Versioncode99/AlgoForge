@@ -262,6 +262,13 @@ _AI = ModeDescriptor(
         Section("missions", "Automation", "Objectives, declared steps, run verbatim",
                 "Work", ()),
         Section(
+            "research_control",
+            "Research Control",
+            "Every campaign, every agent, and what the engine is actually doing",
+            "Autonomous",
+            (),
+        ),
+        Section(
             "campaigns",
             "Research Campaign",
             "The objective, the frontier and what it is doing now",
