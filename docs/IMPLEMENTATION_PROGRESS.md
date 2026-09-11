@@ -163,7 +163,7 @@ HTTP routes. There is deliberately no AI-only path.
 
 ## Phase 8 — Tests, integration campaign, visual QA, documentation ✅
 
-- **123 new Python tests** across nine modules, plus two added to the director's.
+- **134 new Python tests** across ten modules, plus two added to the director's.
 - **Integration:** two campaigns driven end to end through the real engine,
   synchronously, with their own crews, journals, frontiers and claims; both
   survive a process restart and resume.

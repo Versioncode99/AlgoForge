@@ -2,7 +2,7 @@
 
 **Branch:** `claude/nifty-ritchie-1rf1tk`
 **Baseline:** `2156413`
-**Scope:** 44 files, +10,845 / −155, of which 24 are new.
+**Scope:** 45 files, of which 25 are new.
 
 ---
 
@@ -28,7 +28,7 @@ constraints, and moves navigation from the mode to the workspace. It adds no
 capability to the research layer that could reach a verdict, a gate, a risk limit
 or an order, and the G0–G13 ladder is byte-identical to the baseline.
 
-**Verification:** full Python suite green (123 new tests among them), 86 web
+**Verification:** full Python suite green (134 new tests among them), 86 web
 tests green, ruff clean, mypy strict clean across 184 source files, and visual QA
 at four viewport widths against a live API with a running engine.
 
@@ -244,7 +244,7 @@ field a credential could occupy. `forge.research` imports nothing from
 
 ## 19. Tests
 
-**123 new Python tests** across nine modules (counts are what pytest collects):
+**134 new Python tests** across ten modules (counts are what pytest collects):
 
 | Module | Tests | What they pin |
 | --- | --- | --- |
@@ -257,6 +257,7 @@ field a credential could occupy. `forge.research` imports nothing from
 | `api/test_multi_campaign.py` | 10 | Two campaigns end to end, through the real engine. |
 | `api/test_engine_runtime.py` | 9 | Per-kind accounting; the ledger; the watchdog. |
 | `research/test_boundaries.py` | 8 | What the research layer cannot import or construct. |
+| `api/test_campaign_lifecycle_api.py` | 11 | Create, duplicate, archive, prioritise, export, deploy — over HTTP. |
 
 Plus two added to `tests/api/test_director.py`: one pinning that a completed
 campaign keeps saying so, and one pinning that a family proposal the gate refuses
@@ -320,7 +321,7 @@ stops their agents, and releases every lapsed claim.
 
 ## 25. Exact files changed
 
-**New (24):**
+**New (25):**
 
 ```
 packages/forge/research/runtime.py          packages/forge/research/skips.py
