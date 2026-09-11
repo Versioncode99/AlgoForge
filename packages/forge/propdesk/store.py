@@ -35,6 +35,9 @@ from pathlib import Path
 from typing import Any
 
 from forge.propdesk.allocation import Allocation, AllocationChange, AllocationConstraints
+from forge.propdesk.audit import ConsequentialRecord
+from forge.propdesk.autonomy import AutonomyLevel, DeploymentDecision
+from forge.propdesk.consent import Acknowledgement, DisclosureKey
 from forge.propdesk.copy import CopyGroup
 from forge.propdesk.credentials import CredentialRecord
 from forge.propdesk.desk import DeskDecision
@@ -42,8 +45,13 @@ from forge.propdesk.identity import Account, BrokerConnection
 from forge.propdesk.news import EconomicEvent, NewsPolicy
 from forge.propdesk.policy import PropProgramPolicy
 from forge.propdesk.reconcile import ReconciliationReport
+from forge.propdesk.risk import RiskSettings
+from forge.propdesk.scaling import RiskProposal, ScalingState
 
-SCHEMA_VERSION = 1
+#: Bumped when the schema gains a table. Every statement is `IF NOT EXISTS`, so
+#: an older database gains the new tables on the next open rather than needing a
+#: migration; the number is here so a reader can tell which shape they have.
+SCHEMA_VERSION = 2
 
 
 class PropDeskStore:
@@ -141,6 +149,70 @@ class PropDeskStore:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+
+                -- Risk configuration. One row per account, and a separate
+                -- append-only table for every proposal the scaler produced, so
+                -- "why is my size different from yesterday" is answerable from
+                -- the record rather than by re-deriving it against state that
+                -- has since moved.
+                CREATE TABLE IF NOT EXISTS risk_settings (
+                    account_uid TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS risk_state (
+                    account_uid TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS autonomy (
+                    account_uid TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                -- Append-only from here down. No UPDATE, no DELETE.
+                CREATE TABLE IF NOT EXISTS risk_proposals (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_uid TEXT NOT NULL,
+                    at TEXT NOT NULL,
+                    changed INTEGER NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS risk_proposals_by_account
+                    ON risk_proposals(account_uid, at DESC);
+
+                CREATE TABLE IF NOT EXISTS deployment_decisions (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_uid TEXT NOT NULL,
+                    strategy_id TEXT NOT NULL,
+                    at TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS deployment_decisions_by_time
+                    ON deployment_decisions(at DESC);
+
+                CREATE TABLE IF NOT EXISTS acknowledgements (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    disclosure_key TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    account_uid TEXT NOT NULL,
+                    at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS acknowledgements_by_key
+                    ON acknowledgements(disclosure_key, at DESC);
+
+                CREATE TABLE IF NOT EXISTS consequential_audit (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    at TEXT NOT NULL,
+                    account_uid TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS consequential_audit_by_time
+                    ON consequential_audit(at DESC);
                 """
             )
             db.execute(
@@ -496,6 +568,207 @@ class PropDeskStore:
         raw = self._setting("owner_attestation")
         return "" if raw is None else str(raw)
 
+    # ── risk configuration, and every proposal it produced ───────────────────
+    def save_risk_settings(self, settings: RiskSettings) -> RiskSettings:
+        self._upsert(
+            "risk_settings",
+            "account_uid",
+            settings.account_uid,
+            settings.model_dump(mode="json"),
+            stamp="updated_at",
+        )
+        return settings
+
+    def risk_settings(self, account_uid: str) -> RiskSettings | None:
+        row = self._one("risk_settings", "account_uid", account_uid)
+        return None if row is None else RiskSettings.model_validate(row)
+
+    def all_risk_settings(self) -> tuple[RiskSettings, ...]:
+        return tuple(
+            RiskSettings.model_validate(payload)
+            for payload in self._all("risk_settings", "updated_at DESC")
+        )
+
+    def save_scaling_state(self, state: ScalingState) -> ScalingState:
+        self._upsert(
+            "risk_state",
+            "account_uid",
+            state.account_uid,
+            state.model_dump(mode="json"),
+            stamp="updated_at",
+        )
+        return state
+
+    def scaling_state(self, account_uid: str) -> ScalingState | None:
+        row = self._one("risk_state", "account_uid", account_uid)
+        return None if row is None else ScalingState.model_validate(row)
+
+    def record_proposal(self, proposal: RiskProposal) -> RiskProposal:
+        """Append one risk evaluation. There is no way to amend it.
+
+        Proposals that changed nothing are recorded too. "Nothing moved, and
+        here is what was measured" is the answer to half the questions an
+        operator asks of this screen, and a log of only the changes cannot give
+        it.
+        """
+        with closing(self._connect()) as db, db:
+            db.execute(
+                "INSERT INTO risk_proposals (account_uid, at, changed, payload) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    proposal.account_uid,
+                    proposal.at.astimezone(UTC).isoformat(),
+                    int(proposal.changed),
+                    json.dumps(proposal.as_dict()),
+                ),
+            )
+        return proposal
+
+    def proposals(
+        self, account_uid: str | None = None, limit: int = 100, *, changed_only: bool = False
+    ) -> tuple[dict[str, Any], ...]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if account_uid is not None:
+            clauses.append("account_uid=?")
+            params.append(account_uid)
+        if changed_only:
+            clauses.append("changed=1")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, min(limit, 2000)))
+        with closing(self._connect()) as db, db:
+            rows = db.execute(
+                f"SELECT payload FROM risk_proposals {where} "
+                "ORDER BY at DESC, sequence DESC LIMIT ?",
+                tuple(params),
+            ).fetchall()
+        return tuple(json.loads(row["payload"]) for row in rows)
+
+    # ── autonomy ─────────────────────────────────────────────────────────────
+    def save_autonomy(self, account_uid: str, level: AutonomyLevel) -> AutonomyLevel:
+        self._upsert(
+            "autonomy",
+            "account_uid",
+            account_uid,
+            {"account_uid": account_uid, "level": level.value},
+            stamp="updated_at",
+        )
+        return level
+
+    def autonomy(self, account_uid: str) -> AutonomyLevel:
+        """The level for one account, defaulting to OFF.
+
+        A missing row is OFF rather than an error: an account nobody has
+        configured has not opted into autonomous deployment, and the safe
+        reading of silence is the one that does nothing.
+        """
+        row = self._one("autonomy", "account_uid", account_uid)
+        return AutonomyLevel.OFF if row is None else AutonomyLevel(row["level"])
+
+    def all_autonomy(self) -> dict[str, AutonomyLevel]:
+        return {
+            payload["account_uid"]: AutonomyLevel(payload["level"])
+            for payload in self._all("autonomy", "updated_at DESC")
+        }
+
+    def record_deployment(self, decision: DeploymentDecision) -> DeploymentDecision:
+        with closing(self._connect()) as db, db:
+            db.execute(
+                "INSERT INTO deployment_decisions "
+                "(account_uid, strategy_id, at, outcome, payload) VALUES (?, ?, ?, ?, ?)",
+                (
+                    decision.account_uid,
+                    decision.strategy_id,
+                    decision.at.astimezone(UTC).isoformat(),
+                    decision.outcome.value,
+                    json.dumps(decision.as_dict()),
+                ),
+            )
+        return decision
+
+    def deployments(
+        self, account_uid: str | None = None, limit: int = 100
+    ) -> tuple[dict[str, Any], ...]:
+        with closing(self._connect()) as db, db:
+            if account_uid is None:
+                rows = db.execute(
+                    "SELECT payload FROM deployment_decisions "
+                    "ORDER BY at DESC, sequence DESC LIMIT ?",
+                    (max(1, min(limit, 2000)),),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT payload FROM deployment_decisions WHERE account_uid=? "
+                    "ORDER BY at DESC, sequence DESC LIMIT ?",
+                    (account_uid, max(1, min(limit, 2000))),
+                ).fetchall()
+        return tuple(json.loads(row["payload"]) for row in rows)
+
+    # ── consent ──────────────────────────────────────────────────────────────
+    def record_acknowledgement(self, acknowledgement: Acknowledgement) -> Acknowledgement:
+        with closing(self._connect()) as db, db:
+            db.execute(
+                "INSERT INTO acknowledgements "
+                "(disclosure_key, version, account_uid, at, payload) VALUES (?, ?, ?, ?, ?)",
+                (
+                    acknowledgement.key.value,
+                    acknowledgement.version,
+                    acknowledgement.account_uid,
+                    acknowledgement.acknowledged_at.astimezone(UTC).isoformat(),
+                    json.dumps(acknowledgement.as_dict()),
+                ),
+            )
+        return acknowledgement
+
+    def acknowledgements(
+        self, key: DisclosureKey | None = None
+    ) -> tuple[Acknowledgement, ...]:
+        with closing(self._connect()) as db, db:
+            if key is None:
+                rows = db.execute(
+                    "SELECT payload FROM acknowledgements ORDER BY at DESC, sequence DESC"
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT payload FROM acknowledgements WHERE disclosure_key=? "
+                    "ORDER BY at DESC, sequence DESC",
+                    (key.value,),
+                ).fetchall()
+        return tuple(Acknowledgement.model_validate(json.loads(row["payload"])) for row in rows)
+
+    # ── the consequential audit trail ────────────────────────────────────────
+    def record_audit(self, record: ConsequentialRecord) -> ConsequentialRecord:
+        with closing(self._connect()) as db, db:
+            db.execute(
+                "INSERT INTO consequential_audit (at, account_uid, action, payload) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    record.at.astimezone(UTC).isoformat(),
+                    record.account_uid,
+                    record.action.value,
+                    json.dumps(record.as_dict()),
+                ),
+            )
+        return record
+
+    def audit(
+        self, account_uid: str | None = None, limit: int = 200
+    ) -> tuple[dict[str, Any], ...]:
+        with closing(self._connect()) as db, db:
+            if account_uid is None:
+                rows = db.execute(
+                    "SELECT payload FROM consequential_audit "
+                    "ORDER BY at DESC, sequence DESC LIMIT ?",
+                    (max(1, min(limit, 2000)),),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT payload FROM consequential_audit WHERE account_uid=? "
+                    "ORDER BY at DESC, sequence DESC LIMIT ?",
+                    (account_uid, max(1, min(limit, 2000))),
+                ).fetchall()
+        return tuple(json.loads(row["payload"]) for row in rows)
+
     def save_owner_attestation(self, attested_by: str) -> str:
         self._save_setting("owner_attestation", attested_by)
         return attested_by
@@ -571,6 +844,12 @@ class PropDeskStore:
             "desk_decisions",
             "reconciliations",
             "calendar_events",
+            "risk_settings",
+            "risk_proposals",
+            "autonomy",
+            "deployment_decisions",
+            "acknowledgements",
+            "consequential_audit",
         )
         with closing(self._connect()) as db, db:
             return {

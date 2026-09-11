@@ -297,3 +297,135 @@ def test_opening_an_existing_database_does_not_lose_anything(store) -> None:
     store.save_group(group())
     reopened = PropDeskStore(store.path)
     assert reopened.group("g1") is not None
+
+
+class TestRiskAndAutonomyRecords:
+    """The phase-2 tables: configuration that is edited, and a record that is not."""
+
+    def store(self, tmp_path):
+        from forge.propdesk.store import PropDeskStore
+
+        return PropDeskStore(tmp_path / "desk.db")
+
+    def settings(self):
+        from forge.propdesk.risk import ManualRisk, RiskMode, RiskSettings
+
+        return RiskSettings(
+            account_uid="acct-1",
+            mode=RiskMode.MANUAL,
+            manual=ManualRisk(risk_fraction=0.1, max_contracts=2),
+        )
+
+    def test_risk_settings_round_trip(self, tmp_path) -> None:
+        store = self.store(tmp_path)
+        saved = store.save_risk_settings(self.settings())
+        assert store.risk_settings("acct-1") == saved
+        assert store.all_risk_settings() == (saved,)
+
+    def test_an_account_with_no_settings_reads_as_none_rather_than_a_default(
+        self, tmp_path
+    ) -> None:
+        # A default here would be a risk configuration nobody chose.
+        assert self.store(tmp_path).risk_settings("nobody") is None
+
+    def test_autonomy_defaults_to_off_for_an_unconfigured_account(self, tmp_path) -> None:
+        from forge.propdesk.autonomy import AutonomyLevel
+
+        assert self.store(tmp_path).autonomy("nobody") is AutonomyLevel.OFF
+
+    def test_autonomy_round_trips(self, tmp_path) -> None:
+        from forge.propdesk.autonomy import AutonomyLevel
+
+        store = self.store(tmp_path)
+        store.save_autonomy("acct-1", AutonomyLevel.APPROVAL_REQUIRED)
+        assert store.autonomy("acct-1") is AutonomyLevel.APPROVAL_REQUIRED
+        assert store.all_autonomy() == {"acct-1": AutonomyLevel.APPROVAL_REQUIRED}
+
+    def test_proposals_that_changed_nothing_are_recorded_too(self, tmp_path) -> None:
+        # "Nothing moved, and here is what was measured" is the answer to half
+        # the questions this screen is asked.
+        from datetime import UTC, datetime
+
+        from forge.propdesk.risk import RiskMode
+        from forge.propdesk.scaling import Direction, RiskProposal
+
+        store = self.store(tmp_path)
+        held = RiskProposal(
+            account_uid="acct-1",
+            mode=RiskMode.ADAPTIVE,
+            at=datetime(2026, 9, 11, tzinfo=UTC),
+            current_fraction=0.1,
+            proposed_fraction=0.1,
+            applied_fraction=0.1,
+            direction=Direction.HOLD,
+        )
+        store.record_proposal(held)
+        assert len(store.proposals("acct-1")) == 1
+        assert store.proposals("acct-1", changed_only=True) == ()
+
+    def test_the_risk_proposal_table_has_no_update_or_delete(self, tmp_path) -> None:
+        store = self.store(tmp_path)
+        assert not hasattr(store, "update_proposal")
+        assert not hasattr(store, "delete_proposal")
+
+    def test_an_audit_record_refuses_to_carry_anything_shaped_like_a_secret(
+        self, tmp_path
+    ) -> None:
+        from forge.propdesk.audit import AuditAction, ConsequentialRecord
+        from forge.propdesk.credentials import REDACTED
+
+        store = self.store(tmp_path)
+        store.record_audit(
+            ConsequentialRecord(
+                action=AuditAction.RISK_MODE_CHANGED,
+                account_uid="acct-1",
+                previous={"mode": "manual", "api_key": "sk-live-should-never-appear"},
+                current={"mode": "adaptive", "nested": {"password": "hunter2"}},
+            )
+        )
+        raw = (store.path).read_bytes()
+        assert b"sk-live-should-never-appear" not in raw
+        assert b"hunter2" not in raw
+        recorded = store.audit("acct-1")[0]
+        assert recorded["previous"]["api_key"] == REDACTED
+        assert recorded["current"]["nested"]["password"] == REDACTED
+
+    def test_acknowledgements_are_appended_and_read_back_by_key(self, tmp_path) -> None:
+        from forge.propdesk.consent import DISCLOSURES, Acknowledgement, DisclosureKey
+
+        store = self.store(tmp_path)
+        disclosure = DISCLOSURES[DisclosureKey.COPY_TRADING]
+        store.record_acknowledgement(
+            Acknowledgement(
+                key=DisclosureKey.COPY_TRADING,
+                version=disclosure.version,
+                acknowledged_by="operator",
+                accepted=disclosure.acknowledgements,
+            )
+        )
+        assert len(store.acknowledgements(DisclosureKey.COPY_TRADING)) == 1
+        assert store.acknowledgements(DisclosureKey.AI_RISK_MANAGEMENT) == ()
+
+    def test_deployment_decisions_are_appended_with_their_outcome(self, tmp_path) -> None:
+        from forge.propdesk.autonomy import AutonomyLevel, DeploymentFacts, evaluate
+
+        store = self.store(tmp_path)
+        decision = evaluate(
+            DeploymentFacts(strategy_id="s1", account_uid="acct-1"), level=AutonomyLevel.OFF
+        )
+        store.record_deployment(decision)
+        recorded = store.deployments("acct-1")
+        assert len(recorded) == 1
+        assert recorded[0]["outcome"] == "blocked"
+
+    def test_counts_include_every_phase_two_table(self, tmp_path) -> None:
+        counts = self.store(tmp_path).counts()
+        for table in (
+            "risk_settings",
+            "risk_proposals",
+            "autonomy",
+            "deployment_decisions",
+            "acknowledgements",
+            "consequential_audit",
+        ):
+            assert counts[table] == 0
