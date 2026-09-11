@@ -10,7 +10,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from forge.research.skips import (
     REFUSED_BY_DEFAULT,
     NoveltyLevel,

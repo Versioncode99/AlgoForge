@@ -8,7 +8,6 @@ which that boolean said RUNNING and nothing was happening.
 from __future__ import annotations
 
 import pytest
-
 from forge.research.runtime import (
     DEAD_AFTER_SECONDS,
     STALE_AFTER_SECONDS,

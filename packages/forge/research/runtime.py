@@ -602,7 +602,9 @@ class RuntimeMonitor:
             "started_at": _iso(started),
             "last_progress_at": _iso(progress),
             "seconds_without_progress": (
-                None if progress is None and started is None else round(now - (progress or started or now), 1)
+                None
+                if progress is None and started is None
+                else round(now - (progress or started or now), 1)
             ),
             "workers": self.workers(),
             "stale_workers": self.stale_workers(now=now),

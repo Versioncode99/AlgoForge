@@ -49,6 +49,7 @@ const ICONS: Record<string, typeof Radar> = {
   activity: Activity,
   missions: PlaySquare,
   campaigns: Compass,
+  research_control: Radar,
   pipeline: Workflow,
   // hedge fund
   fund: PieChart,

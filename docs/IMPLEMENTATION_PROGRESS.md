@@ -75,3 +75,92 @@ in `types.ts`.
 ## Next
 
 Phase 4 — multi-campaign research fabric.
+
+## Phase 4 — Multi-campaign research fabric ✅
+
+**The constraint that was removed, and why it was safe to remove it.**
+`CampaignStore.set_status` refused a second running campaign on the stated
+grounds that two would "consume each other's burn-once holdout". That was not
+true of the code: `ResearchLedger` is keyed by *strategy lineage*, and two
+campaigns produce different strategies and therefore different lineages. What
+they genuinely shared was the duplicate-claim namespace in `Experiments`.
+
+- `Experiments` gains a `campaign_id` **column** and includes it in the claim
+  identity when set. Two campaigns can now ask the same question and each
+  establish its own evidence.
+- The **trial count is deliberately not partitioned**: `Experiments.count(scope)`
+  stays dataset-wide, because every trial run against this series is a trial
+  whoever ran it. Narrowing it per campaign would lower the Deflated Sharpe's
+  best-of-N hurdle exactly as more campaigns searched the same data.
+- `CampaignStore.running()` replaces `active()`; `duplicate`, `archive`,
+  `restore`, `prioritise`, `rename`, `set_agent_target` added. A duplicate
+  copies **configuration only** — never progress, never findings.
+- `ResearchDirector` is now one-per-engine serving **any number** of campaigns.
+  Per-campaign state (`allocation`, `topics`, adapt cursor) moved into
+  `_CampaignState`; the campaign a thread is serving is a **thread-local**, so
+  forty journal writes record against the right campaign without being passed it.
+- **Resumability bug found and fixed by the restart test:** `_catalog_version`
+  hashed *all* of `TEMPLATES`, which the director adds to as it composes. Every
+  restart after a campaign generated a template therefore started a fresh
+  experiment scope and re-ran everything. It now hashes `SHIPPED_TEMPLATE_KEYS`.
+
+**New:** `packages/forge/research/orchestration.py` — `ResearchOrchestrator`
+deals workers to campaigns by `priority * health`, where health is observed
+rather than declared. Every running campaign keeps at least one worker, because
+a campaign starved to zero can never demonstrate that it recovered.
+
+## Phase 5 — Multi-agent roles, leases and coordination ✅
+
+**New:** `packages/forge/research/agents.py`
+
+- `AgentRole` — 10 roles (DISCOVERY, LITERATURE, FEATURE, HYPOTHESIS,
+  FALSIFICATION, REGIME, ROBUSTNESS, VALIDATION, REVIEWER, SPECIALIST), each
+  with a stated purpose and preferred allocation buckets.
+- `AgentState` — 9 states; `ResearchAgent` persisted with heartbeat, progress
+  mark, claim, compute budget and error count.
+- `AgentRegistry.claim` — leases with an expiry, so an agent that dies releases
+  its work without a process restart. A deliberate replica is a separate claim
+  with `replica_of` set, so "we ran it twice" can never read as two findings.
+- `capacity_for` — honest capacity. Asking for 32 on a 4-core machine returns 8
+  and a sentence explaining it, rather than 32 rows that never do anything.
+- Roles **bias** the bucket draw and can never veto one: four falsification
+  agents must not silently mean a campaign that never proposes anything.
+
+## Phase 6 — Composable workspaces and custom sidebar ✅
+
+**New:** `packages/forge/workstation/sidebar.py`
+
+- `CATALOGUE` — the **union** of every destination any mode offers (49 of them),
+  derived from the mode manifests rather than written again.
+- `Sidebar` / `SidebarGroup` / `SidebarItem` with add, remove, move, reorder,
+  rename, group, collapse, pin, hide.
+- `default_sidebar_for(mode)` — the four built-in rails, unchanged and now
+  editable.
+- **Bug found by the bounds test:** every mutation used `model_copy`, which in
+  pydantic v2 does **not** re-run field validators. The duplicate-route check
+  and both ceilings only ran at construction, so a sidebar could be edited into
+  a shape it could not have been created in. All mutations now rebuild.
+
+`Workspace` gains `description`, `icon`, `kind` (BUILT_IN/USER_CREATED/CLONED),
+`sidebar`, `pinned`, `campaign_ids`, `account_ids`, `mode` — migrated by
+ALTER TABLE, so existing arrangements survive. `rail()` falls back to the mode's
+sidebar, which is how a workspace saved before this still opens with navigation.
+
+18 new actions in the **shared** registry (`list_sidebar_destinations`,
+`add_sidebar_item`, …, `link_campaign_to_workspace`, `pin_workspace`) plus their
+HTTP routes. There is deliberately no AI-only path.
+
+## Phase 7 — Research Control Center and agent monitor ✅
+
+- `GET /campaigns/control-center` — campaigns, allocation, agents, skips,
+  validation accounting and frontier totals in one payload.
+- `GET /campaigns/{id}/agents`, `POST` to deploy, `DELETE` to remove.
+- `GET /campaigns/{id}/skips` — the drill-down behind the headline number.
+- `GET /engine/diagnostics` — "why isn't my research running?" without a terminal.
+- Frontend: `views/ResearchControl.tsx`, `research.ts`, `workspaces.ts`,
+  `components/Sidebar.tsx`, `components/WorkspaceSwitcher.tsx`,
+  `components/RuntimeState.tsx` and three stylesheets.
+
+## Next
+
+Phase 8 — integration tests, visual QA, performance, final documentation.

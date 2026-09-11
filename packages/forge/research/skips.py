@@ -323,7 +323,7 @@ class SkipLedger:
             db.execute("CREATE INDEX IF NOT EXISTS skips_kind ON skips(campaign_id, kind)")
             db.execute("CREATE INDEX IF NOT EXISTS skips_level ON skips(campaign_id, level)")
             db.execute("CREATE INDEX IF NOT EXISTS skips_time ON skips(created_at)")
-            db.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
+            db.execute(f"PRAGMA user_version = {SCHEMA_VERSION:d}")
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=30.0)

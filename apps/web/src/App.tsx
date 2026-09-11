@@ -15,6 +15,9 @@ import { loadAppearance } from './theme'
 import type { ActivityEvent, StrategyListItem, Summary } from './types'
 import { ModeSelect } from './views/ModeSelect'
 import { OverviewView } from './views/Overview'
+import { WorkspaceSidebar } from './components/Sidebar'
+import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
+import { useActiveWorkspace } from './workspaces'
 
 /* The shell, scoped to a mode.
  *
@@ -49,6 +52,7 @@ const StrategyChartView = lazy(() => import('./views/StrategyChartView').then(m 
 const ResearchLabWorkbench = lazy(() => import('./views/ResearchLabView').then(m => ({ default: m.ResearchLabWorkbench })))
 const ResearchMemoryView = lazy(() => import('./views/ResearchMemory').then(m => ({ default: m.ResearchMemoryView })))
 const ResearchCampaignView = lazy(() => import('./views/ResearchCampaign').then(m => ({ default: m.ResearchCampaignView })))
+const ResearchControlView = lazy(() => import('./views/ResearchControl').then(m => ({ default: m.ResearchControlView })))
 const WorkspaceView = lazy(() => import('./views/Workspace').then(m => ({ default: m.WorkspaceView })))
 const PropAccountView = lazy(() => import('./views/PropAccount').then(m => ({ default: m.PropAccountView })))
 const PropDeskView = lazy(() => import('./views/PropDesk').then(m => ({ default: m.PropDeskView })))
@@ -133,6 +137,7 @@ function viewFor(mode: ModeKey, route: string): React.ReactNode {
     agents: <AgentCommandView />,
     missions: <MissionsView />,
     campaigns: <ResearchCampaignView />,
+    research_control: <ResearchControlView />,
     pipeline: <PipelineView />,
     activity: <OperatingLogView />,
     settings: <SettingsView />,
@@ -157,6 +162,13 @@ export function App() {
   const [railOpen, setRailOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [eventsOpen, setEventsOpen] = useState(false)
+  const [switcherOpen, setSwitcherOpen] = useState(false)
+  /* The active workspace, for its rail. Fetched here rather than inside the
+   * sidebar so the shell can decide *which* rail to draw before drawing one —
+   * rendering the mode's and then replacing it is a visible flash on every
+   * page load. */
+  const activeWorkspace = useActiveWorkspace()
+  const railWorkspace = activeWorkspace.data ?? null
 
   const sections = useMemo<Section[]>(() => session.data?.descriptor.sections ?? [], [session.data])
   const groups = useMemo(() => {
@@ -190,13 +202,20 @@ export function App() {
    * screen in front of the reader is never right, so it waits. */
   useEffect(() => {
     if (!sections.length || !mode || session.isFetching) return
-    const known = sections.some((section) => section.route === route)
+    /* A custom rail can legitimately point at a destination this mode's
+     * manifest does not list — that is the entire purpose of it. Correcting
+     * against the manifest would bounce somebody straight back out of the
+     * research screen they just added to their prop workspace. */
+    const inRail = railWorkspace?.sidebar?.groups?.some(
+      (group) => group.items.some((item) => item.route === route),
+    )
+    const known = inRail || sections.some((section) => section.route === route)
     if (!known) {
       const first = sections[0].route
       window.history.replaceState(null, '', `#${first}`)
       setRoute(first)
     }
-  }, [sections, route, mode, session.isFetching])
+  }, [sections, route, mode, session.isFetching, railWorkspace])
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
@@ -211,7 +230,7 @@ export function App() {
   }, [])
   // An overlay rail that stays open over the screen it just navigated to is a
   // menu the reader has to dismiss before seeing what they asked for.
-  useEffect(() => { setRailOpen(false) }, [route])
+  useEffect(() => { setRailOpen(false); setSwitcherOpen(false) }, [route])
   const navigate = useCallback((id: string) => { window.location.hash = id }, [])
 
   /* The appearance is loaded here rather than in Settings.
@@ -265,9 +284,31 @@ export function App() {
         <Wordmark />
         <button className="rail-collapse" aria-label={railCollapsed ? 'Expand navigation' : 'Collapse navigation'} onClick={() => setRailCollapsed(value => !value)}>{railCollapsed ? <ChevronRight /> : <ChevronLeft />}</button>
       </div>
-      <nav aria-label={`${descriptor.name} workspace`}>
-        {groups.map(section => <section key={section.group}><h2>{section.group}</h2>{section.items.map(item => { const Icon = sectionIcon(item.route); return <a key={item.route} href={`#${item.route}`} aria-current={route === item.route ? 'page' : undefined} data-label={item.label}><Icon aria-hidden="true" /><span>{item.label}</span></a> })}</section>)}
-      </nav>
+      {/* The rail comes from the *workspace* when it has one of its own, and
+        * from the mode manifest otherwise. That fallback is what keeps every
+        * existing arrangement working: a workspace saved before sidebars were
+        * ownable still opens with the navigation it always had, and becomes
+        * editable the moment somebody changes it. */}
+      {railWorkspace?.sidebar_is_custom ? (
+        <WorkspaceSidebar
+          workspace={railWorkspace}
+          route={route}
+          collapsed={railCollapsed}
+          onRoute={navigate}
+        />
+      ) : (
+        <nav aria-label={`${descriptor.name} workspace`}>
+          {groups.map(section => <section key={section.group}><h2>{section.group}</h2>{section.items.map(item => { const Icon = sectionIcon(item.route); return <a key={item.route} href={`#${item.route}`} aria-current={route === item.route ? 'page' : undefined} data-label={item.label}><Icon aria-hidden="true" /><span>{item.label}</span></a> })}</section>)}
+        </nav>
+      )}
+      <button
+        className="rail-workspaces"
+        aria-expanded={switcherOpen}
+        onClick={() => setSwitcherOpen(open => !open)}
+        title="Switch workspace, or build one. A workspace is an arrangement, not a mode: anything can live in any of them."
+      >
+        <Grid2x2 aria-hidden="true" /><span>Workspaces</span>
+      </button>
       <button className="rail-search" onClick={() => setPaletteOpen(true)}><Search aria-hidden="true" /><span>Search workspace</span><kbd>Ctrl K</kbd></button>
     </aside>
     {railOpen && <button className="rail-scrim" aria-label="Close navigation" onClick={() => setRailOpen(false)} />}
@@ -312,6 +353,12 @@ export function App() {
       <span>{events.data?.length ?? 0} recent events</span>
       <button aria-expanded={eventsOpen} onClick={() => setEventsOpen(value => !value)}><PanelBottomOpen />{eventsOpen ? 'Close event drawer' : 'Open event drawer'}</button>
     </footer>
+    {switcherOpen && (
+      <div className="ws-switcher-layer" role="dialog" aria-label="Workspaces">
+        <button className="ws-switcher-scrim" aria-label="Close workspaces" onClick={() => setSwitcherOpen(false)} />
+        <WorkspaceSwitcher onOpened={() => setSwitcherOpen(false)} />
+      </div>
+    )}
     <EventDrawer events={events.data ?? []} open={eventsOpen} onClose={() => setEventsOpen(false)} />
     <CommandPalette open={paletteOpen} routes={paletteRoutes} strategies={list} onClose={() => setPaletteOpen(false)} onRoute={navigate} />
   </div>
