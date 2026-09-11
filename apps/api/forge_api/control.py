@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any, Literal
@@ -473,6 +474,53 @@ def build_control_router(
         decision = section.get("decision") if section.get("available") else None
         return str(decision) if decision else None
 
+    def desk_evidence(strategy_id: str) -> dict[str, Any]:
+        """What the risk and deployment layers may read about one strategy.
+
+        Every key is derived from an artefact that already exists — the
+        strategy's own spec, its out-of-sample runs, and the validation
+        evidence. Nothing here computes a statistic or fills a gap: a key this
+        cannot establish is simply absent, which the desk reads as unmeasured,
+        which in turn can only ever hold or reduce risk.
+
+        The out-of-sample daily series is the one worth reading closely. It is
+        aggregated from the *trades of out-of-sample runs only*, by the day each
+        trade closed, and it is what the drawdown bootstrap resamples. An
+        in-sample run's trades must never reach it: the whole point of sizing
+        against a bootstrapped drawdown is that the drawdown was not fitted.
+        """
+        from forge_api.strategies import load_evidence
+
+        payload: dict[str, Any] = {}
+        # A strategy with no readable spec has no declared instrument. The
+        # deployment gate reads an absent symbol as unknown, which never passes.
+        with suppress(KeyError, FileNotFoundError, OSError):
+            payload["symbol"] = library.get_spec(strategy_id).symbol
+
+        daily: dict[str, float] = {}
+        for run in store.for_strategy(strategy_id):
+            if run.get("evidence_tier") not in {"TRUTH_OOS", "HOLDOUT", "FORWARD"}:
+                continue
+            for trade in run.get("trades", ()):
+                stamp = str(trade.get("exit_time", ""))[:10]
+                net = trade.get("net_pnl")
+                if not stamp or net is None:
+                    continue
+                daily[stamp] = daily.get(stamp, 0.0) + float(net)
+        if daily:
+            payload["oos_daily_pnl"] = tuple(daily[day] for day in sorted(daily))
+            payload["evidence_tier"] = "TRUTH_OOS"
+
+        evidence = load_evidence(root, strategy_id)
+        if evidence:
+            walk_forward = evidence.get("walk_forward")
+            paths = evidence.get("paths")
+            if isinstance(walk_forward, dict):
+                payload["walk_forward_survives"] = bool(walk_forward.get("survives"))
+            if isinstance(paths, dict):
+                payload["paths_robust"] = bool(paths.get("robust"))
+        return payload
+
     # The Prop Desk. Its store lives in the app-owned data root beside the other
     # databases, and it reads verdicts through `verdict_for` — the same callable
     # the fund uses — so one judge decision serves both.
@@ -480,6 +528,7 @@ def build_control_router(
         store=PropDeskStore(workspace.data / "prop-desk.db"),
         prop_accounts=prop_accounts,
         verdict_for=verdict_for,
+        evidence_for=desk_evidence,
     )
 
     fund = FundService(

@@ -92,7 +92,7 @@ full suite 2029 passing; ruff, mypy and tsc clean.
 
 ## Phase 2 — risk modes, controlled scaling, autonomy and consent
 
-**Status: domain layer complete. API, UI and explanation layers still to come.**
+**Status: domain, explanation and API layers complete. UI still to come.**
 
 Plan: `docs/2026-09-11-risk-autonomy-architecture.md`, written before the code.
 
@@ -144,8 +144,76 @@ fraction). `test_balance_alone_is_not_a_driver` holds §11's headline refusal.
 
 ### What remains in phase 2
 
-API routes and registered actions; the explanation layer (§24–§32); the Prop
-Desk UI panels (§19–§22); visual verification (§35); the security audit (§37).
+The Prop Desk UI panels (§19–§22); visual verification (§35); the security audit
+(§37); the final report (§39).
+
+### Blocked
+
+Nothing.
+
+---
+
+## Phase 3 — explanation and progressive disclosure
+
+**Status: complete** (commit `b75b92d`).
+
+`forge/explain/` — `metrics` (twelve entries, each naming the function that
+computes it and reading its threshold from the module that enforces it), `why`
+(seven closed questions, each declining when it has no state), `preview` (what
+an experiment is about to do, plus data availability), `passport` (the evidence
+for a strategy, composed from five stores, at three depths).
+
+`forge/modes/expertise.py` — Guided / Advanced / Quant, with `ALWAYS_VISIBLE`
+naming what appears at every level: refusals, limitations, unmeasured gates, the
+simulation notice, firm permissions and the disclosures.
+
+`forge/modes/intents.py` — the intent front door, mapped onto registered
+actions. Writing the test found two real bugs: two intents routed a Normal-mode
+operator to a section only AI and Hedge Fund have. Sections are keyed by mode now.
+
+98 tests. Nothing blocked.
+
+---
+
+## Phase 4 — the API surface
+
+**Status: complete.**
+
+### What changed
+
+- `apps/api/forge_api/propdesk.py` — the risk, autonomy, consent, audit and
+  "why" service methods, plus ten new routes. 32 `/api/v1/propdesk` paths.
+- `apps/api/forge_api/actions.py` — ten new registered actions. Six of them
+  write and are `protected`; two evaluate and are `mutating` (they append to the
+  record, the same treatment `propdesk_reconcile` already gets); four read.
+- `apps/api/forge_api/control.py` — `desk_evidence`, one supplier that reads a
+  strategy's spec, its out-of-sample runs and its validation evidence. The
+  out-of-sample daily series is aggregated from the trades of out-of-sample runs
+  only, by the day each closed: an in-sample run's trades must never reach the
+  drawdown bootstrap, since the whole point of sizing against a bootstrapped
+  drawdown is that the drawdown was not fitted.
+- `tests/api/test_mcp_server.py` — four new reads in the expected tool set.
+
+### Two bugs the tests found
+
+1. **Consent was checked after validation.** `RiskSettings` requires a
+   disclosure version for AI_MANAGED, so validating first produced "a version is
+   missing" — true, and useless — instead of "this disclosure has not been
+   acknowledged", which is what the operator has to act on. The service now
+   resolves the acknowledgement and injects the version before validating.
+2. **A recorded proposal could not be read back.** The store held `as_dict()`,
+   whose derived keys `FrozenModel` refuses on the way in, so
+   `why_did_risk_change` could not validate its own record. The row now holds
+   `model_dump`; rendering happens on the way out.
+
+### What was tested
+
+`tests/api/test_propdesk_api.py` — 21 more tests, including one that takes each
+of the four risk-writing actions through `forge.modes.permissions.evaluate` for
+every mode and stance and asserts DENY.
+
+Full `tests/api`, `tests/propdesk`, `tests/modes` and `tests/explain` green;
+ruff and mypy clean across 177 files.
 
 ### Blocked
 

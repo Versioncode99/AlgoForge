@@ -516,3 +516,308 @@ def test_a_desk_action_without_a_service_refuses_by_name() -> None:
     )
     with pytest.raises(ActionError, match="no prop desk is configured"):
         bare.call("propdesk_connections")
+
+
+# ── risk modes, autonomy and consent ─────────────────────────────────────────
+
+
+def oos_series(days: int = 200, seed: int = 5) -> tuple[float, ...]:
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    return tuple(float(x) for x in rng.normal(20.0, 120.0, days))
+
+
+@pytest.fixture
+def rich_service(tmp_path) -> PropDeskService:
+    """A desk with evidence attached, so the risk layer has something to measure."""
+    from forge.propdesk import StrategyHealth
+
+    def health(strategy_id: str) -> StrategyHealth:
+        return StrategyHealth(
+            strategy_id=strategy_id,
+            verdict="PASS" if strategy_id == "judged" else None,
+            oos_sharpe=1.3,
+            oos_trades=140,
+            expected_drawdown_p95=450.0,
+            regimes_covered=("trending",),
+            current_regime="trending",
+        )
+
+    return PropDeskService(
+        store=PropDeskStore(tmp_path / "desk.db"),
+        prop_accounts=PropAccountStore(tmp_path / "prop.db"),
+        verdict_for=lambda strategy_id: "PASS" if strategy_id == "judged" else None,
+        health_for=health,
+        evidence_for=lambda strategy_id: {
+            "symbol": "MNQ",
+            "evidence_tier": "TRUTH_OOS",
+            "walk_forward_survives": True,
+            "paths_robust": True,
+            "oos_daily_pnl": oos_series(),
+        },
+        now=lambda: NOW,
+    )
+
+
+def accept_all(service: PropDeskService, key: str, account_uid: str = "") -> dict:
+    from forge.propdesk.consent import DISCLOSURES, DisclosureKey
+
+    disclosure = DISCLOSURES[DisclosureKey(key)]
+    return service.acknowledge(
+        key=key,
+        accepted=disclosure.acknowledgements,
+        actor="operator",
+        account_uid=account_uid,
+    )
+
+
+def test_the_risk_catalogue_publishes_the_three_promises(client) -> None:
+    payload = data(client.get("/api/v1/propdesk/risk/catalogue"))
+    promises = {item["mode"]: item["promise"] for item in payload["modes"]}
+    assert promises["manual"] == "I decide."
+    assert promises["adaptive"] == "AlgoForge calculates."
+    assert promises["ai_managed"] == "AlgoForge manages within my boundaries."
+
+
+def test_every_prohibition_is_published_with_its_mechanism(client) -> None:
+    payload = data(client.get("/api/v1/propdesk/risk/catalogue"))
+    assert payload["prohibitions"]
+    for item in payload["prohibitions"]:
+        assert item["enforced_by"].startswith("forge.")
+
+
+def test_the_mandatory_gate_list_is_published(client) -> None:
+    payload = data(client.get("/api/v1/propdesk/risk/catalogue"))
+    kinds = {item["kind"] for item in payload["mandatory_gates"]}
+    assert {"validation", "prop_policy", "pretrade", "risk_envelope"} <= kinds
+
+
+def test_manual_risk_can_be_set_and_read_back(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    saved = rich_service.save_risk_settings(
+        {
+            "account_uid": follower,
+            "mode": "manual",
+            "manual": {"risk_fraction": 0.1, "max_contracts": 2},
+        },
+        actor="operator",
+    )
+    assert saved["settings"]["promise"] == "I decide."
+    read = rich_service.risk(follower)["accounts"][0]
+    assert read["settings"]["mode"] == "manual"
+    assert read["autonomy"] == "off"
+
+
+def test_ai_risk_management_is_refused_without_an_acknowledgement(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    with pytest.raises(PropDeskError, match="AI Risk Management"):
+        rich_service.save_risk_settings(
+            {"account_uid": follower, "mode": "ai_managed", "appetite": 50},
+            actor="operator",
+        )
+
+
+def test_ai_risk_management_is_permitted_once_acknowledged(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    accept_all(rich_service, "ai_risk_management")
+    saved = rich_service.save_risk_settings(
+        {
+            "account_uid": follower,
+            "mode": "ai_managed",
+            "appetite": 60,
+            "ai_capabilities": ["position_sizing"],
+        },
+        actor="operator",
+    )
+    assert saved["settings"]["disclosure_version"]
+
+
+def test_acknowledging_only_some_statements_is_refused(rich_service) -> None:
+    with pytest.raises(PropDeskError, match="has to be accepted"):
+        rich_service.acknowledge(
+            key="autonomous_deployment",
+            accepted=("I understand that autonomous deployment can result in financial losses.",),
+            actor="operator",
+        )
+
+
+def test_evaluating_risk_records_a_proposal_and_changes_nothing(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    rich_service.save_risk_settings(
+        {"account_uid": follower, "mode": "adaptive", "appetite": 50}, actor="operator"
+    )
+    before = rich_service.store.scaling_state(follower)
+    result = rich_service.evaluate_risk(follower)
+    assert result["applied"] is False
+    assert rich_service.store.scaling_state(follower) == before
+    assert len(rich_service.store.proposals(follower)) == 1
+
+
+def test_a_proposal_names_every_driver_and_whether_it_was_measured(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    rich_service.save_risk_settings(
+        {"account_uid": follower, "mode": "adaptive", "appetite": 50}, actor="operator"
+    )
+    proposal = rich_service.evaluate_risk(follower)["proposal"]
+    kinds = {driver["kind"] for driver in proposal["drivers"]}
+    assert {"buffer", "strategy_health", "prop_constraint", "evidence"} <= kinds
+    assert proposal["why"]
+
+
+def test_applying_risk_on_a_manual_account_is_refused(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    rich_service.save_risk_settings(
+        {
+            "account_uid": follower,
+            "mode": "manual",
+            "manual": {"risk_fraction": 0.1, "max_contracts": 2},
+        },
+        actor="operator",
+    )
+    result = rich_service.evaluate_risk(follower, apply_change=True)
+    # Manual mode proposes exactly what was configured, so nothing changes and
+    # the refusal never fires. The property under test is that it cannot drift.
+    assert result["proposal"]["applied_fraction"] == 0.1
+
+
+def test_evaluating_an_account_with_no_risk_configuration_is_refused(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    with pytest.raises(PropDeskError, match="Choose a risk mode"):
+        rich_service.evaluate_risk(follower)
+
+
+def test_an_advisory_factor_above_one_is_refused_over_http(rich_service, tmp_path) -> None:
+    from fastapi import FastAPI
+
+    _, _, follower = seeded(rich_service)
+    accept_all(rich_service, "ai_risk_management")
+    rich_service.save_risk_settings(
+        {
+            "account_uid": follower,
+            "mode": "ai_managed",
+            "appetite": 50,
+            "ai_capabilities": ["position_sizing"],
+        },
+        actor="operator",
+    )
+    app = FastAPI()
+    app.include_router(build_propdesk_router(rich_service))
+    response = TestClient(app).post(
+        f"/api/v1/propdesk/risk/{follower}/evaluate", json={"advisory": 1.4}
+    )
+    assert response.status_code == 409
+    assert "never widen" in response.json()["detail"]["reason"]
+
+
+def test_autonomy_is_refused_without_the_deployment_disclosure(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    with pytest.raises(PropDeskError, match="Autonomous Strategy Deployment"):
+        rich_service.set_autonomy(
+            account_uid=follower, level="fully_autonomous", actor="operator"
+        )
+
+
+def test_autonomy_can_always_be_turned_off_without_a_disclosure(rich_service) -> None:
+    # Reducing reach never needs consent.
+    _, _, follower = seeded(rich_service)
+    assert (
+        rich_service.set_autonomy(account_uid=follower, level="off", actor="operator")[
+            "autonomy"
+        ]
+        == "off"
+    )
+
+
+def test_deployment_is_blocked_by_the_absent_live_connector(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    accept_all(rich_service, "autonomous_deployment")
+    rich_service.set_autonomy(
+        account_uid=follower, level="fully_autonomous", actor="operator"
+    )
+    decision = rich_service.evaluate_deployment(strategy_id="judged", account_uid=follower)[
+        "decision"
+    ]
+    assert decision["outcome"] == "blocked"
+    lifecycle = next(gate for gate in decision["gates"] if gate["kind"] == "lifecycle")
+    assert not lifecycle["passed"]
+    assert "live execution is not available" in lifecycle["detail"]
+
+
+def test_a_deployment_evaluation_is_recorded_in_the_audit_trail(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    rich_service.evaluate_deployment(strategy_id="judged", account_uid=follower)
+    records = rich_service.audit(account_uid=follower)["records"]
+    assert records
+    assert records[0]["action"] in {"deployment_evaluated", "deployment_blocked"}
+    assert "no live connector" in records[0]["execution_state"]
+
+
+def test_a_risk_mode_change_is_recorded_with_both_sides(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    rich_service.save_risk_settings(
+        {
+            "account_uid": follower,
+            "mode": "manual",
+            "manual": {"risk_fraction": 0.1, "max_contracts": 2},
+        },
+        actor="operator",
+    )
+    rich_service.save_risk_settings(
+        {"account_uid": follower, "mode": "adaptive", "appetite": 40}, actor="operator"
+    )
+    records = rich_service.audit(account_uid=follower)["records"]
+    change = next(item for item in records if item["action"] == "risk_mode_changed")
+    assert change["previous"]["mode"] == "manual"
+    assert change["current"]["mode"] == "adaptive"
+
+
+def test_why_declines_when_nothing_has_been_recorded(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    answer = rich_service.why(question="why_did_risk_change", account_uid=follower)["answer"]
+    assert answer["answered"] is False
+    assert answer["unavailable"]
+
+
+def test_why_answers_from_the_recorded_proposal(rich_service) -> None:
+    _, _, follower = seeded(rich_service)
+    rich_service.save_risk_settings(
+        {"account_uid": follower, "mode": "adaptive", "appetite": 50}, actor="operator"
+    )
+    rich_service.evaluate_risk(follower)
+    answer = rich_service.why(question="why_did_risk_change", account_uid=follower)["answer"]
+    assert answer["answered"] is True
+    assert answer["points"]
+
+
+def test_an_unknown_question_is_refused_with_the_known_set(rich_service) -> None:
+    with pytest.raises(PropDeskError, match="why_did_risk_change"):
+        rich_service.why(question="why_am_i_not_rich")
+
+
+def test_the_risk_writing_actions_are_denied_to_ai_in_every_mode(tmp_path, monkeypatch) -> None:
+    """The containment claim, asserted against the registry rather than trusted."""
+    monkeypatch.setenv("ALGOFORGE_VAULT", str(tmp_path / "workspace"))
+    from forge_api.main import create_app
+
+    registry = create_app(tmp_path / "risk.db").state.actions
+    for name in (
+        "propdesk_set_risk",
+        "propdesk_apply_risk",
+        "propdesk_acknowledge",
+        "propdesk_set_autonomy",
+    ):
+        action = registry._registry[name]
+        assert action.protected, f"{name} is not protected"
+        facts = ActionFacts(
+            name=name,
+            mutating=action.mutating,
+            risk=action.risk.value,
+            protected=action.protected,
+        )
+        for mode in MODE_ORDER:
+            for stance in (None, Stance.HUMAN_IN_THE_LOOP, Stance.AUTONOMOUS):
+                if stance is not None and mode is not WorkspaceMode.HEDGE_FUND:
+                    continue
+                ruling = evaluate(facts, actor=Actor.AI, mode=mode, stance=stance)
+                assert ruling.ruling is Ruling.DENY, f"{name} reachable in {mode}/{stance}"

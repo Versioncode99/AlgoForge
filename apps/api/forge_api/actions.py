@@ -163,6 +163,25 @@ class Action:
         }
 
 
+def _advisory(value: Any) -> float:
+    """An advisory multiplier, refused rather than clamped when out of range.
+
+    A caller passing 1.4 has misunderstood what this parameter is — the advisory
+    layer narrows a proposal and never widens one — and quietly treating it as
+    1.0 would let the misunderstanding persist into a place where it matters.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ActionError("advisory must be a number between 0 and 1") from exc
+    if not 0.0 <= number <= 1.0:
+        raise ActionError(
+            f"advisory must be between 0 and 1; got {number}. It is a multiplier that "
+            "may narrow a risk proposal and can never widen one."
+        )
+    return number
+
+
 def _str(value: Any, field: str, *, limit: int = 4000, lower: bool = False) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ActionError(f"'{field}' must be a non-empty string.")
@@ -2905,6 +2924,130 @@ class Actions:
             self.propdesk_activity,
         )
 
+        self._add(
+            "propdesk_risk",
+            "Each account's risk mode, boundaries, appetite, last evaluation and "
+            "autonomy level, with the catalogue of what the modes promise and what "
+            "the advisory layer may never do.",
+            {"account_uid": {"type": "string", "optional": True}},
+            self.propdesk_risk,
+        )
+        self._add(
+            "propdesk_set_risk",
+            "Set an account's risk mode, appetite and boundaries. Protected: the "
+            "boundaries are the ceiling every automated proposal is clamped to, so an "
+            "actor that could write them could raise its own limit.",
+            {"settings": {"type": "object"}},
+            self.propdesk_set_risk,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_evaluate_risk",
+            "Run the risk scaler over one account and return what it proposes, with "
+            "every driver, the one that bound, and the governor limit that applied. "
+            "Evaluating writes a record and changes nothing; applying is a separate, "
+            "protected verb.",
+            {
+                "account_uid": {"type": "string"},
+                "advisory": {
+                    "type": "number",
+                    "optional": True,
+                    "description": (
+                        "A multiplier between 0 and 1. It may narrow the proposal and "
+                        "can never widen one."
+                    ),
+                },
+                "advisory_note": {"type": "string", "optional": True},
+            },
+            self.propdesk_evaluate_risk,
+            # Mutating because it appends the evaluation to the append-only
+            # record — the same treatment `propdesk_reconcile` gets, and for the
+            # same reason: it changes no control and places nothing, but a
+            # reader of the audit trail will see a row that this call wrote.
+            mutating=True,
+        )
+        self._add(
+            "propdesk_apply_risk",
+            "Apply the risk fraction the scaler proposed. Protected: this is the verb "
+            "that moves the number an order is sized from.",
+            {
+                "account_uid": {"type": "string"},
+                "advisory": {"type": "number", "optional": True},
+                "advisory_note": {"type": "string", "optional": True},
+            },
+            self.propdesk_apply_risk,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_disclosures",
+            "The safety disclosures, their current versions, and what has been "
+            "acknowledged.",
+            {},
+            self.propdesk_disclosures,
+        )
+        self._add(
+            "propdesk_acknowledge",
+            "Record that a person read a disclosure and accepted every statement in "
+            "it. Protected: an acknowledgement an agent could write is consent nobody "
+            "gave.",
+            {
+                "key": {"type": "string"},
+                "accepted": {"type": "array", "items": {"type": "string"}},
+                "account_uid": {"type": "string", "optional": True},
+            },
+            self.propdesk_acknowledge,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_set_autonomy",
+            "Set autonomous deployment to off, approval-required or fully autonomous "
+            "for one account. Protected, and refused without a current acknowledgement "
+            "of the autonomous-deployment disclosure.",
+            {"account_uid": {"type": "string"}, "level": {"type": "string"}},
+            self.propdesk_set_autonomy,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_evaluate_deployment",
+            "Run every mandatory deployment control for one strategy on one account "
+            "and report which passed. It deploys nothing: this build has no live "
+            "connector and the lifecycle refuses the deployed stage outright.",
+            {"strategy_id": {"type": "string"}, "account_uid": {"type": "string"}},
+            self.propdesk_evaluate_deployment,
+            mutating=True,
+        )
+        self._add(
+            "propdesk_audit",
+            "The consequential audit trail: risk changes, deployment evaluations and "
+            "acknowledgements, with the state on both sides of each one.",
+            {
+                "account_uid": {"type": "string", "optional": True},
+                "limit": {"type": "integer", "optional": True},
+            },
+            self.propdesk_audit,
+        )
+        self._add(
+            "propdesk_why",
+            "Answer one of the desk's questions from recorded state: why risk changed, "
+            "why a deployment is blocked, why an account is blocked, why an allocation "
+            "changed. A question with no record behind it is declined rather than "
+            "answered.",
+            {
+                "question": {"type": "string"},
+                "account_uid": {"type": "string", "optional": True},
+                "strategy_id": {"type": "string", "optional": True},
+            },
+            self.propdesk_why,
+        )
+
     def _desk(self) -> Any:
         if self.prop_desk is None:
             raise ActionError("no prop desk is configured in this process")
@@ -2926,6 +3069,88 @@ class Actions:
         except (KeyError, ValueError) as exc:
             raise ActionError(str(exc)) from exc
         return result
+
+    def propdesk_risk(self, account_uid: Any = None) -> dict[str, Any]:
+        return self._desk_call(
+            "risk",
+            account_uid=None if account_uid is None else _str(account_uid, "account_uid"),
+        )
+
+    def propdesk_set_risk(self, settings: Any) -> dict[str, Any]:
+        if not isinstance(settings, dict):
+            raise ActionError("settings must be an object")
+        return self._desk_call("save_risk_settings", settings=settings, actor=self._current_actor())
+
+    def propdesk_evaluate_risk(
+        self, account_uid: Any, advisory: Any = None, advisory_note: Any = None
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "evaluate_risk",
+            account_uid=_str(account_uid, "account_uid"),
+            advisory=None if advisory is None else _advisory(advisory),
+            advisory_note="" if advisory_note is None else _str(advisory_note, "advisory_note"),
+            apply_change=False,
+        )
+
+    def propdesk_apply_risk(
+        self, account_uid: Any, advisory: Any = None, advisory_note: Any = None
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "evaluate_risk",
+            account_uid=_str(account_uid, "account_uid"),
+            advisory=None if advisory is None else _advisory(advisory),
+            advisory_note="" if advisory_note is None else _str(advisory_note, "advisory_note"),
+            apply_change=True,
+            actor=self._current_actor(),
+        )
+
+    def propdesk_disclosures(self) -> dict[str, Any]:
+        return self._desk_call("disclosures")
+
+    def propdesk_acknowledge(
+        self, key: Any, accepted: Any, account_uid: Any = None
+    ) -> dict[str, Any]:
+        if not isinstance(accepted, list | tuple):
+            raise ActionError("accepted must be a list of the statements that were ticked")
+        return self._desk_call(
+            "acknowledge",
+            key=_str(key, "key", lower=True),
+            accepted=tuple(_str(item, "accepted") for item in accepted),
+            actor=self._current_actor(),
+            account_uid="" if account_uid is None else _str(account_uid, "account_uid"),
+        )
+
+    def propdesk_set_autonomy(self, account_uid: Any, level: Any) -> dict[str, Any]:
+        return self._desk_call(
+            "set_autonomy",
+            account_uid=_str(account_uid, "account_uid"),
+            level=_str(level, "level", lower=True),
+            actor=self._current_actor(),
+        )
+
+    def propdesk_evaluate_deployment(self, strategy_id: Any, account_uid: Any) -> dict[str, Any]:
+        return self._desk_call(
+            "evaluate_deployment",
+            strategy_id=_str(strategy_id, "strategy_id"),
+            account_uid=_str(account_uid, "account_uid"),
+        )
+
+    def propdesk_audit(self, account_uid: Any = None, limit: Any = None) -> dict[str, Any]:
+        return self._desk_call(
+            "audit",
+            account_uid=None if account_uid is None else _str(account_uid, "account_uid"),
+            limit=200 if limit is None else int(limit),
+        )
+
+    def propdesk_why(
+        self, question: Any, account_uid: Any = None, strategy_id: Any = None
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "why",
+            question=_str(question, "question", lower=True),
+            account_uid="" if account_uid is None else _str(account_uid, "account_uid"),
+            strategy_id="" if strategy_id is None else _str(strategy_id, "strategy_id"),
+        )
 
     def propdesk_providers(self) -> dict[str, Any]:
         return self._desk_call("providers")

@@ -31,9 +31,20 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import numpy as np
 from fastapi import APIRouter, HTTPException
 from forge.contracts.models import ApiEnvelope
 from forge.execution.gate import InstrumentRule, MarketState
+from forge.execution.lifecycle import LIVE_EXECUTION_AVAILABLE
+from forge.explain import (
+    Answer,
+    Question,
+    question_catalogue,
+    why_cant_i_deploy_this,
+    why_did_allocation_change,
+    why_did_risk_change,
+    why_is_this_account_blocked,
+)
 from forge.prop.account import AccountRules, AccountState
 from forge.prop.account import assess as assess_account
 from forge.prop.accounts import PropAccountStore
@@ -43,19 +54,30 @@ from forge.propdesk import (
     AccountSnapshot,
     Advice,
     Allocation,
+    AllocationChange,
     AllocationConstraints,
     Allocator,
+    AuditAction,
+    AuditActor,
     AuthMethod,
+    AutonomyLevel,
     BrokerConnection,
     CalendarRegistry,
     CompatibilityReport,
     ConnectionState,
+    ConsentError,
+    ConsequentialRecord,
     CopyGroup,
     CopyResolver,
     CredentialBroker,
     CredentialRecord,
+    DeploymentDecision,
+    DeploymentFacts,
     DeskAccount,
     DeskContext,
+    DeskDecision,
+    DisclosureAcknowledgement,
+    DisclosureKey,
     Environment,
     ExecutionFabric,
     FabricError,
@@ -76,17 +98,30 @@ from forge.propdesk import (
     Provider,
     ReconciliationEngine,
     ReconciliationPolicy,
+    RiskMode,
+    RiskObservation,
+    RiskProposal,
+    RiskSettings,
+    ScalingState,
     SizingPolicy,
     StrategyHealth,
     Trigger,
     UseCase,
     assess_news,
+    capability_catalogue,
+    current_disclosure_version,
     default_catalogue,
+    describe_gates,
+    describe_levels,
+    describe_modes,
     diff_allocations,
     evaluate_compatibility,
     new_connection_id,
     new_group_id,
+    prohibition_catalogue,
+    propose,
     redact,
+    require_acknowledgement,
 )
 from forge.propdesk import (
     catalogue as identity_catalogue,
@@ -98,6 +133,9 @@ from forge.propdesk.adapters import (
     rithmic_adapter,
     tradovate_adapter,
 )
+from forge.propdesk.autonomy import evaluate as evaluate_deployment_gates
+from forge.propdesk.consent import catalogue as disclosure_catalogue
+from forge.propdesk.scaling import explain as explain_proposal
 from pydantic import ValidationError
 
 #: Which adapter serves which provider. The simulator executes; the other three
@@ -127,6 +165,32 @@ def adapter_for(connection: BrokerConnection) -> Any:
     return ADAPTERS[connection.provider]()
 
 
+def _tri(value: Any) -> bool | None:
+    """A three-valued reading of a supplied flag.
+
+    `None` stays `None` — it means the thing was not measured, which the gates
+    report as unknown rather than as a failure. Anything else is coerced, so a
+    supplier returning `0` or `""` reads as false rather than as unmeasured.
+    """
+    return None if value is None else bool(value)
+
+
+def _volatility(series: tuple[float, ...]) -> float | None:
+    """Sample standard deviation, or `None` when there is not enough to have one.
+
+    Two points is the minimum for a sample standard deviation, and a series of
+    identical values has none — both return `None` rather than zero, because a
+    zero here would divide into the volatility driver and report that realised
+    volatility is infinitely below the model.
+    """
+    if len(series) < 2:
+        return None
+    values = np.asarray(series, dtype=float)
+    if not np.isfinite(values).all() or float(np.ptp(values)) == 0.0:
+        return None
+    return float(np.std(values, ddof=1))
+
+
 class PropDeskError(Exception):
     """A refusal with a reason the caller can show verbatim."""
 
@@ -141,6 +205,17 @@ class PropDeskService:
         prop_accounts: PropAccountStore,
         verdict_for: Callable[[str], str | None],
         health_for: Callable[[str], StrategyHealth] | None = None,
+        # Evidence for the risk and deployment layers, as one supplier rather
+        # than five: assembling it means reading the strategy's dossier, and
+        # five callables would read it five times per evaluation. Optional, and
+        # an absent supplier leaves every driver it feeds *unmeasured* rather
+        # than defaulted — which is what makes "an increase needs every driver
+        # measured" hold end to end rather than only inside the scaler.
+        #
+        # Expected keys, all optional: `evidence_tier`, `walk_forward_survives`,
+        # `paths_robust`, `symbol`, `oos_daily_pnl`.
+        evidence_for: Callable[[str], dict[str, Any]] | None = None,
+        realised_pnl_for: Callable[[str], tuple[float, ...]] | None = None,
         catalogue: InstrumentCatalogue | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -148,6 +223,8 @@ class PropDeskService:
         self.prop_accounts = prop_accounts
         self.verdict_for = verdict_for
         self.health_for = health_for
+        self.evidence_for = evidence_for
+        self.realised_pnl_for = realised_pnl_for
         self.catalogue = catalogue or default_catalogue()
         self._now = now
 
@@ -698,6 +775,535 @@ class PropDeskService:
             "counts": self.store.counts(),
         }
 
+    # ── risk modes ───────────────────────────────────────────────────────────
+    def risk_catalogue(self) -> dict[str, Any]:
+        """Everything the risk and AI panels need that does not depend on state.
+
+        Held together in one payload because the three lists are only meaningful
+        beside each other: what the modes promise, what the advisory layer may
+        do, and what it may never do with the control that stops it.
+        """
+        return {
+            "modes": describe_modes(),
+            "capabilities": capability_catalogue(),
+            "prohibitions": prohibition_catalogue(),
+            "autonomy_levels": describe_levels(),
+            "mandatory_gates": describe_gates(),
+            "disclosures": disclosure_catalogue(),
+            "questions": question_catalogue(),
+        }
+
+    def risk(self, account_uid: str | None = None) -> dict[str, Any]:
+        """The risk configuration and last evaluation for one account, or all."""
+        accounts = (
+            [account_uid]
+            if account_uid
+            else [account.account_uid for account in self.store.accounts()]
+        )
+        rows = []
+        for uid in accounts:
+            settings = self.store.risk_settings(uid)
+            state = self.store.scaling_state(uid)
+            proposals = self.store.proposals(uid, limit=1)
+            rows.append(
+                {
+                    "account_uid": uid,
+                    "settings": settings.as_dict() if settings else None,
+                    "state": state.model_dump(mode="json") if state else None,
+                    "last_proposal": proposals[0] if proposals else None,
+                    "autonomy": self.store.autonomy(uid).value,
+                }
+            )
+        return {"accounts": rows, "catalogue": self.risk_catalogue()}
+
+    def save_risk_settings(self, settings: dict[str, Any], *, actor: str) -> dict[str, Any]:
+        """Write one account's risk configuration.
+
+        AI_MANAGED is refused without a current acknowledgement of the AI risk
+        disclosure. The check happens here rather than in the model because only
+        this layer can see the acknowledgement ledger — the model asserts that a
+        version is *recorded*, and this asserts that it is *the current one and
+        actually given*.
+        """
+        payload = {**settings, "updated_by": actor}
+        # The consent check happens *before* validation, not after. The model
+        # asserts that a disclosure version is recorded; only this layer can see
+        # the acknowledgement ledger and say which one. Validating first would
+        # surface "a version is missing" — true, and useless — in place of "this
+        # disclosure has not been acknowledged", which is what the operator has
+        # to act on.
+        if str(payload.get("mode", "")) == RiskMode.AI_MANAGED.value:
+            try:
+                given = require_acknowledgement(
+                    DisclosureKey.AI_RISK_MANAGEMENT,
+                    self.store.acknowledgements(DisclosureKey.AI_RISK_MANAGEMENT),
+                    account_uid=str(payload.get("account_uid", "")),
+                )
+            except ConsentError as exc:
+                raise PropDeskError(str(exc)) from exc
+            payload["disclosure_version"] = given.version
+        try:
+            parsed = RiskSettings.model_validate(payload)
+        except ValidationError as exc:
+            raise PropDeskError(
+                f"That is not a valid risk configuration: {exc.errors()[0]['msg']}"
+            ) from exc
+
+        previous = self.store.risk_settings(parsed.account_uid)
+        self.store.save_risk_settings(parsed)
+        if self.store.scaling_state(parsed.account_uid) is None:
+            opening = (
+                parsed.manual.risk_fraction
+                if parsed.manual
+                else parsed.boundaries.minimum_fraction
+            )
+            self.store.save_scaling_state(
+                ScalingState(account_uid=parsed.account_uid, current_fraction=opening)
+            )
+        self._audit(
+            action=AuditAction.RISK_MODE_CHANGED
+            if previous is None or previous.mode is not parsed.mode
+            else AuditAction.RISK_BOUNDARIES_CHANGED,
+            actor_name=actor,
+            account_uid=parsed.account_uid,
+            previous=previous.as_dict() if previous else {},
+            current=parsed.as_dict(),
+            risk_mode=parsed.mode.value,
+            reason=f"the operator set {parsed.mode.value} risk management",
+            disclosure_version=parsed.disclosure_version,
+            decision="applied",
+        )
+        return {"settings": parsed.as_dict()}
+
+    def evaluate_risk(
+        self,
+        account_uid: str,
+        *,
+        advisory: float | None = None,
+        advisory_note: str = "",
+        apply_change: bool = False,
+        actor: str = "",
+    ) -> dict[str, Any]:
+        """Run the scaler over one account and record what it proposed.
+
+        `apply_change` is the operator's decision, not the scaler's. Evaluating
+        is free and always recorded; applying writes the new fraction and an
+        audit row, and is refused in MANUAL mode where by definition nothing
+        adjusts the number for you.
+        """
+        settings = self.store.risk_settings(account_uid)
+        if settings is None:
+            raise PropDeskError(
+                f"No risk configuration exists for {account_uid}. Choose a risk mode "
+                "before anything can size a position on it."
+            )
+        if advisory is not None and not 0.0 <= advisory <= 1.0:
+            # Refused rather than clamped. A caller passing 1.4 has
+            # misunderstood the parameter — it narrows a proposal and can never
+            # widen one — and silently treating it as 1.0 would carry the
+            # misunderstanding into a place where it matters.
+            raise PropDeskError(
+                f"An advisory factor is a multiplier between 0 and 1; got {advisory}. "
+                "The advisory layer may narrow a risk proposal and may never widen one."
+            )
+        state = self.store.scaling_state(account_uid) or ScalingState(
+            account_uid=account_uid,
+            current_fraction=(
+                settings.manual.risk_fraction
+                if settings.manual
+                else settings.boundaries.minimum_fraction
+            ),
+        )
+        observation = self.risk_observation(account_uid)
+        proposal = propose(
+            settings=settings,
+            observation=observation,
+            state=state,
+            now=self._now(),
+            advisory=advisory,
+            advisory_note=advisory_note,
+        )
+        self.store.record_proposal(proposal)
+
+        applied = False
+        if apply_change and proposal.changed:
+            if settings.mode is RiskMode.MANUAL:
+                raise PropDeskError(
+                    "This account is on manual risk. Nothing adjusts it; change the "
+                    "fraction yourself, or switch to adaptive."
+                )
+            self.store.save_scaling_state(
+                ScalingState(
+                    account_uid=account_uid,
+                    current_fraction=proposal.applied_fraction,
+                    last_change_at=proposal.at,
+                    change_today=state.today(proposal.at)
+                    + abs(proposal.applied_fraction - state.current_fraction),
+                    change_day=proposal.at.astimezone(UTC).date().isoformat(),
+                    last_direction=proposal.direction.value,
+                )
+            )
+            applied = True
+            self._audit(
+                action=AuditAction.RISK_ADJUSTED,
+                actor=AuditActor.SYSTEM if not actor else AuditActor.HUMAN,
+                actor_name=actor,
+                account_uid=account_uid,
+                strategy_id=observation.strategy_id,
+                previous={"risk_fraction": state.current_fraction},
+                current={"risk_fraction": proposal.applied_fraction},
+                risk_mode=settings.mode.value,
+                risk_fraction=proposal.applied_fraction,
+                reason="; ".join(explain_proposal(proposal)),
+                disclosure_version=settings.disclosure_version,
+                decision=proposal.direction.value,
+            )
+        return {"proposal": proposal.as_dict(), "applied": applied}
+
+    def risk_observation(self, account_uid: str) -> RiskObservation:
+        """Assemble what the scaler is allowed to look at, from real sources.
+
+        Every field this cannot fill is left absent, which the scaler reads as
+        unmeasured. That is what makes the "an increase needs every driver" rule
+        enforceable end to end rather than only inside the scaler: a source this
+        service cannot reach produces a held risk level, never a raised one.
+        """
+        snapshot = self._allocation_snapshot(account_uid)
+        allocation = self.store.allocation(account_uid)
+        strategy_id = allocation.strategy_id if allocation else ""
+        health = (
+            self.strategy_health((strategy_id,))[0] if strategy_id else None
+        )
+        account = self.store.account(account_uid)
+        rules, _ = self._rules_and_state(account.prop_account_id if account else None)
+        oos = tuple(self._evidence(strategy_id).get("oos_daily_pnl", ()))
+        realised = self.realised_pnl_for(account_uid) if self.realised_pnl_for else ()
+        news = self.news(days=1)["assessment"]
+        return RiskObservation(
+            account_uid=account_uid,
+            strategy_id=strategy_id,
+            buffer=snapshot.buffer,
+            starting_buffer=rules.maximum_loss if rules else None,
+            realised_daily_volatility=_volatility(realised),
+            modelled_daily_volatility=_volatility(oos),
+            max_pairwise_correlation=self._correlation(account_uid),
+            rules_level=snapshot.rules_level,
+            news_restricted=bool(news.get("restricted")) if news.get("action") else None,
+            news_detail=str(news.get("action") or ""),
+            oos_daily_pnl=oos,
+            health=health,
+            observed_at=self._now(),
+        )
+
+    def _evidence(self, strategy_id: str) -> dict[str, Any]:
+        """Whatever the supplier knows about one strategy, or nothing.
+
+        Returns an empty mapping rather than raising when the supplier is absent
+        or fails: every caller reads keys with a default, and an absent key is an
+        unmeasured driver or an unknown gate, both of which are safe.
+        """
+        if not strategy_id or self.evidence_for is None:
+            return {}
+        try:
+            return dict(self.evidence_for(strategy_id))
+        except (KeyError, ValueError, OSError):
+            return {}
+
+    def _correlation(self, account_uid: str) -> float | None:
+        """The largest pairwise correlation among the strategies running now.
+
+        Computed over the out-of-sample series of every allocated strategy, not
+        only this account's: correlated positions across accounts are one bet,
+        which is the whole reason the driver exists. `None` when fewer than two
+        series are available, because a correlation of one series with itself is
+        not a measurement.
+        """
+        if self.evidence_for is None:
+            return None
+        series = []
+        for allocation in self.store.allocations():
+            values = tuple(self._evidence(allocation.strategy_id).get("oos_daily_pnl", ()))
+            if len(values) >= 2:
+                series.append(np.asarray(values, dtype=float))
+        if len(series) < 2:
+            return None
+        length = min(item.size for item in series)
+        block = np.vstack([item[-length:] for item in series])
+        if length < 2 or float(np.min(np.ptp(block, axis=1))) == 0.0:
+            return None
+        matrix = np.corrcoef(block)
+        np.fill_diagonal(matrix, 0.0)
+        highest = float(np.nanmax(np.abs(matrix)))
+        return None if np.isnan(highest) else round(highest, 4)
+
+    # ── consent ──────────────────────────────────────────────────────────────
+    def disclosures(self) -> dict[str, Any]:
+        given = self.store.acknowledgements()
+        return {
+            "disclosures": disclosure_catalogue(),
+            "acknowledgements": [item.as_dict() for item in given],
+        }
+
+    def acknowledge(
+        self, *, key: str, accepted: tuple[str, ...], actor: str, account_uid: str = ""
+    ) -> dict[str, Any]:
+        try:
+            parsed = DisclosureKey(key)
+        except ValueError as exc:
+            raise PropDeskError(
+                f"No disclosure '{key}'. Known: "
+                + ", ".join(item.value for item in DisclosureKey)
+            ) from exc
+        try:
+            record = DisclosureAcknowledgement(
+                key=parsed,
+                version=current_disclosure_version(parsed),
+                acknowledged_by=actor,
+                accepted=accepted,
+                account_uid=account_uid,
+                acknowledged_at=self._now(),
+            )
+        except ValidationError as exc:
+            raise PropDeskError(
+                "Every statement has to be accepted before this can be enabled: "
+                f"{exc.errors()[0]['msg']}"
+            ) from exc
+        self.store.record_acknowledgement(record)
+        self._audit(
+            action=AuditAction.DISCLOSURE_ACKNOWLEDGED,
+            actor_name=actor,
+            account_uid=account_uid,
+            current={"disclosure": parsed.value},
+            reason=f"{parsed.value} acknowledged",
+            disclosure_version=record.version,
+            decision="recorded",
+        )
+        return {"acknowledgement": record.as_dict()}
+
+    # ── autonomous deployment ────────────────────────────────────────────────
+    def set_autonomy(self, *, account_uid: str, level: str, actor: str) -> dict[str, Any]:
+        try:
+            parsed = AutonomyLevel(level)
+        except ValueError as exc:
+            raise PropDeskError(
+                f"No autonomy level '{level}'. Levels: "
+                + ", ".join(item.value for item in AutonomyLevel)
+            ) from exc
+        if parsed is not AutonomyLevel.OFF:
+            try:
+                require_acknowledgement(
+                    DisclosureKey.AUTONOMOUS_DEPLOYMENT,
+                    self.store.acknowledgements(DisclosureKey.AUTONOMOUS_DEPLOYMENT),
+                    account_uid=account_uid,
+                )
+            except ConsentError as exc:
+                raise PropDeskError(str(exc)) from exc
+        previous = self.store.autonomy(account_uid)
+        self.store.save_autonomy(account_uid, parsed)
+        self._audit(
+            action=AuditAction.AUTONOMY_LEVEL_CHANGED,
+            actor_name=actor,
+            account_uid=account_uid,
+            previous={"autonomy": previous.value},
+            current={"autonomy": parsed.value},
+            automation_mode=parsed.value,
+            reason=f"the operator set autonomous deployment to {parsed.value}",
+            decision="applied",
+        )
+        return {"account_uid": account_uid, "autonomy": parsed.value}
+
+    def evaluate_deployment(self, *, strategy_id: str, account_uid: str) -> dict[str, Any]:
+        """Run every mandatory gate for one pairing, and record the outcome.
+
+        This evaluates. It deploys nothing: there is no live connector in this
+        build, and `forge.execution.lifecycle` refuses the DEPLOYED stage
+        outright — which this reports as a gate rather than as a surprise.
+        """
+        facts = self.deployment_facts(strategy_id=strategy_id, account_uid=account_uid)
+        level = self.store.autonomy(account_uid)
+        decision = evaluate_deployment_gates(facts, level=level, now=self._now())
+        self.store.record_deployment(decision)
+        self._audit(
+            action=AuditAction.DEPLOYMENT_EVALUATED
+            if decision.cleared
+            else AuditAction.DEPLOYMENT_BLOCKED,
+            actor=AuditActor.SYSTEM,
+            account_uid=account_uid,
+            strategy_id=strategy_id,
+            current={"outcome": decision.outcome.value},
+            verdict=facts.verdict or "",
+            verdict_id=facts.verdict_id,
+            policy_state=(
+                facts.automation_permission.value if facts.automation_permission else ""
+            ),
+            automation_mode=level.value,
+            reason="; ".join(decision.reasons) or "every mandatory control passed",
+            decision=decision.outcome.value,
+            execution_state="not deployed: this build has no live connector",
+        )
+        return {"decision": decision.as_dict()}
+
+    def deployment_facts(self, *, strategy_id: str, account_uid: str) -> DeploymentFacts:
+        """Gather what the gates read. Anything unreachable stays absent.
+
+        An absent fact produces an `unknown` gate, which never passes — so a
+        source this service could not reach produces a blocked deployment rather
+        than an unvalidated one.
+        """
+        account = self.store.account(account_uid)
+        snapshot = self._allocation_snapshot(account_uid)
+        health = self.strategy_health((strategy_id,))[0] if strategy_id else None
+        evidence = self._evidence(strategy_id)
+        report = self._compatibility(account_uid, UseCase.ALGORITHMIC_ALLOCATION)
+        settings = self.store.risk_settings(account_uid)
+        state = self.store.scaling_state(account_uid)
+        policy = (
+            self.store.policy(account.policy_id)
+            if account and account.policy_id
+            else None
+        )
+        connection_live: bool | None = None
+        if account:
+            try:
+                runtime = self.fabric.runtime(account.connection_id)
+                connection_live = runtime.connection.state is ConnectionState.LIVE
+            except FabricError:
+                connection_live = False
+
+        # The instrument comes from the strategy's own declaration when the
+        # caller supplied one; there is no allocation field for it, and guessing
+        # from the account's open positions would ask the gate about whatever
+        # happens to be on the book rather than about what is being deployed.
+        symbol = str(self._evidence(strategy_id).get("symbol", ""))
+        instrument_permitted: bool | None = None
+        instrument_mapped: bool | None = None
+        if symbol and policy is not None:
+            verdict, _ = policy.product_permission(symbol)
+            instrument_permitted = verdict is Permission.ALLOWED
+        if symbol and account:
+            try:
+                self.catalogue.resolve(account.key.provider, symbol)
+                instrument_mapped = True
+            except MappingError:
+                instrument_mapped = False
+
+        contracts: int | None = None
+        if settings is not None and state is not None and snapshot.buffer is not None:
+            drawdown = health.expected_drawdown_p95 if health else None
+            if drawdown:
+                contracts = min(
+                    settings.boundaries.max_contracts,
+                    int((snapshot.buffer * state.current_fraction) // drawdown),
+                )
+
+        acknowledged: bool | None = None
+        try:
+            given = require_acknowledgement(
+                DisclosureKey.AUTONOMOUS_DEPLOYMENT,
+                self.store.acknowledgements(DisclosureKey.AUTONOMOUS_DEPLOYMENT),
+                account_uid=account_uid,
+            )
+            acknowledged = True
+            version = given.version
+        except ConsentError:
+            acknowledged = False
+            version = ""
+
+        return DeploymentFacts(
+            strategy_id=strategy_id,
+            account_uid=account_uid,
+            symbol=symbol,
+            verdict=self.verdict_for(strategy_id) if strategy_id else None,
+            verdict_id=health.verdict_id if health else "",
+            evidence_tier=str(evidence.get("evidence_tier", "")),
+            walk_forward_survives=_tri(evidence.get("walk_forward_survives")),
+            paths_robust=_tri(evidence.get("paths_robust")),
+            health=health,
+            account_bound=account is not None,
+            connection_live=connection_live,
+            automation_permission=policy.automation if policy else None,
+            instrument_permitted=instrument_permitted,
+            instrument_mapped=instrument_mapped,
+            risk_mode=settings.mode if settings else None,
+            permitted_contracts=contracts,
+            pretrade_cleared=report.permits_automatic_action if report else None,
+            pretrade_detail=(
+                "; ".join(reason.detail for reason in report.reasons if reason.blocking)
+                if report
+                else ""
+            ),
+            buffer=snapshot.buffer,
+            expected_drawdown_per_contract=health.expected_drawdown_p95 if health else None,
+            lifecycle_allowed=False if not LIVE_EXECUTION_AVAILABLE else None,
+            lifecycle_detail=(
+                "live execution is not available: this build contains no broker connector "
+                "and no order-submission path, so nothing could be placed"
+                if not LIVE_EXECUTION_AVAILABLE
+                else ""
+            ),
+            disclosure_acknowledged=acknowledged,
+            disclosure_version=version,
+        )
+
+    # ── the audit trail, and the answers ─────────────────────────────────────
+    def audit(self, *, account_uid: str | None = None, limit: int = 200) -> dict[str, Any]:
+        return {
+            "records": list(self.store.audit(account_uid, limit=limit)),
+            "deployments": list(self.store.deployments(account_uid, limit=limit)),
+            "proposals": list(self.store.proposals(account_uid, limit=limit)),
+        }
+
+    def why(self, *, question: str, account_uid: str = "", strategy_id: str = "") -> dict[str, Any]:
+        """Answer one of the closed set of questions from recorded state.
+
+        Every branch loads an artefact and hands it to the answerer, which
+        declines when there is not one. Nothing here composes a sentence.
+        """
+        try:
+            parsed = Question(question)
+        except ValueError as exc:
+            raise PropDeskError(
+                f"No question '{question}'. Known: "
+                + ", ".join(item.value for item in Question)
+            ) from exc
+
+        answer: Answer
+        if parsed is Question.RISK_CHANGED:
+            proposals = self.store.proposals(account_uid or None, limit=1)
+            answer = why_did_risk_change(
+                RiskProposal.model_validate(proposals[0]) if proposals else None
+            )
+        elif parsed is Question.CANNOT_DEPLOY:
+            deployments = self.store.deployments(account_uid or None, limit=1)
+            answer = why_cant_i_deploy_this(
+                DeploymentDecision.model_validate(deployments[0]) if deployments else None
+            )
+        elif parsed is Question.ACCOUNT_BLOCKED:
+            screened = [
+                item
+                for item in self.store.decisions(limit=50)
+                if not account_uid or item.get("intent", {}).get("account_uid") == account_uid
+            ]
+            answer = why_is_this_account_blocked(
+                DeskDecision.model_validate(screened[0]) if screened else None
+            )
+        elif parsed is Question.ALLOCATION_CHANGED:
+            history = list(self.store.history(account_uid or None, limit=1))
+            answer = why_did_allocation_change(
+                AllocationChange.model_validate(history[0]) if history else None
+            )
+        else:
+            raise PropDeskError(
+                f"'{parsed.value}' is answered from the strategy record rather than the "
+                "desk; ask it on the Evidence screen."
+            )
+        return {"answer": answer.as_dict()}
+
+    def _audit(self, **fields: Any) -> ConsequentialRecord:
+        record = ConsequentialRecord(at=self._now(), **fields)
+        self.store.record_audit(record)
+        return record
+
     # ── context assembly ─────────────────────────────────────────────────────
     def context(
         self, account_uids: list[str], *, use_case: UseCase = UseCase.COPY_FOLLOWER
@@ -983,6 +1589,81 @@ def build_propdesk_router(service: PropDeskService) -> APIRouter:
     @router.get("/activity", response_model=ApiEnvelope[dict[str, Any]])
     def activity(limit: int = 100) -> ApiEnvelope[dict[str, Any]]:
         return ApiEnvelope(data=service.activity(limit=limit))
+
+    # ── risk, autonomy and consent ───────────────────────────────────────────
+    @router.get("/risk", response_model=ApiEnvelope[dict[str, Any]])
+    def risk(account_uid: str | None = None) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=service.risk(account_uid))
+
+    @router.get("/risk/catalogue", response_model=ApiEnvelope[dict[str, Any]])
+    def risk_catalogue() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=service.risk_catalogue())
+
+    @router.post("/risk/settings", response_model=ApiEnvelope[dict[str, Any]])
+    def save_risk_settings(body: dict[str, Any]) -> ApiEnvelope[dict[str, Any]]:
+        actor = str(body.pop("actor", "operator"))
+        return guard(lambda: service.save_risk_settings(body, actor=actor))
+
+    @router.post("/risk/{account_uid}/evaluate", response_model=ApiEnvelope[dict[str, Any]])
+    def evaluate_risk(account_uid: str, body: dict[str, Any]) -> ApiEnvelope[dict[str, Any]]:
+        advisory = body.get("advisory")
+        return guard(
+            lambda: service.evaluate_risk(
+                account_uid,
+                advisory=None if advisory is None else float(advisory),
+                advisory_note=str(body.get("advisory_note", "")),
+                apply_change=bool(body.get("apply", False)),
+                actor=str(body.get("actor", "")),
+            )
+        )
+
+    @router.get("/disclosures", response_model=ApiEnvelope[dict[str, Any]])
+    def disclosures() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=service.disclosures())
+
+    @router.post("/disclosures/acknowledge", response_model=ApiEnvelope[dict[str, Any]])
+    def acknowledge(body: dict[str, Any]) -> ApiEnvelope[dict[str, Any]]:
+        return guard(
+            lambda: service.acknowledge(
+                key=str(body.get("key", "")),
+                accepted=tuple(body.get("accepted", ())),
+                actor=str(body.get("actor", "operator")),
+                account_uid=str(body.get("account_uid", "")),
+            )
+        )
+
+    @router.post("/autonomy/{account_uid}", response_model=ApiEnvelope[dict[str, Any]])
+    def set_autonomy(account_uid: str, body: dict[str, Any]) -> ApiEnvelope[dict[str, Any]]:
+        return guard(
+            lambda: service.set_autonomy(
+                account_uid=account_uid,
+                level=str(body.get("level", "off")),
+                actor=str(body.get("actor", "operator")),
+            )
+        )
+
+    @router.post("/deployment/evaluate", response_model=ApiEnvelope[dict[str, Any]])
+    def evaluate_deployment_route(body: dict[str, Any]) -> ApiEnvelope[dict[str, Any]]:
+        return guard(
+            lambda: service.evaluate_deployment(
+                strategy_id=str(body.get("strategy_id", "")),
+                account_uid=str(body.get("account_uid", "")),
+            )
+        )
+
+    @router.get("/audit", response_model=ApiEnvelope[dict[str, Any]])
+    def audit(account_uid: str | None = None, limit: int = 200) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=service.audit(account_uid=account_uid, limit=limit))
+
+    @router.get("/why", response_model=ApiEnvelope[dict[str, Any]])
+    def why(
+        question: str, account_uid: str = "", strategy_id: str = ""
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return guard(
+            lambda: service.why(
+                question=question, account_uid=account_uid, strategy_id=strategy_id
+            )
+        )
 
     return router
 

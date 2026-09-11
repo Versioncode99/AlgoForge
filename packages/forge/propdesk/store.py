@@ -610,6 +610,11 @@ class PropDeskStore:
         here is what was measured" is the answer to half the questions an
         operator asks of this screen, and a log of only the changes cannot give
         it.
+
+        The row holds `model_dump`, not `as_dict`: the derived keys `as_dict`
+        adds are a rendering, and a row carrying them cannot be validated back
+        into a `RiskProposal` — which is exactly what answering "why did my risk
+        change" from the record requires. Rendering happens on the way out.
         """
         with closing(self._connect()) as db, db:
             db.execute(
@@ -619,7 +624,7 @@ class PropDeskStore:
                     proposal.account_uid,
                     proposal.at.astimezone(UTC).isoformat(),
                     int(proposal.changed),
-                    json.dumps(proposal.as_dict()),
+                    json.dumps(proposal.model_dump(mode="json")),
                 ),
             )
         return proposal
