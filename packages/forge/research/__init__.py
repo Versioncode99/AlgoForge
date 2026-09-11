@@ -1,3 +1,16 @@
+from forge.research.agents import (
+    AgentError,
+    AgentRegistry,
+    AgentRole,
+    AgentState,
+    ResearchAgent,
+    capacity_for,
+)
+
+# `Claim` is already the literature module's — a quoted claim from a paper.
+# An agent's claim is a lease on a piece of work, and one name for both would
+# be the kind of collision that reads fine until somebody imports the wrong one.
+from forge.research.agents import Claim as AgentClaim
 from forge.research.allocation import (
     DEFAULT_WEIGHTS,
     AllocationAdvice,
@@ -70,6 +83,11 @@ from forge.research.novelty import (
     subjects_from_templates,
 )
 from forge.research.novelty import assess as assess_novelty
+from forge.research.orchestration import (
+    Assignment,
+    CampaignRuntime,
+    ResearchOrchestrator,
+)
 from forge.research.promotion import Candidate as PromotionCandidate
 from forge.research.promotion import (
     Prerequisites,
@@ -119,11 +137,18 @@ __all__ = [
     "DEFAULT_WEIGHTS",
     "MECHANISM_ALPHA",
     "MINIMUM_TRADES_FOR_CONTROL",
+    "AgentClaim",
+    "AgentError",
+    "AgentRegistry",
+    "AgentRole",
+    "AgentState",
     "AllocationAdvice",
+    "Assignment",
     "Bucket",
     "Campaign",
     "CampaignError",
     "CampaignProgress",
+    "CampaignRuntime",
     "CampaignStore",
     "Claim",
     "CombinatorialPlan",
@@ -157,10 +182,12 @@ __all__ = [
     "PromotionOutcome",
     "PromotionQueue",
     "PromotionState",
+    "ResearchAgent",
     "ResearchAllocation",
     "ResearchFrontier",
     "ResearchJournal",
     "ResearchLedger",
+    "ResearchOrchestrator",
     "ResearchPartitions",
     "ResearchSplitReceipt",
     "RetrievalReport",
@@ -184,6 +211,7 @@ __all__ = [
     "admits",
     "assess_novelty",
     "assess_promotion",
+    "capacity_for",
     "chronological_split",
     "combinatorial_purged_plan",
     "containment",

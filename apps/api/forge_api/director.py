@@ -44,10 +44,11 @@ import contextlib
 import random
 import threading
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from forge.memory.research import FailureClass
+from forge.research.agents import ROLE_BUCKETS
 from forge.research.allocation import Bucket, FrontierSignal, ResearchAllocation, adapt
 from forge.research.campaign import Campaign, CampaignStore
 from forge.research.followup import FollowUp, Observation, derive
@@ -191,6 +192,10 @@ class ObservationInput:
     strategy_id: str | None
     experiment_id: str
     status: str
+    #: Which campaign this cycle belonged to. Set by the engine from the
+    #: orchestrator's assignment; empty falls back to the attached campaign,
+    #: which is the single-campaign path.
+    campaign_id: str = ""
     trades: int = 0
     net_pnl: float = 0.0
     grid_size: int = 1
@@ -215,11 +220,42 @@ class ObservationInput:
     concentration: str = ""
 
 
+@dataclass
+class _CampaignState:
+    """The director's per-campaign working state.
+
+    These four fields used to be plain attributes on the director, which is
+    what made it a single-campaign object: two campaigns would have shared one
+    adapted allocation and one literature topic cursor, so the second campaign
+    would have researched the first one's topics under the first one's budget.
+    """
+
+    allocation: ResearchAllocation | None = None
+    cycles_since_adapt: int = 0
+    topics: list[str] = field(default_factory=list)
+    topic_index: int = 0
+    #: Set when the campaign ended on its own rather than being stopped.
+    exhausted_reason: str = ""
+
+
 class ResearchDirector:
     """Chooses what to research next, and reads what came of it.
 
-    One instance per engine. Thread-safe: the engine runs several workers and
-    all of them call ``next_candidate`` concurrently.
+    One instance per engine, serving **any number of campaigns**. Thread-safe:
+    the engine runs several workers, they may be serving different campaigns,
+    and all of them call ``next_candidate`` concurrently.
+
+    Which campaign a call is about is decided in this order:
+
+    1. the ``campaign_id`` passed in, when the orchestrator assigned one;
+    2. the attached campaign, for the single-campaign path that predates the
+       orchestrator and is still how the engine runs on its own;
+    3. nothing, in which case the director returns ``None`` and the engine does
+       what it did before campaigns existed.
+
+    The resolved campaign is held in a **thread-local** for the duration of the
+    call, so the forty-odd journal writes further down record against the right
+    campaign without every one of them having to be passed it.
     """
 
     def __init__(
@@ -252,14 +288,17 @@ class ResearchDirector:
         self.transport = transport
         self._lock = threading.RLock()
         self._campaign_id: str | None = None
-        self._allocation: ResearchAllocation | None = None
-        self._cycles_since_adapt = 0
+        #: Per-campaign working state, keyed by campaign id.
+        self._states: dict[str, _CampaignState] = {}
+        #: Which campaign the calling thread is currently serving. A thread
+        #: local rather than an argument threaded through forty call sites,
+        #: and a thread local rather than an instance attribute because eight
+        #: workers may be serving eight different campaigns at once.
+        self._current = threading.local()
         # Templates this director generated, so the campaign can attribute them
         # and the interface can tell a discovered template from a shipped one.
         self._generated: dict[str, dict[str, Any]] = {}
-        self._topics: list[str] = []
-        self._topic_index = 0
-        # Why the last campaign left, when it left on its own.
+        # Why the last *attached* campaign left, when it left on its own.
         #
         # Without this, a campaign that hit a stopping criterion detached itself
         # and `next_candidate` started returning None — which the engine reads
@@ -274,15 +313,18 @@ class ResearchDirector:
 
     # ── campaign lifecycle ───────────────────────────────────────────────────
     def attach(self, campaign: Campaign) -> None:
-        """Bind the director to a campaign and prepare its research context."""
+        """Bind the director to a campaign and prepare its research context.
+
+        Attachment is the *default* campaign for a worker the orchestrator did
+        not assign one to. A campaign can also be served without ever being
+        attached, by passing its id to ``next_candidate`` — which is how several
+        run at once.
+        """
+        self.prepare(campaign)
         with self._lock:
             self._campaign_id = campaign.campaign_id
             self._exhausted_reason = ""
             self._exhausted_campaign = ""
-            self._allocation = campaign.allocation
-            self._cycles_since_adapt = 0
-            self._topics = topics_for(campaign.objective)
-            self._topic_index = 0
         released = self.promotion.release_running(campaign.campaign_id)
         if released:
             self._event(
@@ -321,20 +363,91 @@ class ResearchDirector:
 
     @property
     def campaign_id(self) -> str | None:
+        """The campaign this thread is serving, else the attached one."""
+        return self._serving_id()
+
+    @property
+    def attached_campaign_id(self) -> str | None:
+        """The default campaign, independent of what any thread is serving."""
         return self._campaign_id
 
+    def prepare(self, campaign: Campaign) -> _CampaignState:
+        """Create, or return, this campaign's working state.
+
+        Idempotent: a campaign resumed after a restart gets a fresh allocation
+        cursor and topic list rather than inheriting whichever campaign happened
+        to run last.
+        """
+        with self._lock:
+            state = self._states.get(campaign.campaign_id)
+            if state is None:
+                state = _CampaignState(
+                    allocation=campaign.allocation,
+                    topics=topics_for(campaign.objective),
+                )
+                self._states[campaign.campaign_id] = state
+            return state
+
+    def forget(self, campaign_id: str) -> None:
+        """Drop a campaign's working state. Its durable research is untouched."""
+        with self._lock:
+            self._states.pop(campaign_id, None)
+
+    def _state(self, campaign_id: str) -> _CampaignState:
+        with self._lock:
+            return self._states.setdefault(campaign_id, _CampaignState())
+
+    @contextlib.contextmanager
+    def _serving(self, campaign_id: str) -> Any:
+        """Mark this thread as serving ``campaign_id`` for the duration.
+
+        Everything that writes to the journal reads this, so a worker on the ES
+        campaign cannot write an event onto the NQ campaign's timeline.
+        """
+        previous = getattr(self._current, "campaign_id", None)
+        self._current.campaign_id = campaign_id
+        try:
+            yield
+        finally:
+            self._current.campaign_id = previous
+
+    def _serving_id(self) -> str | None:
+        """Which campaign the calling thread is serving, falling back to attached."""
+        return getattr(self._current, "campaign_id", None) or self._campaign_id
+
     def campaign(self) -> Campaign | None:
-        return self.campaigns.get(self._campaign_id) if self._campaign_id else None
+        """The campaign this thread is serving, or the attached one."""
+        campaign_id = self._serving_id()
+        return self.campaigns.get(campaign_id) if campaign_id else None
 
     # ── the decision ─────────────────────────────────────────────────────────
     def next_candidate(
-        self, rng: random.Random, worker: int, policy: str
+        self,
+        rng: random.Random,
+        worker: int,
+        policy: str,
+        campaign_id: str | None = None,
+        *,
+        role: Any = None,
     ) -> Candidate | Refusal | None:
-        """What to try next, or a refusal with its reason.
+        """What to try next for one campaign, or a refusal with its reason.
 
-        Returns ``None`` only when no campaign is attached, which is how the
-        engine keeps working exactly as before with no campaign running.
+        ``campaign_id`` is what the orchestrator assigned this worker. Omitted,
+        the attached campaign is used, which is the single-campaign path.
+
+        Returns ``None`` only when there is no campaign at all, which is how the
+        engine keeps working exactly as before with none running.
+
+        ``role`` biases which allocation bucket is drawn — a falsification agent
+        should be attacking promising candidates rather than proposing families.
+        It is a bias and never a veto: a role that could forbid a bucket would be
+        a way for a crew composition to silently narrow the search.
         """
+        campaign = self.campaigns.get(campaign_id) if campaign_id else None
+        if campaign is not None:
+            self.prepare(campaign)
+            with self._serving(campaign.campaign_id):
+                return self._next_for(campaign, rng, worker, policy, role)
         campaign = self.campaign()
         if campaign is None:
             with self._lock:
@@ -351,12 +464,34 @@ class ResearchDirector:
             )
         if not campaign.running:
             return None
+        self.prepare(campaign)
+        with self._serving(campaign.campaign_id):
+            return self._next_for(campaign, rng, worker, policy, role)
+
+    def _next_for(
+        self,
+        campaign: Campaign,
+        rng: random.Random,
+        worker: int,
+        policy: str,
+        role: Any = None,
+    ) -> Candidate | Refusal | None:
+        """The decision, for a campaign already resolved and marked as served."""
+        if not campaign.running:
+            return Refusal(
+                reason=f"'{campaign.name}' is {campaign.status}",
+                bucket=Bucket.REFINE_PARAMETERS,
+                kind=SkipKind.CAMPAIGN_EXHAUSTED,
+                subject=campaign.name,
+            )
 
         exhausted, why = campaign.exhausted()
         if exhausted:
             self.campaigns.set_status(campaign.campaign_id, "completed", reason=why)
             self._event(EventKind.CAMPAIGN_STOPPED, why, level="pass")
-            self.detach(why, exhausted=True)
+            self._state(campaign.campaign_id).exhausted_reason = why
+            if self._campaign_id == campaign.campaign_id:
+                self.detach(why, exhausted=True)
             return Refusal(
                 reason=why,
                 bucket=Bucket.REFINE_PARAMETERS,
@@ -365,7 +500,7 @@ class ResearchDirector:
             )
 
         allocation = self._current_allocation(campaign)
-        bucket = allocation.draw(rng)
+        bucket = _bucket_for_role(allocation, rng, role)
         self._event(
             EventKind.BUDGET_DRAWN,
             f"budget drew {bucket.value.replace('_', ' ').lower()}",
@@ -420,12 +555,13 @@ class ResearchDirector:
         workers each adapting on every draw would spend more time reading the
         frontier than testing it.
         """
+        state = self._state(campaign.campaign_id)
         with self._lock:
-            self._cycles_since_adapt += 1
-            due = self._cycles_since_adapt >= 25 or self._allocation is None
+            state.cycles_since_adapt += 1
+            due = state.cycles_since_adapt >= 25 or state.allocation is None
             if not due:
-                return self._allocation or campaign.allocation
-            self._cycles_since_adapt = 0
+                return state.allocation or campaign.allocation
+            state.cycles_since_adapt = 0
 
         signal = FrontierSignal(
             state_counts=self.frontier.counts(campaign.campaign_id),
@@ -437,7 +573,7 @@ class ResearchDirector:
         )
         advice = adapt(campaign.allocation, signal)
         with self._lock:
-            self._allocation = advice.allocation
+            state.allocation = advice.allocation
         self._event(
             EventKind.ALLOCATION_ADAPTED,
             "; ".join(advice.reasons),
@@ -1083,8 +1219,9 @@ class ResearchDirector:
             self._generated.pop(template_key, None)
         with contextlib.suppress(KeyError):
             self.templates.delete(template_key)
-        if self._campaign_id:
-            self.campaigns.record(self._campaign_id, templates_created=-1)
+        serving = self._serving_id()
+        if serving:
+            self.campaigns.record(serving, templates_created=-1)
 
     def _admit_blocked(
         self, campaign: Campaign, archetype: Archetype, missing: Sequence[str], worker: int
@@ -1125,10 +1262,11 @@ class ResearchDirector:
         if not campaign.web_research:
             return ()
         with self._lock:
-            if not self._topics:
-                self._topics = topics_for(campaign.objective, extra=[hint])
-            topic = self._topics[self._topic_index % len(self._topics)]
-            self._topic_index += 1
+            state = self._state(campaign.campaign_id)
+            if not state.topics:
+                state.topics = topics_for(campaign.objective, extra=[hint])
+            topic = state.topics[state.topic_index % len(state.topics)]
+            state.topic_index += 1
 
         report = retrieve(topic, limit=LITERATURE_RESULTS, transport=self.transport)
         stored = self.sources.record(campaign.campaign_id, report)
@@ -1165,19 +1303,22 @@ class ResearchDirector:
         hypothesis, generates the questions the failure implies, and queues the
         candidate for validation when it has earned it.
         """
-        campaign = self.campaign()
+        campaign = (
+            self.campaigns.get(outcome.campaign_id) if outcome.campaign_id else self.campaign()
+        )
         if campaign is None:
             return
         candidate = outcome.candidate
-        try:
-            self._record_outcome(campaign, outcome, candidate)
-        except Exception as exc:  # observation must never fail a research cycle
-            self._event(
-                EventKind.ERROR,
-                f"recording the outcome of {outcome.experiment_id} failed: "
-                f"{type(exc).__name__}: {exc}",
-                level="fail",
-            )
+        with self._serving(campaign.campaign_id):
+            try:
+                self._record_outcome(campaign, outcome, candidate)
+            except Exception as exc:  # observation must never fail a research cycle
+                self._event(
+                    EventKind.ERROR,
+                    f"recording the outcome of {outcome.experiment_id} failed: "
+                    f"{type(exc).__name__}: {exc}",
+                    level="fail",
+                )
 
     def _record_outcome(
         self, campaign: Campaign, outcome: ObservationInput, candidate: Candidate
@@ -1466,8 +1607,13 @@ class ResearchDirector:
         detail: dict[str, Any] | None = None,
         worker: int | None = None,
     ) -> None:
-        """Write to the campaign journal and mirror one line to the operator log."""
-        campaign_id = self._campaign_id
+        """Write to the campaign journal and mirror one line to the operator log.
+
+        The campaign is read from the serving context rather than from an
+        instance attribute, so a worker on one campaign cannot write an event
+        onto another campaign's timeline.
+        """
+        campaign_id = self._serving_id()
         if campaign_id is None:
             return
         self.journal.record(
@@ -1553,6 +1699,28 @@ def _interpret(
     )
 
 
+
+
+def _bucket_for_role(allocation: ResearchAllocation, rng: random.Random, role: Any) -> Bucket:
+    """Draw a bucket, biased by what kind of researcher is asking.
+
+    The draw is still the campaign's allocation — a role cannot invent budget
+    and cannot forbid a bucket. What it can do is take two draws and prefer the
+    one its role is for, which over many cycles gives a falsification agent a
+    falsification-shaped workload without any single decision being overridden.
+
+    A role that could veto a bucket would let a crew composition silently narrow
+    the search: four falsification agents and no discovery agent would mean a
+    campaign that never proposes anything, and nothing would say so.
+    """
+    first = allocation.draw(rng)
+    preferred = ROLE_BUCKETS.get(role) if role is not None else None
+    if not preferred:
+        return first
+    if str(first) in preferred:
+        return first
+    second = allocation.draw(rng)
+    return second if str(second) in preferred else first
 
 def _level_of(verdict: Any) -> NoveltyLevel:
     """Translate a novelty verdict into a band.

@@ -48,6 +48,16 @@ POLICIES = (
 # has in hand; see the module docstring on why there are no speculative columns.
 _COLUMNS: tuple[tuple[str, str], ...] = (
     ("parent_id", "TEXT"),
+    # Which research programme claimed this.
+    #
+    # Deliberately a column and not part of `scope`. The scope is what the
+    # *judge* counts trials over, and every trial run against the same data is
+    # a trial whoever ran it — deflating a campaign's Sharpe against only its
+    # own attempts would understate the search the number came out of. But a
+    # *claim* has to be per campaign: two campaigns must be able to establish
+    # evidence independently, and sharing one duplicate namespace meant the
+    # second one was refused every configuration the first had touched.
+    ("campaign_id", "TEXT"),
     ("policy", "TEXT"),
     ("family", "TEXT"),
     ("hypothesis", "TEXT"),
@@ -96,6 +106,7 @@ _FROZEN_AT_RESERVATION = frozenset(
     {
         "id",
         "scope",
+        "campaign_id",
         "template",
         "parameters",
         "parent_id",
@@ -150,6 +161,7 @@ class Experiments:
                 db.execute(f"ALTER TABLE attempts ADD COLUMN {name} {kind}")
         db.execute("CREATE INDEX IF NOT EXISTS attempts_parent ON attempts (parent_id)")
         db.execute("CREATE INDEX IF NOT EXISTS attempts_scope ON attempts (scope)")
+        db.execute("CREATE INDEX IF NOT EXISTS attempts_campaign ON attempts (campaign_id)")
 
     def connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=15)
@@ -160,6 +172,7 @@ class Experiments:
         template: str,
         parameters: dict[str, float],
         *,
+        campaign_id: str = "",
         parent_id: str | None = None,
         policy: str | None = None,
         family: str | None = None,
@@ -176,8 +189,23 @@ class Experiments:
         to the same configuration are the *same experiment*, and recording it
         twice under different parents would inflate the trial count the
         Deflated Sharpe deflates against.
+
+        ``campaign_id`` is the one exception, and only when it is set. Two
+        campaigns asking the same question are two pieces of research: a finding
+        from one may *inform* the other, but the other has to establish its own
+        evidence, and a shared claim namespace made that impossible — whichever
+        campaign got there first silently consumed the configuration for
+        everybody. It is omitted from the identity when empty so a standalone
+        engine's keys are unchanged.
         """
-        key = stable_id("experiment", {"scope": scope, "template": template, "params": parameters})
+        identity: dict[str, Any] = {
+            "scope": scope,
+            "template": template,
+            "params": parameters,
+        }
+        if campaign_id:
+            identity["campaign"] = campaign_id
+        key = stable_id("experiment", identity)
         if parent_id is not None and parent_id == key:
             # A policy proposing its own parent again — a neighbourhood step
             # that clamped back to where it started. Declining is the same
@@ -219,13 +247,14 @@ class Experiments:
                 return key
             inserted = db.execute(
                 "INSERT OR IGNORE INTO attempts "
-                "(id, scope, template, payload, parent_id, policy, family, hypothesis, "
-                "dataset, data_version, seed, status, created_at, "
+                "(id, scope, campaign_id, template, payload, parent_id, policy, family, "
+                "hypothesis, dataset, data_version, seed, status, created_at, "
                 "preregistration_id, preregistration_hash) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     key,
                     scope,
+                    campaign_id,
                     template,
                     json.dumps(payload),
                     parent_id,
@@ -243,7 +272,7 @@ class Experiments:
             ).rowcount
         return key if inserted else None
 
-    def reclaim_abandoned(self, scope: str) -> int:
+    def reclaim_abandoned(self, scope: str, campaign_id: str | None = None) -> int:
         """Release claims held by a process that is no longer running.
 
         Safe only where nothing is in flight — the engine calls this from
@@ -255,12 +284,21 @@ class Experiments:
         that is not zero means the last run did not shut down cleanly.
         """
         placeholders = ", ".join("?" for _ in _IN_FLIGHT)
+        # Narrowed to one campaign where one is given, so restarting a campaign
+        # cannot release claims another campaign's workers are still holding.
+        extra = " AND campaign_id=?" if campaign_id else ""
+        args: tuple[Any, ...] = (
+            (_ABANDONED, scope, campaign_id, *_IN_FLIGHT)
+            if campaign_id
+            else (_ABANDONED, scope, *_IN_FLIGHT)
+        )
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             return int(
                 db.execute(
-                    f"UPDATE attempts SET status=? WHERE scope=? AND status IN ({placeholders})",
-                    (_ABANDONED, scope, *_IN_FLIGHT),
+                    f"UPDATE attempts SET status=? WHERE scope=?{extra} "
+                    f"AND status IN ({placeholders})",
+                    args,
                 ).rowcount
             )
 
@@ -299,12 +337,24 @@ class Experiments:
             db.execute(statement, (json.dumps(payload), *promoted.values(), key))
 
     # ── reads ────────────────────────────────────────────────────────────────
-    def recent(self, scope: str, limit: int = 80) -> list[dict[str, Any]]:
+    def recent(
+        self, scope: str, limit: int = 80, *, campaign_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Recent attempts in this scope, newest first.
+
+        ``campaign_id`` narrows to one programme. Lineage work wants that —
+        a neighbourhood step should extend its own campaign's parent, not one
+        from a different research programme that happens to share the dataset.
+        """
+        extra = " AND campaign_id=?" if campaign_id else ""
+        args: tuple[Any, ...] = (
+            (scope, campaign_id, limit) if campaign_id else (scope, limit)
+        )
         with closing(self.connect()) as db, db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
-                "SELECT * FROM attempts WHERE scope=? ORDER BY rowid DESC LIMIT ?",
-                (scope, limit),
+                f"SELECT * FROM attempts WHERE scope=?{extra} ORDER BY rowid DESC LIMIT ?",
+                args,
             ).fetchall()
         return [_merge(dict(row)) for row in rows]
 
@@ -333,10 +383,22 @@ class Experiments:
             ).fetchall()
         return tuple(float(row[0]) for row in rows)
 
-    def count(self, scope: str) -> int:
+    def count(self, scope: str, campaign_id: str | None = None) -> int:
+        """How many attempts this scope holds.
+
+        Called with no campaign by the judge, on purpose: the trial count the
+        Deflated Sharpe deflates against is every trial run against this data,
+        not only the ones this campaign ran. Narrowing it per campaign would
+        lower the best-of-N hurdle exactly as more campaigns searched the same
+        series, which is the opposite of what multiple-testing control is for.
+        """
+        extra = " AND campaign_id=?" if campaign_id else ""
+        args: tuple[Any, ...] = (scope, campaign_id) if campaign_id else (scope,)
         with closing(self.connect()) as db, db:
             return int(
-                db.execute("SELECT COUNT(*) FROM attempts WHERE scope=?", (scope,)).fetchone()[0]
+                db.execute(
+                    f"SELECT COUNT(*) FROM attempts WHERE scope=?{extra}", args
+                ).fetchone()[0]
             )
 
     # ── lineage ──────────────────────────────────────────────────────────────

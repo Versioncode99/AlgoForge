@@ -16,6 +16,7 @@ from forge.research.allocation import Bucket, ResearchAllocation
 from forge.research.frontier import FrontierState, SearchKind
 from forge.research.hypotheses import HypothesisStatus
 from forge.research.journal import EventKind
+from forge.research.skips import SkipKind
 from forge.strategy import TEMPLATES, FamilyRegistry, TemplateStore
 from forge_api.campaigns import CampaignService
 from forge_api.director import Candidate, ObservationInput, Refusal, ResearchDirector
@@ -489,10 +490,20 @@ def test_exhausting_the_budget_stops_the_campaign_by_name(
     assert director.campaign_id is None
 
 
-def test_the_engine_keeps_working_after_a_campaign_completes(
+def test_a_completed_campaign_keeps_saying_it_is_finished(
     director: ResearchDirector,
 ) -> None:
-    """A finished campaign detaches; it does not leave the engine refusing."""
+    """It used to go quiet, and quiet was read as "no campaign was ever here".
+
+    A campaign that reached a stopping criterion detached itself and
+    ``next_candidate`` began returning ``None``. The engine reads ``None`` as
+    "nothing is directing me" and answers with the uniform random template draw
+    it used before campaigns existed — so the programme ended, the engine went
+    on spending compute on undirected candidates against a scope that had
+    already claimed most of the catalogue, and the interface said RUNNING
+    throughout. The refusal has to keep coming until somebody attaches
+    something else.
+    """
     start(director, stopping={"max_experiments": 1})
     candidate = propose_until(director, Bucket.EXPLORE_HYPOTHESIS)
     assert candidate is not None
@@ -507,8 +518,21 @@ def test_the_engine_keeps_working_after_a_campaign_completes(
             decision="REJECT",
         )
     )
-    director.next_candidate(random.Random(1), 0, "exploration")
-    assert director.next_candidate(random.Random(2), 0, "exploration") is None
+    first = director.next_candidate(random.Random(1), 0, "exploration")
+    assert isinstance(first, Refusal)
+    assert "experiment budget" in first.reason
+
+    second = director.next_candidate(random.Random(2), 0, "exploration")
+    assert isinstance(second, Refusal)
+    assert second.kind is SkipKind.CAMPAIGN_EXHAUSTED
+    assert "experiment budget" in second.reason
+
+
+def test_the_engine_runs_undirected_only_when_nothing_was_ever_attached(
+    director: ResearchDirector,
+) -> None:
+    """``None`` still means "no campaign", which is a legitimate mode."""
+    assert director.next_candidate(random.Random(1), 0, "exploration") is None
 
 
 def test_observation_without_a_campaign_is_a_no_op(director: ResearchDirector) -> None:

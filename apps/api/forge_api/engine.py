@@ -27,7 +27,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from forge.contracts.hashing import content_hash
 from forge.contracts.models import Preregistration
@@ -38,9 +38,11 @@ from forge.memory import TEMPLATE_WIDE, FailureClass, ResearchMemory, classify_g
 from forge.prop import MIN_TRADING_DAYS, load_rules, simulate_prop_paths
 from forge.provenance import RunSnapshots
 from forge.research import ResearchLedger, ResearchPartitions, chronological_split
+from forge.research.orchestration import Assignment, ResearchOrchestrator
 from forge.research.runtime import Outcome, RuntimeMonitor, RuntimeState
 from forge.research.skips import NoveltyLevel, SkipKind, SkipLedger
 from forge.strategy import (
+    SHIPPED_TEMPLATE_KEYS,
     TEMPLATES,
     DeterminismReport,
     ParameterSpec,
@@ -235,7 +237,27 @@ class AutonomousEngine:
         self._loaded: tuple[Any, Any] | None = None
         self._partitions: ResearchPartitions | None = None
         self._data_version = "unloaded"
-        self._catalog_version = content_hash({key: t.source for key, t in TEMPLATES.items()})[:16]
+        # Hashed over the **shipped** catalogue only.
+        #
+        # It used to hash all of `TEMPLATES`, which the research director adds to
+        # as it composes. That made the scope a function of how much the director
+        # had invented — and since the scope keys every experiment claim, every
+        # restart after a campaign generated a template started a *fresh*
+        # duplicate namespace and re-ran everything the previous run had already
+        # done. Research that cannot resume is research that is repeated.
+        #
+        # What the hash is actually for is still covered: editing a shipped
+        # template's source changes it, and prior claims against the old code are
+        # correctly invalidated. A generated template needs no representation
+        # here because its key is derived from its composition, so a different
+        # composition is already a different template key.
+        self._catalog_version = content_hash(
+            {
+                key: TEMPLATES[key].source
+                for key in sorted(SHIPPED_TEMPLATE_KEYS)
+                if key in TEMPLATES
+            }
+        )[:16]
         self._active: dict[int, str] = {}
         self._paused: set[int] = set()
         self.agents: AgentService | None = None
@@ -244,6 +266,14 @@ class AutonomousEngine:
         # to the original template draw and the engine behaves exactly as it
         # did before campaigns existed.
         self.director: ResearchDirector | None = None
+        # The scheduler, attached by `forge_api.control` alongside the director.
+        # Absent means the single-campaign path: every worker serves whichever
+        # campaign is attached, which is how the engine behaved before several
+        # could run at once.
+        self.orchestrator: ResearchOrchestrator | None = None
+        # What each worker is serving this cycle, so `_cycle` can scope its
+        # claims and its observations to the right campaign.
+        self._assignments: dict[int, Assignment] = {}
         self.experiments = Experiments(workspace.data / "experiments.db")
         # Durable failure record. Exact repeats are already refused by
         # Experiments.reserve; this is what generalises a failure to the region
@@ -373,10 +403,32 @@ class AutonomousEngine:
         )
 
     # ── research direction ───────────────────────────────────────────────────
+    def _assign(self, worker: int) -> Assignment:
+        """Which campaign this worker serves this cycle.
+
+        With no orchestrator this is the attached campaign, which is the
+        single-campaign path. With one, the scheduler deals workers across every
+        running campaign by priority and observed health — so a campaign that
+        has stopped producing yields workers to one that has not, and neither is
+        ever starved to zero.
+        """
+        if self.orchestrator is None:
+            attached = self.director.attached_campaign_id if self.director else None
+            assignment = Assignment(
+                worker_id=str(worker), campaign_id=attached, reason="single campaign"
+            )
+        else:
+            assignment = self.orchestrator.assign(
+                str(worker), workers=max(1, self.state.config.workers)
+            )
+        with self._state_lock:
+            self._assignments[worker] = assignment
+        return assignment
+
     def _directed_candidate(
-        self, rng: random.Random, worker: int, policy: str
+        self, rng: random.Random, worker: int, policy: str, assignment: Assignment
     ) -> DirectedCandidate | Refusal | None:
-        """Ask the director what to research next.
+        """Ask the director what to research next, for this worker's campaign.
 
         Returns ``None`` when no director is attached or no campaign is
         running, which is what keeps the engine usable on its own. A failure
@@ -387,14 +439,18 @@ class AutonomousEngine:
         if self.director is None:
             return None
         try:
-            return self.director.next_candidate(rng, worker, policy)
+            return self.director.next_candidate(
+                rng, worker, policy, assignment.campaign_id, role=assignment.role
+            )
         except Exception as exc:
             with self._state_lock:
                 self.state.last_error = f"director: {exc}"
             self.log.record("RESEARCH", f"director failed: {type(exc).__name__}: {exc}", "fail")
             return None
 
-    def _observe(self, research: DirectedCandidate | None, **fields: Any) -> None:
+    def _observe(
+        self, research: DirectedCandidate | None, campaign_id: str = "", **fields: Any
+    ) -> None:
         """Hand one finished cycle back to the director.
 
         Called at every terminal point of ``_cycle``, including the ones that
@@ -405,7 +461,9 @@ class AutonomousEngine:
         if self.director is None or research is None:
             return
         try:
-            self.director.observe(ObservationInput(candidate=research, **fields))
+            self.director.observe(
+                ObservationInput(candidate=research, campaign_id=campaign_id, **fields)
+            )
         except Exception as exc:
             self.log.record("RESEARCH", f"observation failed: {type(exc).__name__}: {exc}", "warn")
 
@@ -473,6 +531,18 @@ class AutonomousEngine:
             # the research reports progress, and only progress resets the
             # no-progress clock the state is derived from.
             self.monitor.record(str(worker), outcome, reason)
+            # And the same fact to the scheduler, which uses it to decide how
+            # many workers this campaign deserves next. Reported separately
+            # because they answer different questions: the monitor says whether
+            # the *engine* is working, the orchestrator whether *this campaign*
+            # is worth the compute.
+            if self.orchestrator is not None:
+                with self._state_lock:
+                    assignment = self._assignments.get(worker)
+                if assignment is not None:
+                    self.orchestrator.observe(
+                        assignment.campaign_id, outcome, agent_id=assignment.agent_id or ""
+                    )
             self._bump("cycles")
             if worker == 0:
                 self._watchdog()
@@ -571,14 +641,23 @@ class AutonomousEngine:
         SkipKind.PROPOSAL_ERROR: ("skipped_errors", Outcome.ERROR),
     }
 
-    def _campaign_id(self) -> str:
+    def _campaign_id(self, worker: int | None = None) -> str:
         """Which campaign a skip belongs to, or the standing scope.
 
+        Scoped to the worker's *assignment* where there is one: with several
+        campaigns running, a skip charged to whichever campaign happened to be
+        attached would put one campaign's refusals on another's ledger.
+
         ``standalone`` rather than an empty string so the ledger's campaign
-        index stays usable when the engine is running with no campaign attached
-        — which is a legitimate mode, not a missing value.
+        index stays usable when the engine is running with no campaign at all —
+        which is a legitimate mode, not a missing value.
         """
-        return (self.director.campaign_id if self.director else None) or "standalone"
+        if worker is not None:
+            with self._state_lock:
+                assignment = self._assignments.get(worker)
+            if assignment and assignment.campaign_id:
+                return assignment.campaign_id
+        return (self.director.attached_campaign_id if self.director else None) or "standalone"
 
     def _record_refusal(self, refusal: Refusal, worker: int) -> tuple[Outcome, str]:
         """Account for one director refusal, precisely.
@@ -595,7 +674,7 @@ class AutonomousEngine:
         )
         self._bump(field_name)
         self.skips.record(
-            campaign_id=self._campaign_id(),
+            campaign_id=self._campaign_id(worker),
             kind=refusal.kind,
             level=refusal.level,
             subject=refusal.subject or refusal.bucket.value,
@@ -612,7 +691,9 @@ class AutonomousEngine:
         )
         return outcome, refusal.reason
 
-    def _observe_refusal(self, research: Any, kind: str, reason: str) -> None:
+    def _observe_refusal(
+        self, research: Any, kind: str, reason: str, campaign_id: str = ""
+    ) -> None:
         """Tell the director a candidate it proposed was refused downstream.
 
         Without this, the frontier item the director had just opened stayed
@@ -625,6 +706,7 @@ class AutonomousEngine:
             return
         self._observe(
             research,
+            campaign_id,
             strategy_id=None,
             experiment_id="",
             status=f"skipped_{kind}",
@@ -651,7 +733,7 @@ class AutonomousEngine:
             self.state.runtime_remedy = diagnosis.remedy
         if not changed:
             return
-        level = (
+        level: Literal["info", "pass", "fail", "warn"] = (
             "fail"
             if diagnosis.state is RuntimeState.ERROR
             else "warn"
@@ -674,11 +756,14 @@ class AutonomousEngine:
         # The heartbeat and the label are the same event, so they are reported
         # together: a stage that moves without a beat is exactly the
         # inconsistency the monitor exists to detect.
+        with self._state_lock:
+            assignment = self._assignments.get(worker)
         self.monitor.beat(
             str(worker),
             stage,
             claim=self._active.get(worker),
-            campaign_id=(self.director.campaign_id if self.director else None) or "",
+            campaign_id=(assignment.campaign_id if assignment else None) or "",
+            agent_id=(assignment.agent_id if assignment else None) or "",
             paused=worker in self._paused,
         )
 
@@ -748,6 +833,8 @@ class AutonomousEngine:
         candidate return ``PROGRESS``.
         """
         policy = POLICIES[worker % len(POLICIES)]
+        assignment = self._assign(worker)
+        campaign_id = assignment.campaign_id or ""
 
         # The line that used to be the whole of the search's creativity was
         # `rng.choice(pool)` a few lines below. With a campaign running, the
@@ -759,7 +846,7 @@ class AutonomousEngine:
         #
         # With no campaign attached it returns None and the original selection
         # runs exactly as before: stopping a campaign does not stop the engine.
-        research = self._directed_candidate(rng, worker, policy)
+        research = self._directed_candidate(rng, worker, policy, assignment)
         if isinstance(research, Refusal):
             return self._record_refusal(research, worker)
 
@@ -811,7 +898,9 @@ class AutonomousEngine:
             elif policy in {"neighbourhood", "ablation"}:
                 history = [
                     a
-                    for a in self.experiments.recent(self._scope())
+                    for a in self.experiments.recent(
+                        self._scope(), campaign_id=campaign_id or None
+                    )
                     if a.get("development_net") is not None
                 ]
                 if history:
@@ -855,7 +944,7 @@ class AutonomousEngine:
             self._bump("skipped_by_region")
             condemned = pruned.reach == TEMPLATE_WIDE
             self.skips.record(
-                campaign_id=self._campaign_id(),
+                campaign_id=self._campaign_id(worker),
                 # A template-wide prune is a different fact from a
                 # neighbourhood one: the code is condemned, not the numbers, and
                 # until now both read as "skipped by memory". A condemned
@@ -879,7 +968,7 @@ class AutonomousEngine:
                 f"skipped {template_key} {signature}: {pruned.describe()}",
                 "info",
             )
-            self._observe_refusal(research, "region", pruned.describe())
+            self._observe_refusal(research, "region", pruned.describe(), campaign_id)
             return Outcome.DUPLICATE, pruned.describe()
 
         # Freeze the hypothesis *before* the candidate is backtested. G1 is only
@@ -891,6 +980,10 @@ class AutonomousEngine:
             self._scope(),
             template_key,
             params,
+            # Per campaign, so two campaigns can ask the same question and each
+            # establish its own evidence. The judge's trial count stays scoped to
+            # the *data*, which is a different question and deliberately wider.
+            campaign_id=campaign_id,
             preregistration_id=prereg.preregistration_id,
             preregistration_hash=prereg.content_hash,
             parent_id=parent_id,
@@ -911,7 +1004,7 @@ class AutonomousEngine:
             self._bump("skipped_duplicate")
             reason = f"the identical experiment {template_key} {signature} is already claimed"
             self.skips.record(
-                campaign_id=self._campaign_id(),
+                campaign_id=self._campaign_id(worker),
                 kind=SkipKind.EXPERIMENT_CLAIMED,
                 level=NoveltyLevel.EXACT_DUPLICATE,
                 subject=f"{template_key} {signature}",
@@ -928,7 +1021,7 @@ class AutonomousEngine:
                 f"skipped previously attempted {template_key} {signature}",
                 "info",
             )
-            self._observe_refusal(research, "duplicate", reason)
+            self._observe_refusal(research, "duplicate", reason, campaign_id)
             return Outcome.DUPLICATE, reason
 
         self._stage(worker, "creating")
@@ -1046,6 +1139,7 @@ class AutonomousEngine:
                 )
                 self._observe(
                     research,
+                    campaign_id,
                     strategy_id=spec.strategy_id,
                     experiment_id=attempt_id,
                     status="screened",
@@ -1136,6 +1230,7 @@ class AutonomousEngine:
             self.log.record("JUDGE", f"{spec.strategy_id} → no trades to judge", "warn")
             self._observe(
                 research,
+                campaign_id,
                 strategy_id=spec.strategy_id,
                 experiment_id=attempt_id,
                 status="no_trades",
@@ -1396,6 +1491,7 @@ class AutonomousEngine:
         broken_gate = next((g for g in verdict.gates if g.status == "FAIL"), None)
         self._observe(
             research,
+            campaign_id,
             strategy_id=spec.strategy_id,
             experiment_id=attempt_id,
             status="passed" if verdict.decision == "PASS" else "judged",
