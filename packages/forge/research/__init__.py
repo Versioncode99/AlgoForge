@@ -79,6 +79,21 @@ from forge.research.promotion import (
     outcome_from_verdict,
 )
 from forge.research.promotion import assess as assess_promotion
+from forge.research.runtime import (
+    Diagnosis,
+    Outcome,
+    RuntimeMonitor,
+    RuntimeState,
+    WorkerHeartbeat,
+)
+from forge.research.skips import (
+    NoveltyLevel,
+    Skip,
+    SkipKind,
+    SkipLedger,
+    admits,
+    level_from_score,
+)
 from forge.research.split import chronological_split, source_data_hash
 
 # `forge.research.synthesis` is deliberately NOT re-exported here. It imports the
@@ -114,6 +129,7 @@ __all__ = [
     "CombinatorialPlan",
     "CombinatorialSplit",
     "CostEstimate",
+    "Diagnosis",
     "EdgeKind",
     "EventKind",
     "EvidenceTier",
@@ -130,8 +146,10 @@ __all__ = [
     "InformationValue",
     "LiteratureError",
     "MechanismTest",
+    "NoveltyLevel",
     "NoveltyVerdict",
     "Observation",
+    "Outcome",
     "PartitionReceipt",
     "PathDistribution",
     "Prerequisites",
@@ -146,8 +164,13 @@ __all__ = [
     "ResearchPartitions",
     "ResearchSplitReceipt",
     "RetrievalReport",
+    "RuntimeMonitor",
+    "RuntimeState",
     "SearchKind",
     "Similarity",
+    "Skip",
+    "SkipKind",
+    "SkipLedger",
     "Source",
     "SourceStore",
     "StoppingCriteria",
@@ -156,7 +179,9 @@ __all__ = [
     "WalkForwardFold",
     "WalkForwardPlan",
     "WalkForwardResult",
+    "WorkerHeartbeat",
     "adapt",
+    "admits",
     "assess_novelty",
     "assess_promotion",
     "chronological_split",
@@ -167,6 +192,7 @@ __all__ = [
     "entry_timing_control",
     "estimate_cost",
     "expand_grid",
+    "level_from_score",
     "outcome_from_verdict",
     "path_distribution",
     "realised",

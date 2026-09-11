@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { deleteJson, getJson, postJson } from '../api'
+import { RuntimeBadge, RuntimeDiagnostics, SkipAccounting } from '../components/RuntimeState'
 import { Rolling } from '../components/ui'
 import type {
   CatalogTemplate, DatasetInfo, EngineStatus, FamilyInfo, StrategyListItem, StoragePayload,
@@ -166,14 +167,24 @@ export function PipelineView() {
           </p>
         </div>
         <div className="pipe-vitals">
-          <div><span>Engine</span><strong className={state?.running ? 'good' : ''}>
-            {state?.running ? 'RUNNING' : state?.stopping ? 'STOPPING' : 'STOPPED'}</strong></div>
+          {/* Not `state.running`. That bit means "threads exist" and said
+            * RUNNING through campaign exhaustion, condemned templates and
+            * duplicate loops alike. This is the derived state. */}
+          <div><span>Engine</span><RuntimeBadge engine={state} compact /></div>
           <div><span>Workspace</span><strong className="mono" title={storage.data?.root}>
             {storage.data?.vault_mode ? 'VAULT' : 'REPO'}</strong></div>
-          <div><span>Skipped by memory</span><strong>
-            <Rolling value={state?.skipped_by_memory ?? 0} /></strong></div>
+          <div><span>Cycles</span><strong><Rolling value={state?.cycles ?? 0} /></strong></div>
         </div>
       </header>
+
+      {/* One number called "Skipped by memory" used to live in the header. It
+        * summed duplicates, an empty frontier, an exhausted campaign, a
+        * novelty collision and a builder that raised, and reported the sum as
+        * compute saved. These are the same events, separated. */}
+      <SkipAccounting engine={state} />
+      {state?.runtime && !state.runtime.working && state.runtime.state !== 'STOPPED' && (
+        <RuntimeDiagnostics engine={state} />
+      )}
 
       <div className="pipe-graph" role="group" aria-label="Pipeline stages">
         {STAGES.map((stage, column) => {
@@ -448,7 +459,11 @@ function StagePane({ node, state }: { node: Node; state?: EngineStatus }) {
              ['Best pass rate', `${((state?.best_pass_rate ?? 0) * 100).toFixed(1)}%`],
              ['Best strategy', state?.best_strategy ?? '—'], ['Against', state?.best_rule ?? '—']]
           : [['Created this run', state?.created ?? 0], ['Backtested', state?.backtested ?? 0],
-             ['Skipped by memory', state?.skipped_by_memory ?? 0], ['Retired', state?.pruned ?? 0]]
+             ['Already tested', state?.skipped_duplicate ?? 0],
+             ['Already disproven', state?.skipped_by_region ?? 0],
+             ['Restatements refused', state?.skipped_not_novel ?? 0],
+             ['Nothing to do', state?.skipped_without_work ?? 0],
+             ['Retired', state?.pruned ?? 0]]
   return (
     <div className="pane">
       <div className="pane-figures">

@@ -897,6 +897,23 @@ def build_control_router(
     def engine_stop() -> ApiEnvelope[dict[str, Any]]:
         return ApiEnvelope(data=engine.stop())
 
+    @router.get("/engine/diagnostics", response_model=ApiEnvelope[dict[str, Any]])
+    def engine_diagnostics() -> ApiEnvelope[dict[str, Any]]:
+        """Why isn't my research running?
+
+        Answered without opening a terminal: the derived state, the reason, a
+        remedy, every worker's heartbeat, and the skip accounting behind the
+        headline number.
+        """
+        return ApiEnvelope(
+            data={
+                "runtime": engine.diagnose(),
+                "skips": engine.skips.counts(engine._campaign_id()),
+                "recent_skips": engine.skips.list(engine._campaign_id(), limit=50),
+                "retryable": engine.skips.retryable(engine._campaign_id(), limit=25),
+            }
+        )
+
     @router.get("/engine/constraints", response_model=ApiEnvelope[list[dict[str, str]]])
     def engine_constraints() -> ApiEnvelope[list[dict[str, str]]]:
         rows = engine.constraints()

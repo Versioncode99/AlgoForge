@@ -76,6 +76,11 @@ from forge.research.promotion import (
 from forge.research.promotion import (
     assess as assess_promotion,
 )
+from forge.research.skips import (
+    NoveltyLevel,
+    SkipKind,
+    level_from_score,
+)
 from forge.research.synthesis import ARCHETYPES, Archetype, archetypes_for, compose
 from forge.strategy import TEMPLATES, TemplateRejected
 from forge.strategy.export import to_python
@@ -149,12 +154,29 @@ class Refusal:
     A refusal is a real outcome and is recorded as one. A cycle that produced
     nothing because every proposal was a duplicate is information about the
     frontier; a cycle that silently fell back to a random draw would hide it.
+
+    ``kind`` and ``level`` were added because the engine used to charge every
+    refusal to one counter called ``skipped_by_memory``. Eleven different
+    situations arrived at that counter — an exhausted campaign, a builder that
+    raised, an empty frontier, a novelty collision — and once summed they could
+    not be told apart. They are now classified at the point of refusal, where
+    the reason is actually known, and the engine records the classification
+    rather than inferring one.
     """
 
     reason: str
     bucket: Bucket
     duplicate: bool = False
     blocked: tuple[str, ...] = ()
+    #: Which gate declined this, for the skip ledger.
+    kind: SkipKind = SkipKind.NO_ELIGIBLE_WORK
+    #: How novel the proposal turned out to be, where a comparison was made.
+    level: NoveltyLevel = NoveltyLevel.NOVEL_HYPOTHESIS
+    #: What it collided with, when it collided with something.
+    matched: str | None = None
+    similarity: float | None = None
+    #: A handle for the proposal itself, so the ledger row names it.
+    subject: str = ""
 
 
 @dataclass
@@ -237,12 +259,26 @@ class ResearchDirector:
         self._generated: dict[str, dict[str, Any]] = {}
         self._topics: list[str] = []
         self._topic_index = 0
+        # Why the last campaign left, when it left on its own.
+        #
+        # Without this, a campaign that hit a stopping criterion detached itself
+        # and `next_candidate` started returning None — which the engine reads
+        # as "no campaign attached" and answers with the original uniform random
+        # template draw. The research programme was over; the engine kept
+        # spending compute on random candidates against a scope that had already
+        # claimed most of the catalogue, and the interface said RUNNING
+        # throughout. Holding the reason means the refusal keeps being reported
+        # as exhaustion until somebody attaches something else.
+        self._exhausted_reason: str = ""
+        self._exhausted_campaign: str = ""
 
     # ── campaign lifecycle ───────────────────────────────────────────────────
     def attach(self, campaign: Campaign) -> None:
         """Bind the director to a campaign and prepare its research context."""
         with self._lock:
             self._campaign_id = campaign.campaign_id
+            self._exhausted_reason = ""
+            self._exhausted_campaign = ""
             self._allocation = campaign.allocation
             self._cycles_since_adapt = 0
             self._topics = topics_for(campaign.objective)
@@ -267,10 +303,20 @@ class ResearchDirector:
             level="pass",
         )
 
-    def detach(self, reason: str) -> None:
+    def detach(self, reason: str, *, exhausted: bool = False) -> None:
+        """Unbind. ``exhausted`` records that the campaign ended on its own.
+
+        A campaign stopped by the operator is a decision and leaves nothing
+        behind. One that ran out of budget, or out of frontier, is a *result*,
+        and the engine has to keep saying so rather than quietly reverting to a
+        random search that nobody asked for.
+        """
         if self._campaign_id:
             self._event(EventKind.CAMPAIGN_STOPPED, reason, level="warn")
         with self._lock:
+            if exhausted:
+                self._exhausted_reason = reason
+                self._exhausted_campaign = self._campaign_id or ""
             self._campaign_id = None
 
     @property
@@ -290,15 +336,33 @@ class ResearchDirector:
         engine keeps working exactly as before with no campaign running.
         """
         campaign = self.campaign()
-        if campaign is None or not campaign.running:
+        if campaign is None:
+            with self._lock:
+                reason, ended = self._exhausted_reason, self._exhausted_campaign
+            if not reason:
+                return None
+            # The campaign ended on its own. Keep reporting that, rather than
+            # returning None and letting the engine fall back to a random draw.
+            return Refusal(
+                reason=reason,
+                bucket=Bucket.REFINE_PARAMETERS,
+                kind=SkipKind.CAMPAIGN_EXHAUSTED,
+                subject=ended or "campaign",
+            )
+        if not campaign.running:
             return None
 
         exhausted, why = campaign.exhausted()
         if exhausted:
             self.campaigns.set_status(campaign.campaign_id, "completed", reason=why)
             self._event(EventKind.CAMPAIGN_STOPPED, why, level="pass")
-            self.detach(why)
-            return Refusal(reason=why, bucket=Bucket.REFINE_PARAMETERS)
+            self.detach(why, exhausted=True)
+            return Refusal(
+                reason=why,
+                bucket=Bucket.REFINE_PARAMETERS,
+                kind=SkipKind.CAMPAIGN_EXHAUSTED,
+                subject=campaign.name,
+            )
 
         allocation = self._current_allocation(campaign)
         bucket = allocation.draw(rng)
@@ -325,7 +389,12 @@ class ResearchDirector:
                 level="fail",
                 worker=worker,
             )
-            return Refusal(reason=str(exc), bucket=bucket)
+            return Refusal(
+                reason=f"{type(exc).__name__}: {exc}",
+                bucket=bucket,
+                kind=SkipKind.PROPOSAL_ERROR,
+                subject=str(bucket),
+            )
 
         if isinstance(outcome, Refusal):
             self.campaigns.record(
@@ -392,6 +461,8 @@ class ResearchDirector:
                 reason="every archetype is already represented by a registered family",
                 bucket=Bucket.DISCOVER_FAMILY,
                 duplicate=True,
+                kind=SkipKind.NO_ELIGIBLE_WORK,
+                subject="new family",
             )
 
         sources = self._maybe_retrieve(campaign, archetype.label, worker)
@@ -413,7 +484,16 @@ class ResearchDirector:
             worker=worker,
         )
         if not verdict.admitted:
-            return Refusal(reason=verdict.reason, bucket=Bucket.DISCOVER_FAMILY, duplicate=True)
+            return Refusal(
+                reason=verdict.reason,
+                bucket=Bucket.DISCOVER_FAMILY,
+                duplicate=True,
+                kind=SkipKind.NOT_NOVEL,
+                level=_level_of(verdict),
+                matched=verdict.nearest.key if verdict.nearest else None,
+                similarity=verdict.nearest.combined if verdict.nearest else None,
+                subject=archetype.label,
+            )
 
         missing = campaign.serves(archetype.required_data)
         if missing:
@@ -422,6 +502,8 @@ class ResearchDirector:
                 reason=f"requires {', '.join(missing)}, which this campaign cannot serve",
                 bucket=Bucket.DISCOVER_FAMILY,
                 blocked=missing,
+                kind=SkipKind.CAPABILITY_BLOCKED,
+                subject=archetype.label,
             )
 
         family_key = f"discovered_{archetype.key}"[:40]
@@ -436,7 +518,14 @@ class ResearchDirector:
                     created_by="research-director",
                 )
             except ValueError as exc:
-                return Refusal(reason=str(exc), bucket=Bucket.DISCOVER_FAMILY, duplicate=True)
+                return Refusal(
+                    reason=str(exc),
+                    bucket=Bucket.DISCOVER_FAMILY,
+                    duplicate=True,
+                    kind=SkipKind.NOT_NOVEL,
+                    level=NoveltyLevel.NEAR_DUPLICATE,
+                    subject=family_key,
+                )
             self.campaigns.record(campaign.campaign_id, families_created=1)
             self._event(
                 EventKind.FAMILY_CREATED,
@@ -526,6 +615,8 @@ class ResearchDirector:
                 reason="no archetype is runnable on this campaign's data capabilities",
                 bucket=Bucket.EXPLORE_HYPOTHESIS,
                 blocked=("BARS",),
+                kind=SkipKind.CAPABILITY_BLOCKED,
+                subject="hypothesis exploration",
             )
         sources = self._maybe_retrieve(campaign, archetype.label, worker)
         return self._candidate_from_archetype(
@@ -569,6 +660,10 @@ class ResearchDirector:
                 reason=f"no unused construction remains for '{item.question[:80]}'",
                 bucket=Bucket.ADVANCE_PROMISING,
                 duplicate=True,
+                kind=SkipKind.NOT_NOVEL,
+                level=NoveltyLevel.SAME_CONSTRUCTION,
+                matched=item.item_id,
+                subject=item.question[:120],
             )
         return self._candidate_from_archetype(
             campaign,
@@ -600,6 +695,8 @@ class ResearchDirector:
                 reason="no template is runnable on this campaign's data capabilities",
                 bucket=Bucket.REFINE_PARAMETERS,
                 blocked=("BARS",),
+                kind=SkipKind.CAPABILITY_BLOCKED,
+                subject="parameter refinement",
             )
         key = pool[rng.randrange(len(pool))]
         template = TEMPLATES[key]
@@ -629,6 +726,8 @@ class ResearchDirector:
                 reason="no template is runnable on this campaign's data capabilities",
                 bucket=Bucket.ROBUSTNESS,
                 blocked=("BARS",),
+                kind=SkipKind.CAPABILITY_BLOCKED,
+                subject="robustness replication",
             )
         key = pool[rng.randrange(len(pool))]
         template = TEMPLATES[key]
@@ -819,7 +918,16 @@ class ResearchDirector:
                 level="warn",
                 worker=worker,
             )
-            return Refusal(reason=verdict.reason, bucket=bucket, duplicate=True)
+            return Refusal(
+                reason=verdict.reason,
+                bucket=bucket,
+                duplicate=True,
+                kind=SkipKind.NOT_NOVEL,
+                level=_level_of(verdict),
+                matched=verdict.nearest.key if verdict.nearest else None,
+                similarity=verdict.nearest.combined if verdict.nearest else None,
+                subject=archetype.label,
+            )
 
         item_id = frontier_item_id
         if item_id is None:
@@ -935,7 +1043,12 @@ class ResearchDirector:
                 level="fail",
                 worker=worker,
             )
-            return Refusal(reason=str(exc), bucket=Bucket.DISCOVER_FAMILY)
+            return Refusal(
+                reason=str(exc),
+                bucket=Bucket.DISCOVER_FAMILY,
+                kind=SkipKind.PROPOSAL_ERROR,
+                subject=template_key,
+            )
 
         TEMPLATES[template_key] = template
         with self._lock:
@@ -1439,6 +1552,25 @@ def _interpret(
         HypothesisStatus.INCONCLUSIVE,
     )
 
+
+
+def _level_of(verdict: Any) -> NoveltyLevel:
+    """Translate a novelty verdict into a band.
+
+    The verdict carries a component-wise :class:`Similarity` against the nearest
+    prior subject, and the band is read from it rather than from the combined
+    score alone: two proposals reading the same mechanism are the same piece of
+    research even when their statements diverge, and the combined score cannot
+    say that on its own.
+    """
+    nearest = getattr(verdict, "nearest", None)
+    if nearest is None:
+        return NoveltyLevel.NOVEL_HYPOTHESIS
+    return level_from_score(
+        float(nearest.combined),
+        mechanism=float(nearest.mechanism),
+        features=float(nearest.features),
+    )
 
 __all__ = [
     "Candidate",
