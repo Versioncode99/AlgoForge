@@ -52,6 +52,19 @@ LOOP_THRESHOLD = 25
 #: How many recent outcomes to keep for diagnosis.
 OUTCOME_WINDOW = 200
 
+#: The longest a worker waits between cycles while nothing can be done.
+#:
+#: A stalled engine used to spin at its configured cycle interval regardless.
+#: Four workers at a one-second cycle produce fourteen thousand refusals an hour
+#: against an exhausted campaign, which costs a core, floods the journal and
+#: buries the one event that mattered under identical ones. Backing off changes
+#: nothing about *what* is reported — the state and the reason are the same —
+#: only how often the same answer is recomputed.
+MAX_BACKOFF_SECONDS = 30.0
+
+#: How sharply the wait grows with consecutive barren cycles.
+BACKOFF_FACTOR = 1.6
+
 
 class RuntimeState(StrEnum):
     """The engine's actual condition.
@@ -578,6 +591,30 @@ class RuntimeMonitor:
             {"at": _iso(at), "outcome": str(outcome), "reason": reason}
             for at, outcome, reason in reversed(entries)
         ]
+
+    def backoff(self, base: float) -> float:
+        """How long a worker should wait before trying again.
+
+        ``base`` while work is happening, growing towards
+        :data:`MAX_BACKOFF_SECONDS` as barren cycles accumulate, and back to
+        ``base`` the moment anything progresses. This is a **pacing** decision
+        and never a reporting one: a backed-off engine reports exactly the same
+        state, for exactly the same reason, as one spinning at full rate.
+        """
+        with self._lock:
+            barren = 0
+            for _, outcome, _ in reversed(self._outcomes):
+                if outcome is Outcome.PROGRESS:
+                    break
+                barren += 1
+        if barren < len(self._workers) or not barren:
+            # Fewer barren cycles than there are workers is one unlucky round,
+            # not a stall: every worker deserves a turn before the engine slows.
+            return base
+        # Grows with the *run*, not with the count, so a long run does not take
+        # a proportionally long time to recover once something progresses.
+        steps = min(8, barren // max(1, len(self._workers)))
+        return min(MAX_BACKOFF_SECONDS, base * (BACKOFF_FACTOR**steps))
 
     def outcome_counts(self) -> dict[str, int]:
         with self._lock:

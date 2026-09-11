@@ -545,3 +545,45 @@ def test_observation_without_a_campaign_is_a_no_op(director: ResearchDirector) -
     director.observe(
         ObservationInput(candidate=candidate, strategy_id="s", experiment_id="e", status="judged")
     )
+
+def test_a_family_proposal_that_is_not_new_is_still_researched(
+    director: ResearchDirector,
+) -> None:
+    """Deduplication must prevent waste without preventing discovery.
+
+    The novelty gate refuses a *family* proposal that restates a known
+    explanation — correctly, because `mean_reversion_2` should never exist. But
+    the verdict it returns carries a downgrade in its own words: "this is a new
+    hypothesis within a known explanation, which is worth testing". The director
+    used to discard that and spend the cycle on nothing, which is exactly the
+    shape of a memory that stops research rather than focusing it.
+
+    Driven directly at the builder so the assertion is about the decision and
+    not about which bucket the budget happened to draw.
+    """
+    start(director)
+    campaign = director.campaign()
+    assert campaign is not None
+    rng = random.Random(11)
+
+    # Every archetype is drawn repeatedly, so collisions with the families
+    # registered by earlier draws are guaranteed within a few dozen attempts.
+    outcomes = [director._discover_family(campaign, rng, 0) for _ in range(40)]
+    refusals = [o for o in outcomes if isinstance(o, Refusal)]
+    candidates = [o for o in outcomes if isinstance(o, Candidate)]
+
+    assert candidates, "every family proposal was refused; nothing was researched"
+
+    # Whatever was refused was refused as a restatement, with the collision
+    # named — never as a bare "duplicate".
+    for refusal in refusals:
+        assert refusal.kind is SkipKind.NOT_NOVEL
+        assert refusal.reason
+        assert refusal.matched or "archetype" in refusal.reason
+
+    # And at least one candidate came through the downgrade path rather than as
+    # an outright new family: the gate said "not a family" and research still
+    # happened.
+    downgraded = [c for c in candidates if "downgraded from a family proposal" in c.rationale]
+    assert downgraded, "no proposal was pursued at the level the gate assigned it"
+    assert all(c.search_kind is not SearchKind.PARAMETER for c in downgraded)

@@ -80,6 +80,7 @@ from forge.research.promotion import (
 from forge.research.skips import (
     NoveltyLevel,
     SkipKind,
+    admits,
     level_from_score,
 )
 from forge.research.synthesis import ARCHETYPES, Archetype, archetypes_for, compose
@@ -620,12 +621,51 @@ class ResearchDirector:
             worker=worker,
         )
         if not verdict.admitted:
+            # A refused *family* proposal is not necessarily a refused *cycle*.
+            #
+            # The verdict carries a downgrade — "the mechanism restates X. This
+            # is a new hypothesis within a known explanation, which is worth
+            # testing" — and the old code threw that away and spent the cycle on
+            # nothing. It is the concrete shape of deduplication preventing
+            # discovery: the gate correctly identifies a smaller piece of
+            # research and the caller declines to do it.
+            #
+            # So a downgrade is pursued at the level the gate assigned. Only an
+            # outright restatement — a proposal the gate calls PARAMETER, meaning
+            # the same claim about the same mechanism — is refused, because
+            # different numbers against a claim already on the frontier really
+            # are a parameter search.
+            level = _level_of(verdict)
+            if verdict.kind is not SearchKind.PARAMETER and admits(
+                level, floor=NoveltyLevel.SAME_MECHANISM
+            ):
+                self._event(
+                    EventKind.NOVELTY_CHECKED,
+                    f"'{archetype.key}' is not a new family, but {verdict.kind.value.lower()} "
+                    "research is still worth doing — pursuing it at that level",
+                    detail={"downgraded_to": str(verdict.kind), "level": str(level)},
+                    worker=worker,
+                )
+                return self._candidate_from_archetype(
+                    campaign,
+                    archetype,
+                    rng,
+                    worker,
+                    bucket=Bucket.DISCOVER_FAMILY,
+                    search_kind=verdict.kind,
+                    family=archetype.family,
+                    novelty=verdict.novelty,
+                    sources=sources,
+                    rationale=(
+                        f"downgraded from a family proposal: {verdict.reason}"
+                    ),
+                )
             return Refusal(
                 reason=verdict.reason,
                 bucket=Bucket.DISCOVER_FAMILY,
                 duplicate=True,
                 kind=SkipKind.NOT_NOVEL,
-                level=_level_of(verdict),
+                level=level,
                 matched=verdict.nearest.key if verdict.nearest else None,
                 similarity=verdict.nearest.combined if verdict.nearest else None,
                 subject=archetype.label,

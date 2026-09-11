@@ -144,7 +144,6 @@
 
 /* Hidden items are only ever drawn while editing, and are drawn as hidden. */
 .ws-item[data-hidden] > a { opacity: 0.45; font-style: italic; }
-.ws-item-grip { width: 12px; height: 12px; color: var(--fg-3); cursor: grab; }
 
 /* ── the rail's own tools ────────────────────────────────────────────────── */
 .ws-rail-tools {
@@ -231,7 +230,10 @@
 }
 .ws-picker > header button svg { width: 14px; height: 14px; }
 
-.ws-picker-search {
+/* Specificity, deliberately: `.ws-picker label` below is a class plus a type
+ * selector and was winning over a single class, turning this row into a grid
+ * and stacking the magnifier above the field. */
+.ws-picker .ws-picker-search {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -280,13 +282,20 @@
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
   background: var(--accent-wash);
 }
-.ws-picker-body section > button strong { font-size: 0.85rem; font-weight: 500; }
+.ws-picker-body section > button strong {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
 .ws-picker-body section > button span {
   grid-column: 1;
+  grid-row: 2;
   color: var(--fg-3);
   font-size: 0.74rem;
 }
 .ws-picker-body section > button em {
+  grid-column: 2;
   grid-row: 1 / 3;
   align-self: center;
   color: var(--fg-3);
@@ -493,6 +502,38 @@
 .ws-builtins button > span { color: var(--fg-3); font-size: 0.9rem; }
 .ws-builtins button strong { font-size: 0.82rem; font-weight: 500; }
 .ws-builtins button small { color: var(--fg-3); font-size: 0.7rem; line-height: 1.4; }
+
+.ws-leave-mode {
+  display: grid;
+  gap: 2px;
+  margin-top: auto;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-leave-mode:hover { background: var(--bg-2); color: var(--fg-0); }
+.ws-leave-mode small { color: var(--fg-3); font-size: 0.7rem; line-height: 1.45; }
+
+.mode-badge-icon {
+  margin-right: var(--sp-1);
+  font-style: normal;
+  color: var(--fg-2);
+}
+.mode-origin {
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--fg-3);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
 
 .ws-error { margin: 0; color: var(--fail); font-size: 0.8rem; }
 

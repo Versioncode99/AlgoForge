@@ -186,9 +186,14 @@ export function SkipAccounting({ engine }: { engine: EngineStatus | undefined })
   const skips = engine?.skips
   const rows: { label: string; value: number; tone: Tone; note: string }[] = [
     {
-      label: 'Duplicates prevented', value: skips?.useful ?? engine?.compute_saved ?? 0,
+      // Not "duplicates". Most refusals in this bucket are restatements of
+      // existing research rather than byte-identical repeats, and calling nine
+      // hundred of them duplicates when nineteen are exact is the same kind of
+      // overclaim the old single counter made. The novelty breakdown beside
+      // this says which is which.
+      label: 'Already answered', value: skips?.useful ?? engine?.compute_saved ?? 0,
       tone: 'good',
-      note: 'A proposal already tested, already disproven, or a restatement of existing research. This is compute genuinely saved.',
+      note: 'Proposals refused because the research already exists — an identical experiment, a disproven region, or a restatement of a claim on the frontier. Compute genuinely saved. See the novelty breakdown for how close each one was.',
     },
     {
       label: 'Cycles with nothing to do', value: skips?.wasted ?? engine?.skipped_without_work ?? 0,

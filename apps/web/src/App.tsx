@@ -230,8 +230,11 @@ export function App() {
   }, [])
   // An overlay rail that stays open over the screen it just navigated to is a
   // menu the reader has to dismiss before seeing what they asked for.
-  useEffect(() => { setRailOpen(false); setSwitcherOpen(false) }, [route])
-  const navigate = useCallback((id: string) => { window.location.hash = id }, [])
+  useEffect(() => { setRailOpen(false) }, [route])
+  const navigate = useCallback((id: string) => {
+    window.location.hash = id
+    setSwitcherOpen(false)
+  }, [])
 
   /* The appearance is loaded here rather than in Settings.
    *
@@ -315,10 +318,24 @@ export function App() {
 
     <header className="context-bar">
       <button className="rail-mobile-toggle" aria-label="Toggle navigation" aria-expanded={railOpen} onClick={() => setRailOpen(value => !value)}><Menu /></button>
+      {/* What governs this screen, named honestly. A workspace with its own
+        * rail is not "AI mode" or "Prop Firm mode" — it is the arrangement the
+        * operator built, and labelling it with a mode it only borrowed a few
+        * destinations from is the same category error the modes themselves
+        * were. The mode is still shown, smaller, because it decides what an
+        * assistant may do on your behalf. */}
       <div className="mode-badge">
-        <b>{descriptor.name}</b>
+        {railWorkspace?.sidebar_is_custom
+          ? <b title={railWorkspace.description || undefined}>
+              {railWorkspace.icon && <i className="mode-badge-icon" aria-hidden="true">{railWorkspace.icon}</i>}
+              {railWorkspace.name}
+            </b>
+          : <b>{descriptor.name}</b>}
+        {railWorkspace?.sidebar_is_custom && (
+          <span className="mode-origin" title="The permissions in force. A workspace composes screens; the mode decides what an assistant may do on your behalf.">{descriptor.name}</span>
+        )}
         {stance && <span className="mode-stance-tag" data-stance={stance}>{STANCE_LABEL[stance]}</span>}
-        <button className="mode-switch" onClick={() => leave.mutate()} title="Return to the workspace chooser. Nothing is lost — each mode keeps its own layout.">
+        <button className="mode-switch" onClick={() => setSwitcherOpen(true)} title="Switch workspace, or build one. Nothing is lost — every arrangement is saved.">
           <Grid2x2 aria-hidden="true" /><span>Switch</span>
         </button>
       </div>
@@ -356,7 +373,7 @@ export function App() {
     {switcherOpen && (
       <div className="ws-switcher-layer" role="dialog" aria-label="Workspaces">
         <button className="ws-switcher-scrim" aria-label="Close workspaces" onClick={() => setSwitcherOpen(false)} />
-        <WorkspaceSwitcher onOpened={() => setSwitcherOpen(false)} />
+        <WorkspaceSwitcher onOpened={() => setSwitcherOpen(false)} onLeaveMode={() => leave.mutate()} />
       </div>
     )}
     <EventDrawer events={events.data ?? []} open={eventsOpen} onClose={() => setEventsOpen(false)} />

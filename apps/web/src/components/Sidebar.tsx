@@ -1,5 +1,5 @@
 import {
-  ChevronDown, ChevronRight, EyeOff, FolderPlus, GripVertical, Pencil, Pin, PinOff,
+  ChevronDown, ChevronRight, EyeOff, FolderPlus, Pencil, Pin, PinOff,
   Plus, RotateCcw, Search, Trash2, X,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -199,7 +199,12 @@ function SidebarGroup({
             </a>
             {editing && !collapsedRail && (
               <span className="ws-item-actions">
-                <GripVertical className="ws-item-grip" aria-hidden="true" />
+                {/* No drag grip. The model and the API both take a position, so
+                  * drag-and-drop is implementable — but an icon with a grab
+                  * cursor and no handler behind it is a control that lies, and
+                  * the product rules refuse those. Moving between groups is the
+                  * button below; reordering within one is not offered yet
+                  * rather than offered and inert. */}
                 <button
                   aria-label={item.pinned ? `Unpin ${item.label}` : `Pin ${item.label}`}
                   aria-pressed={item.pinned}

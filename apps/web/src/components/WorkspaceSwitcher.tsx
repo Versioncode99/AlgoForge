@@ -25,7 +25,14 @@ const BUILT_INS: { mode: string; name: string; icon: string; detail: string }[] 
   { mode: 'hedge_fund', name: 'Hedge Fund', icon: '◼', detail: 'Portfolio, risk, the gate and approvals.' },
 ]
 
-export function WorkspaceSwitcher({ onOpened }: { onOpened?: () => void }) {
+export function WorkspaceSwitcher({ onOpened, onLeaveMode }: {
+  onOpened?: () => void
+  /** Return to the four-way chooser. Kept, and kept *here*, because changing
+   *  mode changes what an assistant may do on your behalf — it is a permissions
+   *  decision, not a navigation one, and it belongs beside the arrangements
+   *  rather than in the header where it read as "switch screens". */
+  onLeaveMode?: () => void
+}) {
   const [creating, setCreating] = useState(false)
   const workspaces = useWorkspaces()
   const active = useActiveWorkspace()
@@ -90,6 +97,13 @@ export function WorkspaceSwitcher({ onOpened }: { onOpened?: () => void }) {
           ))}
         </div>
       </section>
+
+      {onLeaveMode && (
+        <button className="ws-leave-mode" onClick={onLeaveMode}>
+          Change operating mode
+          <small>Decides what an assistant may do on your behalf. Your workspaces are unaffected.</small>
+        </button>
+      )}
 
       {creating && <CreateWorkspace onClose={() => setCreating(false)} onCreated={onOpened} />}
       {active.isError && <p className="ws-error" role="alert">The active workspace could not be loaded.</p>}

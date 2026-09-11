@@ -547,7 +547,13 @@ class AutonomousEngine:
             if worker == 0:
                 self._watchdog()
             self._stage(worker, "waiting")
-            self._stop.wait(self.state.config.cycle_seconds)
+            # Paced by what is actually happening. An engine refusing every
+            # proposal against an exhausted campaign used to spin at the
+            # configured interval forever, costing a core and burying the one
+            # event that mattered under fourteen thousand identical ones. The
+            # state it reports is unchanged; only how often it recomputes the
+            # same answer is.
+            self._stop.wait(self.monitor.backoff(self.state.config.cycle_seconds))
 
         self._stage(worker, "stopped")
         # The run is only over once every worker has left the loop.

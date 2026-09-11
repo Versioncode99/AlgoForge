@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from forge.research.runtime import (
     DEAD_AFTER_SECONDS,
+    MAX_BACKOFF_SECONDS,
     STALE_AFTER_SECONDS,
     Outcome,
     RuntimeMonitor,
@@ -166,3 +167,53 @@ def test_progress_resets_the_clock(monitor: RuntimeMonitor) -> None:
     assert monitor.diagnose(now=_at(monitor, 120)).state is RuntimeState.EXHAUSTED
     monitor.record("0", Outcome.PROGRESS, "a genuinely new candidate")
     assert monitor.diagnose().state is RuntimeState.RUNNING
+
+
+# ── pacing ───────────────────────────────────────────────────────────────────
+def test_a_working_engine_is_never_slowed(monitor: RuntimeMonitor) -> None:
+    monitor.beat("0", "backtesting")
+    monitor.beat("1", "backtesting")
+    monitor.record("0", Outcome.PROGRESS, "judged")
+    assert monitor.backoff(4.0) == 4.0
+
+
+def test_one_unlucky_round_is_not_a_stall(monitor: RuntimeMonitor) -> None:
+    """Every worker deserves a turn before the engine decides it is stuck."""
+    monitor.beat("0", "x")
+    monitor.beat("1", "x")
+    monitor.record("0", Outcome.DUPLICATE, "already claimed")
+    assert monitor.backoff(4.0) == 4.0
+
+
+def test_a_long_barren_run_backs_off_and_is_bounded(monitor: RuntimeMonitor) -> None:
+    monitor.beat("0", "x")
+    monitor.beat("1", "x")
+    for _ in range(400):
+        monitor.record("0", Outcome.EXHAUSTED, "experiment budget reached")
+    backoff = monitor.backoff(1.0)
+    assert backoff > 1.0
+    assert backoff <= MAX_BACKOFF_SECONDS
+
+
+def test_progress_restores_full_rate_immediately(monitor: RuntimeMonitor) -> None:
+    """Recovery must not take as long as the stall did."""
+    monitor.beat("0", "x")
+    monitor.beat("1", "x")
+    for _ in range(400):
+        monitor.record("0", Outcome.DUPLICATE, "already claimed")
+    assert monitor.backoff(1.0) > 1.0
+    monitor.record("0", Outcome.PROGRESS, "a real candidate")
+    assert monitor.backoff(1.0) == 1.0
+
+
+def test_backing_off_does_not_change_what_is_reported(monitor: RuntimeMonitor) -> None:
+    """Pacing is not reporting. The state and the reason are the same either way."""
+    monitor.beat("0", "x")
+    monitor.beat("1", "x")
+    for _ in range(400):
+        monitor.record("0", Outcome.EXHAUSTED, "experiment budget reached")
+    before = monitor.diagnose(now=_at(monitor, 600))
+    assert monitor.backoff(1.0) > 1.0
+    after = monitor.diagnose(now=_at(monitor, 600))
+    assert before.state is after.state
+    assert before.reason == after.reason

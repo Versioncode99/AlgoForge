@@ -491,3 +491,37 @@ is reserved for the protocol; diagnostics belong on stderr.
 ```
 
 The workstation includes immutable run contracts, point-in-time data validation, deterministic evidence gates, fixed-seed risk paths, separately versioned challenge and funded account rules, cited agent dissent, and a human-gated ForgeKeeper release supervisor. Architecture and the executable plan are in `docs/superpowers/`.
+
+---
+
+## Research fabric, workspaces and the runtime (2026-09-11)
+
+Three things changed shape. Each has its own document under `docs/`.
+
+**The engine tells the truth about itself.** `RUNNING` used to mean "worker
+threads exist", so a search that had exhausted its campaign or was refusing every
+proposal reported RUNNING for as long as it was left alone. It is now one of
+thirteen derived states with a reason and a remedy, and `RUNNING` is returned only
+when a worker has made progress inside the no-progress window.
+→ [`AUTONOMOUS_RESEARCH_ARCHITECTURE.md`](docs/AUTONOMOUS_RESEARCH_ARCHITECTURE.md)
+
+**Many campaigns, many agents.** The rule that only one campaign could run cited a
+constraint that did not exist in the code. Claims are now partitioned per
+campaign; the trial count the judge deflates against deliberately is not. Agents
+are first-class records with roles, leases and honest capacity.
+→ [`MULTI_CAMPAIGN_AGENT_ARCHITECTURE.md`](docs/MULTI_CAMPAIGN_AGENT_ARCHITECTURE.md)
+
+**The sidebar belongs to the operator.** Navigation was a property of the mode, so
+wanting prop accounts beside research agents meant switching modes and losing the
+screen. A workspace now owns its rail, and any destination from any mode can sit
+in it.
+→ [`WORKSPACE_ARCHITECTURE.md`](docs/WORKSPACE_ARCHITECTURE.md)
+
+The audit that found all of this is
+[`FULL_SYSTEM_AUDIT.md`](docs/FULL_SYSTEM_AUDIT.md); what was built is
+[`FINAL_IMPLEMENTATION_REPORT.md`](docs/FINAL_IMPLEMENTATION_REPORT.md).
+
+G0–G13 is byte-identical to before this work, and
+`tests/research/test_boundaries.py` asserts both that the ladder still has
+fourteen gates and that nothing in the research layer can construct a verdict,
+reach risk, or touch execution.

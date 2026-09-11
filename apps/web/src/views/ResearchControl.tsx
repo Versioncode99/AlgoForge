@@ -84,10 +84,12 @@ export function ResearchControlView() {
             One number used to cover all of this. These are different facts: a refusal
             that declined a real experiment saved compute; one that happened because
             there was nothing to do saved nothing and means the search needs redirecting.
+            An exact repeat and a restatement are also different, which is what the
+            novelty breakdown is for — “already answered” is not a count of duplicates.
           </p>
           <dl>
-            <div data-tone="good">
-              <dt>Duplicates prevented</dt>
+            <div data-tone="good" title="An identical experiment, a disproven parameter region, or a restatement of a claim already on the frontier. Compute genuinely saved — the breakdown below says how close each one was.">
+              <dt>Already answered</dt>
               <dd>{(data?.skips.useful ?? 0).toLocaleString()}</dd>
             </div>
             <div data-tone="warn">

@@ -161,6 +161,30 @@ HTTP routes. There is deliberately no AI-only path.
   `components/Sidebar.tsx`, `components/WorkspaceSwitcher.tsx`,
   `components/RuntimeState.tsx` and three stylesheets.
 
-## Next
+## Phase 8 — Tests, integration campaign, visual QA, documentation ✅
 
-Phase 8 — integration tests, visual QA, performance, final documentation.
+- **123 new Python tests** across nine modules, plus two added to the director's.
+- **Integration:** two campaigns driven end to end through the real engine,
+  synchronously, with their own crews, journals, frontiers and claims; both
+  survive a process restart and resume.
+- **Live verification:** a real API and engine ran two campaigns to their budgets
+  with five agents. Worker allocation followed priority and health; the state
+  read RUNNING while working and EXHAUSTED when the budgets were reached, with
+  the reason in words.
+- **Visual QA** at 1920/1440/1280/420 against that live system, and again with 42
+  campaigns. No console errors, no page errors, no horizontal overflow. Three
+  real bugs found and fixed (picker column order, search-icon specificity, a
+  switcher that closed itself on background route corrections).
+- **Performance:** control-center 11 ms / 64 KB at 42 campaigns; 42 cards in
+  882 ms; click handled in 207 ms. Added `RuntimeMonitor.backoff` after load
+  testing showed 768 cycles of which 749 were barren.
+- **Boundary tests** assert what the research layer cannot import or construct,
+  and that the G0–G13 ladder still has exactly fourteen gates.
+- **Docs:** FULL_SYSTEM_AUDIT, AUTONOMOUS_RESEARCH_ARCHITECTURE,
+  MULTI_CAMPAIGN_AGENT_ARCHITECTURE, WORKSPACE_ARCHITECTURE,
+  PROP_DESK_ARCHITECTURE, RISK_AUTOMATION_ARCHITECTURE, UX_IMPLEMENTATION_REPORT,
+  FINAL_IMPLEMENTATION_REPORT.
+
+## Status
+
+Complete.
