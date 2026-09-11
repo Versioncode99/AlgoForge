@@ -107,7 +107,9 @@ def test_model_proposal_is_structured_and_never_executes_code(service, monkeypat
     import forge_api.agent_service as module
 
     service.settings.save(Settings(ai=AISettings(enabled=True)))
-    monkeypatch.setattr(module, "credential_for", lambda: SimpleNamespace(present=True))
+    # Both take the selected provider now — a specialist call has to go to the
+    # provider the operator chose, not to whichever one is the default.
+    monkeypatch.setattr(module, "credential_for", lambda _provider: SimpleNamespace(present=True))
     raw = {
         "summary": "Test one bounded variant",
         "source_ids": ["tsmom"],
@@ -121,7 +123,7 @@ def test_model_proposal_is_structured_and_never_executes_code(service, monkeypat
     monkeypatch.setattr(
         module,
         "client_for",
-        lambda: SimpleNamespace(
+        lambda _provider: SimpleNamespace(
             chat=lambda **kwargs: {"answer": json.dumps(raw), "model": "test-model"}
         ),
     )

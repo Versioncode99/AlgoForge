@@ -39,7 +39,7 @@ from forge_api import jsonish
 from forge_api.actions import ActionError, Actions
 from forge_api.activity import ActivityLog
 from forge_api.jobs import REGISTRY, JobHandle
-from forge_api.providers import client_for, credential_for
+from forge_api.providers import client_for, credential_for, model_for
 from forge_api.settings_store import SettingsStore
 
 PLACEHOLDER = re.compile(r"\{\{\s*step(\d+)\.([A-Za-z0-9_.]+)\s*\}\}")
@@ -225,7 +225,11 @@ class Orchestrator:
         templates = sorted(TEMPLATES)
         current = self.settings.load()
         model = current.ai.routing.get("orchestrator", "")
-        reachable = current.ai.enabled and model not in {"", "none"} and credential_for().present
+        reachable = (
+            current.ai.enabled
+            and model not in {"", "none"}
+            and credential_for(current.ai.provider).present
+        )
         if not reachable:
             plan = _offline_plan(objective, templates)
             plan["model"] = None
@@ -263,8 +267,14 @@ class Orchestrator:
         last: Exception | None = None
         for attempt_model, system in attempts:
             try:
-                response = client_for().chat(
-                    model=attempt_model, max_tokens=PLAN_TOKENS, system=system, prompt=payload
+                # The retry model is a gateway id, so it has to go through the
+                # same routing repair as the configured one or the second
+                # attempt asks DeepSeek for a model only OpenCode serves.
+                response = client_for(current.ai.provider).chat(
+                    model=model_for(current.ai.provider, attempt_model),
+                    max_tokens=PLAN_TOKENS,
+                    system=system,
+                    prompt=payload,
                 )
                 parsed = jsonish.loads(str(response["answer"]), require=("steps",))
                 steps = parsed.get("steps")

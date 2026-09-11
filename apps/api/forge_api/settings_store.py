@@ -13,10 +13,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from forge_api.deepseek import resolve_deepseek_credential
 from forge_api.opencode import resolve_opencode_credential, resolve_opencode_standby
-from forge_api.providers import catalog_for
+from forge_api.providers import PROVIDERS, base_url_for, catalog_for, known
 
-KNOWN_MODELS: list[dict[str, Any]] = catalog_for()
+#: Every model the app can name, across providers. This is a *vocabulary*, not a
+#: permission: a saved routing choice is checked for existing somewhere before
+#: it is written, and `providers.model_for` decides at call time whether the
+#: selected provider can actually serve it. Restricting this to the active
+#: provider would make it impossible to set up routing for a provider before
+#: switching to it.
+KNOWN_MODELS: list[dict[str, Any]] = [
+    model for provider in PROVIDERS for model in catalog_for(provider["id"])
+]
 MODEL_MIGRATIONS = {
     "claude-opus-5": "auto/smart",
     "claude-sonnet-5": "auto",
@@ -257,13 +266,14 @@ class SettingsStore:
             else model
             for role, model in routing.items()
         }
-        provider = str(ai_raw.get("provider", "opencode_go"))
-        if provider not in {"opencode_go"}:
-            provider = "opencode_go"
+        # A provider id that no longer exists falls back to the default rather
+        # than failing the load; the endpoint is derived from the id, never read
+        # from the file, so a stale base_url cannot survive a rename.
+        provider = known(str(ai_raw.get("provider", "opencode_go")))
         ai = AISettings(
             enabled=bool(ai_raw.get("enabled", True)),
             provider=provider,
-            base_url="https://opencode.ai/zen/go/v1",
+            base_url=base_url_for(provider),
             routing=routing,
             budget=budget,
         )
@@ -302,11 +312,12 @@ class SettingsStore:
         load_keys()
         primary = resolve_opencode_credential()
         standby = resolve_opencode_standby()
+        deepseek = resolve_deepseek_credential()
         rows = [
             {
                 "key": "OPENCODE_API_KEY",
                 "label": "OpenCode Go",
-                "detail": "Subscription key. Every model in the app runs on this.",
+                "detail": "Subscription key. Every model on that provider runs on this.",
                 "present": primary.present,
                 "hint": "configured" if primary.present else "not set",
                 "source": primary.source,
@@ -318,6 +329,17 @@ class SettingsStore:
                 "present": standby.present,
                 "hint": "configured" if standby.present else "not set",
                 "source": standby.source,
+            },
+            {
+                "key": "DEEPSEEK_API_KEY",
+                "label": "DeepSeek (direct)",
+                "detail": (
+                    "Account key, billed per token. Used when the DeepSeek provider "
+                    "is selected; independent of the subscription allowance."
+                ),
+                "present": deepseek.present,
+                "hint": "configured" if deepseek.present else "not set",
+                "source": deepseek.source,
             },
         ]
         for name, label, detail in CREDENTIALS:

@@ -65,13 +65,14 @@ from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.ledger_view import LedgerError, TradeLedgerService
 from forge_api.ledger_view import _TradeShim as _Shim
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
-from forge_api.opencode import OPENCODE_GO_DEFAULT_URL
 from forge_api.orchestrator import Orchestrator
 from forge_api.propdesk import PropDeskService
 from forge_api.providers import (
     PROVIDER_OPENCODE,
     PROVIDERS,
+    base_url_for,
     catalog_for,
+    model_for,
     status_for,
 )
 from forge_api.research_lab import ArtifactStore, LabError, ResearchLab
@@ -672,9 +673,10 @@ def build_control_router(
             )
 
         # The base URL was only ever a knob for the local OmniRoute gateway,
-        # which is gone. The hosted endpoint is fixed, so the field is accepted
-        # and ignored rather than removed from the wire and breaking clients.
-        proposed_url = OPENCODE_GO_DEFAULT_URL
+        # which is gone. Each provider's endpoint is fixed and derived from its
+        # id, so the field is accepted and ignored rather than removed from the
+        # wire and breaking clients.
+        proposed_url = base_url_for(provider)
         valid = {m["id"] for m in KNOWN_MODELS} | {m["id"] for m in catalog_for(provider)}
         role_keys = {r["key"] for r in ROLES}
 
@@ -685,6 +687,15 @@ def build_control_router(
             if model not in valid:
                 raise HTTPException(422, {"code": "unknown_model", "model": model})
             routing[role] = model
+
+        # Routing is stored per role, not per provider, so switching provider
+        # leaves roles pointing at models the new one cannot serve — they were
+        # real models when they were saved, so nothing rejected them. Repair
+        # them here rather than at call time: the response carries the settings
+        # back, so the operator sees which roles moved instead of discovering it
+        # from an upstream 400 mid-run.
+        if provider != current.ai.provider:
+            routing = {role: model_for(provider, model) for role, model in routing.items()}
 
         budget = BudgetSettings(**{**vars(current.ai.budget), **(body.budget or {})})
         updated = Settings(

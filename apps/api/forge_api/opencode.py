@@ -37,16 +37,14 @@ Credentials are resolved server-side and never cross the API boundary.
 
 from __future__ import annotations
 
-import os
-import re
 import time
 import uuid
-from pathlib import Path
 from typing import Any, Literal
 
 import httpx
 
-from forge_api.credentials import CredentialMaterial
+from forge_api.credentials import CredentialMaterial, resolve_credential
+from forge_api.model_text import clean_answer
 
 OPENCODE_GO_DEFAULT_URL = "https://opencode.ai/zen/go/v1"
 OPENCODE_ZEN_DEFAULT_URL = "https://opencode.ai/zen/v1"
@@ -57,13 +55,6 @@ USER_AGENT = (
     "AlgoForge/0.1 (quant research workstation; https://github.com/Versioncode99/AlgoForge)"
 )
 ANTHROPIC_VERSION = "2023-06-01"
-
-_REASONING_MARKERS = (
-    "here's a thinking process",
-    "here is a thinking process",
-    "let me think through",
-    "thinking process:",
-)
 
 Shape = Literal["chat", "messages", "responses"]
 
@@ -170,6 +161,27 @@ OPENCODE_GO_MODELS: tuple[dict[str, Any], ...] = (
         "origin": "china",
         "shape": "chat",
         "note": "Verified ~1.2s. ~37,800 requests/month; the workhorse of this set.",
+    },
+    # Both added by the provider after the 2026-09-06 sweep and re-probed on
+    # 2026-09-11. No published allowance yet, so none is claimed here.
+    {
+        "id": "deepseek-v4.1-flash",
+        "label": "Go · DeepSeek V4.1 Flash",
+        "tier": "fast",
+        "origin": "china",
+        "shape": "chat",
+        "note": "Verified ~1.9s. Newer than V4 Flash; monthly allowance not published.",
+    },
+    {
+        "id": "deepseek-flash",
+        "label": "Go · DeepSeek Flash",
+        "tier": "fast",
+        "origin": "china",
+        "shape": "chat",
+        "note": (
+            "Verified ~1.6s. Same id the direct DeepSeek provider serves, so which "
+            "account it bills depends on the selected provider, not on the id."
+        ),
     },
     {
         "id": "deepseek-v4-flash-vision-exp",
@@ -330,6 +342,9 @@ OPENCODE_GO_NOT_SERVED: tuple[str, ...] = (
     "mimo-v2-pro",
     "mimo-v2-omni",
     "hy3-preview",
+    # Advertised from 2026-09-11 and refused the same day with "Model is
+    # unavailable" — listed by the gateway ahead of the upstream serving it.
+    "grok-4.5",
     # Both Muse Spark tiers return 403: they train on submitted prompts and need
     # an explicit opt-in in the OpenCode console before the gateway will route.
     "muse-spark-1.3-contributor",
@@ -339,30 +354,12 @@ OPENCODE_GO_NOT_SERVED: tuple[str, ...] = (
 
 def resolve_opencode_credential() -> CredentialMaterial:
     """Primary key: environment first, then `.env`. Never logged or returned."""
-    return _credential("OPENCODE_API_KEY")
+    return resolve_credential("OPENCODE_API_KEY")
 
 
 def resolve_opencode_standby() -> CredentialMaterial:
     """Optional second key, tried once when the primary is refused."""
-    return _credential("OPENCODE_API_KEY_2")
-
-
-def _credential(name: str) -> CredentialMaterial:
-    direct = os.environ.get(name, "").strip()
-    if direct:
-        return CredentialMaterial(direct, "environment")
-
-    env_file = Path(__file__).resolve().parents[3] / ".env"
-    if env_file.is_file():
-        try:
-            for line in env_file.read_text(encoding="utf-8-sig").splitlines():
-                if line.strip().startswith(f"{name}="):
-                    value = line.partition("=")[2].strip().strip("\"'")
-                    if value:
-                        return CredentialMaterial(value, "env_file")
-        except (OSError, UnicodeError):
-            pass
-    return CredentialMaterial("", "none")
+    return resolve_credential("OPENCODE_API_KEY_2")
 
 
 def temperature_for(model: str) -> float:
@@ -481,13 +478,7 @@ class OpenCodeGoClient:
     @staticmethod
     def _clean(text: str) -> str:
         """Drop a leaked reasoning preamble and any <think> block."""
-        cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-        lowered = cleaned.lower()
-        if any(lowered.startswith(marker) for marker in _REASONING_MARKERS):
-            _, separator, tail = cleaned.rpartition("\n\n")
-            if separator and tail.strip():
-                return tail.strip()
-        return cleaned
+        return clean_answer(text)
 
     def chat(
         self, *, model: str, system: str, prompt: str, max_tokens: int = 900

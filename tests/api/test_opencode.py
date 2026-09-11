@@ -62,10 +62,18 @@ def test_go_is_a_different_endpoint_from_zen():
     assert client_for(PROVIDER_OPENCODE).base_url == OPENCODE_GO_DEFAULT_URL
 
 
-def test_go_is_the_only_provider():
+def test_omniroute_and_nim_are_still_gone():
     """OmniRoute needed a local process that never ran; NIM offered three usable
-    models behind a key that 404s for most of its catalogue. Both were removed."""
-    assert [p["id"] for p in PROVIDERS] == [PROVIDER_OPENCODE]
+    models behind a key that 404s for most of its catalogue. Both were removed.
+
+    DeepSeek was added later as a *second* provider, which is not a reversal:
+    it is an account key to one hosted API, with no gateway process and no
+    routing layer. What stayed dead is the chooser — see the DeepSeek suite for
+    the assertion that selection never falls back across providers.
+    """
+    ids = [p["id"] for p in PROVIDERS]
+    assert PROVIDER_OPENCODE in ids
+    assert not {"omniroute", "nvidia_nim"} & set(ids)
 
 
 def test_a_stale_auto_routing_choice_does_not_become_a_model_name():
@@ -82,9 +90,9 @@ def test_the_default_model_is_one_that_actually_exists():
 
 
 def test_every_catalogued_model_was_verified_working():
-    """Unlike Zen, nothing here is aspirational; all 28 answered on probe."""
+    """Unlike Zen, nothing here is aspirational; all 30 answered on probe."""
     catalogue = catalog_for(PROVIDER_OPENCODE)
-    assert len(catalogue) == 28
+    assert len(catalogue) == 30
     assert all("Verified" in model["note"] for model in catalogue)
 
 

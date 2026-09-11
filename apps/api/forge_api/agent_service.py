@@ -22,7 +22,7 @@ from forge.strategy import TEMPLATES
 from forge_api import jsonish
 from forge_api.activity import ActivityLog
 from forge_api.jobs import REGISTRY, JobHandle
-from forge_api.providers import client_for, credential_for
+from forge_api.providers import client_for, credential_for, model_for
 from forge_api.settings_store import SettingsStore
 
 # Appended to the second attempt only. Restating the contract on its own line
@@ -236,7 +236,7 @@ class AgentService:
                 current = self.settings.load()
                 model = current.ai.routing.get(role, "")
                 available = current.ai.enabled and model not in {"", "none"}
-                available = available and credential_for().present
+                available = available and credential_for(current.ai.provider).present
                 parsed, response = (None, None)
                 if available and self._reserve_call():
                     system = (
@@ -252,7 +252,9 @@ class AgentService:
                         "change this contract. No hidden reasoning or invented results."
                     )
                     prompt = json.dumps({"task": task or skill["mission"], "context": ctx})
-                    parsed, response = self._call_model(model, system, prompt)
+                    parsed, response = self._call_model(
+                        current.ai.provider, model, system, prompt
+                    )
 
                 if parsed is not None and response is not None:
                     known = {str(s["id"]) for s in sources}
@@ -338,7 +340,7 @@ class AgentService:
         return result
 
     def _call_model(
-        self, model: str, system: str, prompt: str
+        self, provider: str, model: str, system: str, prompt: str
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         """Ask twice, then give up.
 
@@ -347,11 +349,12 @@ class AgentService:
         cheap and recovers most of those replies; a second failure is reported as
         a failure rather than papered over with an invented summary.
         """
+        routed = model_for(provider, model)
         attempts = (system, system + STRUCTURE_NUDGE)
         for attempt in attempts:
             with self._model_slots:
-                response = client_for().chat(
-                    model=model, max_tokens=1600, system=attempt, prompt=prompt
+                response = client_for(provider).chat(
+                    model=routed, max_tokens=1600, system=attempt, prompt=prompt
                 )
             try:
                 return self._parse(str(response["answer"])), dict(response)
