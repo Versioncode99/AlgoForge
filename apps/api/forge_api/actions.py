@@ -2951,6 +2951,14 @@ class Actions:
             "protected verb.",
             {
                 "account_uid": {"type": "string"},
+                "strategy_id": {
+                    "type": "string",
+                    "optional": True,
+                    "description": (
+                        "Size against this strategy's measured drawdown when the account "
+                        "is not running one yet. Ignored when it is."
+                    ),
+                },
                 "advisory": {
                     "type": "number",
                     "optional": True,
@@ -3082,11 +3090,16 @@ class Actions:
         return self._desk_call("save_risk_settings", settings=settings, actor=self._current_actor())
 
     def propdesk_evaluate_risk(
-        self, account_uid: Any, advisory: Any = None, advisory_note: Any = None
+        self,
+        account_uid: Any,
+        strategy_id: Any = None,
+        advisory: Any = None,
+        advisory_note: Any = None,
     ) -> dict[str, Any]:
         return self._desk_call(
             "evaluate_risk",
             account_uid=_str(account_uid, "account_uid"),
+            strategy_id="" if strategy_id is None else _str(strategy_id, "strategy_id"),
             advisory=None if advisory is None else _advisory(advisory),
             advisory_note="" if advisory_note is None else _str(advisory_note, "advisory_note"),
             apply_change=False,

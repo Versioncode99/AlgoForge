@@ -936,6 +936,7 @@ class PropDeskService:
         self,
         account_uid: str,
         *,
+        strategy_id: str = "",
         advisory: float | None = None,
         advisory_note: str = "",
         apply_change: bool = False,
@@ -947,6 +948,11 @@ class PropDeskService:
         is free and always recorded; applying writes the new fraction and an
         audit row, and is refused in MANUAL mode where by definition nothing
         adjusts the number for you.
+
+        `strategy_id` answers "what would this cost on *that* strategy" for an
+        account that is not running one yet. Without it there is no measured
+        drawdown to size against, so the band is unmeasurable and risk sits at
+        the operator's minimum — correct, and useless as a preview.
         """
         settings = self.store.risk_settings(account_uid)
         if settings is None:
@@ -971,7 +977,7 @@ class PropDeskService:
                 else settings.boundaries.minimum_fraction
             ),
         )
-        observation = self.risk_observation(account_uid)
+        observation = self.risk_observation(account_uid, strategy_id=strategy_id)
         proposal = propose(
             settings=settings,
             observation=observation,
@@ -1024,7 +1030,7 @@ class PropDeskService:
             return None
         return assess_account(rules, state)
 
-    def risk_observation(self, account_uid: str) -> RiskObservation:
+    def risk_observation(self, account_uid: str, *, strategy_id: str = "") -> RiskObservation:
         """Assemble what the scaler is allowed to look at, from real sources.
 
         Every field this cannot fill is left absent, which the scaler reads as
@@ -1034,7 +1040,10 @@ class PropDeskService:
         """
         snapshot = self._allocation_snapshot(account_uid)
         allocation = self.store.allocation(account_uid)
-        strategy_id = allocation.strategy_id if allocation else ""
+        # What the account is running, or what the caller asked about. The
+        # allocation wins: a preview must not quietly restate an account's
+        # actual size as though it were something else.
+        strategy_id = allocation.strategy_id if allocation else strategy_id
         health = (
             self.strategy_health((strategy_id,))[0] if strategy_id else None
         )
@@ -1676,6 +1685,7 @@ def build_propdesk_router(service: PropDeskService) -> APIRouter:
         return guard(
             lambda: service.evaluate_risk(
                 account_uid,
+                strategy_id=str(body.get("strategy_id", "")),
                 advisory=None if advisory is None else float(advisory),
                 advisory_note=str(body.get("advisory_note", "")),
                 apply_change=bool(body.get("apply", False)),

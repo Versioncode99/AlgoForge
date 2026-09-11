@@ -138,6 +138,45 @@ attribution its terms require. FRED gives release *dates* and not clock times,
 and every event it returns says so rather than supporting a fifteen-minute window
 in the wrong place.
 
+**Risk has three modes, and they differ in who moves the number.** *Manual* — I
+decide. *Adaptive* — AlgoForge calculates. *AI risk management* — AlgoForge
+manages within my boundaries. All three produce one thing: the share of an
+account's buffer to its loss floor that a single allocation may cost. Everything
+from there to an order is deterministic, so an adjuster that can only move one
+bounded scalar cannot reach anything by being wrong about it.
+
+**The appetite meter is not a contract dial.** It selects how far into the
+measured drawdown tail you size against — the 99th percentile at the
+conservative end, the 75th at the aggressive one — and what share of the buffer
+is at stake. Both effects depend on the shape of the strategy's own bootstrapped
+drawdown distribution, so the same turn of the meter costs far more on a
+fat-tailed strategy than a thin-tailed one. With fewer than thirty out-of-sample
+days there is no distribution and therefore no band: risk falls to the
+operator's own minimum, and the screen says why rather than assuming normality.
+
+**Risk rises slowly and falls immediately.** Eight drivers — buffer, strategy
+health, realised volatility, regime fit, correlation, account rules, scheduled
+news, evidence — each multiply the target by at most one, so none of them can
+raise anything; risk rises only when the measured band does. An increase
+requires every driver to be *measured*, a decrease requires none, and cooldown
+and the daily cap apply to increases only. Balance is not a driver: it enters as
+the buffer, which is a constraint, so equity growth with a degraded strategy
+moves nothing.
+
+**Autonomous deployment has one gate list.** Off, approval-required and fully
+autonomous evaluate the same thirteen mandatory controls; the level changes only
+what happens once every one of them has passed. One of those controls is the
+lifecycle, which refuses the deployed stage while no broker connector exists —
+so the strongest case this build can construct is still blocked, and a test
+constructs it to prove so.
+
+**Consequential settings carry their disclosure.** Turning on AI risk management
+or autonomous deployment shows what it does and what it cannot do, with a
+checkbox per statement, and records which version was acknowledged. The version
+is a hash of the text, so editing a sentence invalidates the old agreement. The
+disclosures state facts about the implementation and make no claim about
+liability; a validator refuses that language outright.
+
 **No VPS anywhere.** The execution fabric runs wherever the application runs. An
 always-on agent is a deployment option nobody has to take, and no hosting
 provider is named in the code.

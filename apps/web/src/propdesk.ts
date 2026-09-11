@@ -719,6 +719,7 @@ export function useDeskMutations() {
     evaluateRisk: useMutation({
       mutationFn: ({ accountUid, ...body }: {
         accountUid: string
+        strategy_id?: string
         advisory?: number
         advisory_note?: string
         apply?: boolean

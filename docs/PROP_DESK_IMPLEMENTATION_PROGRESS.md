@@ -291,3 +291,69 @@ Full suite: **2292 passed**. `ruff` and `mypy --strict` (177 files) clean.
 ### Blocked
 
 Nothing.
+
+---
+
+## Phase 6 — the front door, the explanation API, and the end-to-end funnel
+
+**Status: complete.**
+
+### What changed
+
+- Six HTTP routes over the explanation layer: `/modes/expertise`,
+  `/modes/intents`, `/explain/metrics`, `/explain/metrics/{key}`,
+  `/explain/questions`, `/explain/passport/{id}`.
+- `apps/api/forge_api/dossier.py` — `latest_verdict` extracted from
+  `build_dossier`, so the Strategy Passport reads the verdict the Evidence
+  screen shows rather than computing a second one.
+- `apps/web/src/explain.ts` and two bands on the opening screen: "What do you
+  want to do?" and "How much do you want to see?".
+- `tests/propdesk/test_funnel.py` — twelve end-to-end tests.
+- `tests/api/test_explain_api.py` — 23 tests.
+- `apps/web/src/views/frontdoor.test.tsx` — 6 tests.
+- `evaluate_risk` gained an optional `strategy_id`, so an account not yet
+  running anything can still be shown what a candidate strategy would cost.
+
+### Three more bugs, two found by driving the running application
+
+1. **The front door navigated nowhere.** React Query drops the callbacks passed
+   to `mutate` once the calling component unmounts, and entering a mode unmounts
+   the opening screen. Setting the hash first exposed a second cause: the
+   shell's correction effect compares the hash against `sections`, which on the
+   opening screen still describes whichever mode the session last carried — so a
+   route chosen for the mode about to be entered was found unknown and rewritten,
+   every time. It now waits for a mode to actually be entered.
+2. **An unjudged strategy's passport had no "what did not hold" section.** The
+   four verdict-derived sections were built only when a verdict existed — the
+   exact shape the module exists to avoid.
+3. **A chicken-and-egg in the risk band**, found by the funnel test: the band
+   needs a strategy, which came only from the allocation, which does not exist
+   before the first allocation. The caller can now name one.
+
+### What was tested
+
+Full suite **2330 passed**; 718 of those are new in this work. `ruff` and
+`mypy --strict` clean across 177 files. `tsc --noEmit` clean, `vitest` **86
+passed**.
+
+### Blocked
+
+Nothing.
+
+---
+
+## Final state
+
+| | |
+| --- | --- |
+| Branch | `claude/wonderful-goldberg-twi9xv`, not merged to `main` |
+| Commits | 7 |
+| Files changed | 85 |
+| Python tests | 2330 passed |
+| Frontend tests | 86 passed |
+| New tests | 718 |
+| Prop Desk routes / actions | 32 / 34 |
+| Explanation routes | 6 |
+| Live broker connectors | **0** — and refused by `forge.execution.lifecycle` |
+
+The full report is `docs/PROP_DESK_IMPLEMENTATION_REPORT.md`.

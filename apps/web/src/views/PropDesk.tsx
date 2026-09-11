@@ -795,6 +795,7 @@ function RiskSection() {
   const mutations = useDeskMutations()
   const [selected, setSelected] = useState('')
   const [pending, setPending] = useState<{ mode: RiskMode; appetite: number } | null>(null)
+  const [preview, setPreview] = useState('')
   const [error, setError] = useState('')
 
   if (risk.isLoading) return <p className="desk-muted">Reading risk configuration…</p>
@@ -945,19 +946,36 @@ function RiskSection() {
                 tone={row.autonomy === 'off' ? 'plain' : 'warn'}
               />
             </div>
-            <button
-              type="button"
-              className="desk-action"
-              disabled={mutations.evaluateRisk.isPending || row.settings.mode === 'manual'}
-              onClick={() =>
-                mutations.evaluateRisk.mutate(
-                  { accountUid: account },
-                  { onError: (cause) => setError(String(cause)) },
-                )
-              }
-            >
-              Evaluate now
-            </button>
+            {/* An account that is not running a strategy has no measured
+              * drawdown to size against, so the band is unmeasurable and risk
+              * sits at the minimum. Naming one asks "what would this cost on
+              * that strategy" — a preview, not a change to what the account is
+              * actually doing. */}
+            <div className="desk-form">
+              {!row.last_proposal?.strategy_id && (
+                <label>
+                  <span>Size against</span>
+                  <input
+                    value={preview}
+                    placeholder="strategy id"
+                    onChange={(event) => setPreview(event.target.value)}
+                  />
+                </label>
+              )}
+              <button
+                type="button"
+                className="desk-action"
+                disabled={mutations.evaluateRisk.isPending || row.settings.mode === 'manual'}
+                onClick={() =>
+                  mutations.evaluateRisk.mutate(
+                    { accountUid: account, strategy_id: preview || undefined },
+                    { onError: (cause) => setError(String(cause)) },
+                  )
+                }
+              >
+                Evaluate now
+              </button>
+            </div>
             {row.settings.mode === 'manual' && (
               <p className="desk-muted">
                 This account is on manual risk. Nothing evaluates or adjusts it; your account

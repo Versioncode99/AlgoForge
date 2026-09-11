@@ -20,6 +20,10 @@
     "copy_trading_simulated": true,
     "strategy_allocation": "advisory-bounded-by-deterministic-gates",
     "broker_connector_live": false,
-    "economic_calendar": "manual-or-fred-with-operator-key"
+    "economic_calendar": "manual-or-fred-with-operator-key",
+    "adaptive_risk": "deterministic-bounded-by-operator-limits",
+    "ai_risk_management": "advisory-narrowing-only-consent-gated",
+    "autonomous_deployment": "gated-and-blocked-by-absent-connector",
+    "progressive_disclosure": true
   }
 }
