@@ -301,3 +301,141 @@
   .mode-select { padding: var(--sp-6) var(--sp-4) var(--sp-5); gap: var(--sp-6); }
   .mode-select-head h1 { font-size: var(--fs-xl); }
 }
+
+/* ── the front door, and how much to show ────────────────────────────────── */
+/* Two bands around the mode grid. Both are chrome-light on purpose: they help
+   somebody start, and they must not out-shout the four workspaces, which are
+   still the decision the screen is about. */
+
+.front-door,
+.depth-band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 100%;
+}
+.front-door h2,
+.depth-band h2 {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 500;
+  color: var(--fg-1);
+}
+.depth-band > p {
+  margin: 0;
+  max-width: 74ch;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-loose);
+  color: var(--fg-3);
+}
+.front-door > ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.front-door > ul button {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+  color: var(--fg-1);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.front-door > ul button:hover {
+  border-color: var(--fg-3);
+  color: var(--fg-0);
+}
+.front-door > ul button[data-active='yes'] {
+  border-color: var(--accent);
+  color: var(--fg-0);
+}
+.front-door-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  max-width: 78ch;
+}
+.front-door-detail p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-loose);
+  color: var(--fg-1);
+}
+/* The caveat is not a footnote. It is the reason somebody would choose
+   differently, so it carries the warning ink rather than being dimmed. */
+.front-door-caveat {
+  color: var(--warn) !important;
+}
+.front-door-actions {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs) !important;
+  color: var(--fg-3) !important;
+}
+.front-door-go {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.front-door-go b {
+  font-weight: 500;
+}
+.front-door-go svg {
+  width: 14px;
+  height: 14px;
+}
+.front-door-go:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.depth-band > ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.depth-band button {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  width: 100%;
+  height: 100%;
+  padding: var(--sp-3);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.depth-band button[data-active='yes'] {
+  border-color: var(--accent);
+}
+.depth-band button b {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--fg-0);
+}
+.depth-band button span {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-loose);
+  color: var(--fg-2);
+}

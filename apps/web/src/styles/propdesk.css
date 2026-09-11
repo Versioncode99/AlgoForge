@@ -1,0 +1,535 @@
+/* The Prop Desk: many accounts, one set of deterministic controls.
+ *
+ * The design follows the same rules as the other measured screens — tables
+ * rather than cards, hairlines rather than fills, one accent, numbers in the
+ * mono face — and adds one of its own.
+ *
+ * **A refusal is content, not chrome.** The ladder under a desk decision is the
+ * most useful thing on the screen: it is how "why is this follower flat while
+ * the leader is long three" gets answered. So it is typeset as a list of
+ * findings with a pill and a sentence each, at the same weight as the table
+ * above it, rather than hidden behind an icon.
+ *
+ * Every colour resolves through tokens.css. Nothing here names one.
+ */
+
+.desk-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-width: 0;
+}
+
+.desk-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.desk-note {
+  margin: 0;
+  max-width: 70ch;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--fg-2);
+}
+
+.desk-muted {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+
+.desk-mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--fg-2);
+  word-break: break-all;
+}
+
+/* ── the provider cards ──────────────────────────────────────────────────── */
+
+.desk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--sp-3);
+}
+
+.desk-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  min-width: 0;
+}
+.desk-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.desk-card h3 {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--fg-0);
+}
+.desk-card > p {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--fg-2);
+}
+
+.desk-facts {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+}
+.desk-facts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+}
+.desk-facts dt {
+  color: var(--fg-3);
+}
+.desk-facts dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--fg-1);
+  text-align: right;
+}
+
+.desk-details > summary {
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  color: var(--fg-2);
+  padding: var(--sp-1) 0;
+}
+.desk-details[open] > summary {
+  color: var(--fg-1);
+}
+
+.desk-worklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.desk-worklist h4 {
+  margin: var(--sp-2) 0 var(--sp-1);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.desk-worklist ul {
+  margin: 0;
+  padding-left: var(--sp-4);
+}
+.desk-worklist li {
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--fg-2);
+}
+
+/* ── tables ──────────────────────────────────────────────────────────────── */
+
+.desk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+.desk-table th {
+  text-align: left;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--bg-2);
+  font-weight: 500;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.desk-table td {
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--bg-2);
+  color: var(--fg-1);
+  vertical-align: top;
+}
+.desk-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* ── forms ───────────────────────────────────────────────────────────────── */
+
+.desk-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0 0;
+}
+.desk-form label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+.desk-form input {
+  min-width: 14ch;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.desk-form button {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+  color: var(--fg-1);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.desk-form button:hover {
+  border-color: var(--accent);
+  color: var(--fg-0);
+}
+
+.desk-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sp-3);
+}
+
+/* ── the ladder ──────────────────────────────────────────────────────────── */
+
+.desk-ladder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.desk-ladder > details {
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r);
+  background: var(--bg-1);
+}
+.desk-ladder > details > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  color: var(--fg-1);
+}
+
+.desk-stages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0 var(--sp-3) var(--sp-3);
+  list-style: none;
+}
+.desk-stages li {
+  display: grid;
+  grid-template-columns: minmax(14ch, auto) 1fr;
+  gap: var(--sp-2);
+  align-items: baseline;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--fg-2);
+}
+/* A rung that refused is the one worth reading, so it is the one that is not
+ * dimmed. The rungs that passed are context. */
+.desk-stages li[data-passed='true'] {
+  color: var(--fg-3);
+}
+.desk-stages li[data-passed='false'] {
+  color: var(--fg-1);
+}
+
+/* ── risk: the three modes, the meter, and the disclosure ────────────────── */
+
+.desk-select {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+  max-width: 40ch;
+}
+.desk-select select,
+.desk-table select {
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-size: var(--fs-xs);
+}
+
+/* The three modes are a choice, not a hierarchy, so they sit side by side at
+ * equal weight. The selected one is marked by the accent on its dot and its
+ * border rather than by a fill: a filled card reads as a state the operator is
+ * stuck in. */
+.desk-modes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--sp-3);
+}
+.desk-mode {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.desk-mode:hover {
+  border-color: var(--fg-3);
+}
+.desk-mode[data-active='yes'] {
+  border-color: var(--accent);
+}
+.desk-mode-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--fg-3);
+}
+.desk-mode[data-active='yes'] .desk-mode-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.desk-mode b {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--fg-0);
+}
+.desk-mode-name {
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.desk-mode p {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--fg-2);
+}
+
+.desk-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-width: 60ch;
+}
+.desk-meter-track {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+.desk-meter-track input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.desk-meter-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  color: var(--fg-0);
+}
+
+.desk-action {
+  align-self: flex-start;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+  color: var(--fg-1);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.desk-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--fg-0);
+}
+.desk-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.desk-error {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--fail);
+}
+
+.desk-why {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding-left: var(--sp-4);
+}
+.desk-why li {
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--fg-1);
+}
+
+/* A disclosure is content at the weight of the thing it is about. It is not a
+ * toast, not a tooltip, and it does not dim the page behind it: the operator
+ * should be able to read what they are switching on beside the switch. */
+.desk-disclosure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border: 1px solid var(--warn);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  max-width: 72ch;
+}
+.desk-disclosure > header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.desk-disclosure h3 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 500;
+  color: var(--fg-0);
+}
+.desk-disclosure > p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--fg-1);
+}
+.desk-ticks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.desk-ticks label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--fg-0);
+  cursor: pointer;
+}
+.desk-ticks input {
+  margin-top: 0.2em;
+  accent-color: var(--accent);
+}
+.desk-disclosure > footer {
+  display: flex;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+}
+.desk-disclosure footer button {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--bg-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+  color: var(--fg-1);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.desk-disclosure footer button[data-primary='yes'] {
+  border-color: var(--accent);
+  color: var(--fg-0);
+}
+.desk-disclosure footer button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── AI management: what it may do, and what it never may ────────────────── */
+
+.desk-permissions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.desk-permissions li {
+  display: grid;
+  grid-template-columns: 1.5em 1fr;
+  gap: var(--sp-2);
+  align-items: start;
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--bg-2);
+}
+.desk-permissions li:last-child {
+  border-bottom: none;
+}
+.desk-permissions li > span {
+  font-family: var(--font-mono);
+  color: var(--fg-3);
+}
+.desk-permissions li[data-granted='yes'] > span {
+  color: var(--pass);
+}
+.desk-permissions li[data-granted='never'] > span {
+  color: var(--fail);
+}
+.desk-permissions b {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--fg-0);
+}
+.desk-permissions p {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--fg-2);
+}
+.desk-permissions code {
+  display: inline-block;
+  margin-top: var(--sp-1);
+}
+
+.desk-meter-read {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+.desk-meter-read span {
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

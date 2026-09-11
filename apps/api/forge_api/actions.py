@@ -163,6 +163,25 @@ class Action:
         }
 
 
+def _advisory(value: Any) -> float:
+    """An advisory multiplier, refused rather than clamped when out of range.
+
+    A caller passing 1.4 has misunderstood what this parameter is — the advisory
+    layer narrows a proposal and never widens one — and quietly treating it as
+    1.0 would let the misunderstanding persist into a place where it matters.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ActionError("advisory must be a number between 0 and 1") from exc
+    if not 0.0 <= number <= 1.0:
+        raise ActionError(
+            f"advisory must be between 0 and 1; got {number}. It is a multiplier that "
+            "may narrow a risk proposal and can never widen one."
+        )
+    return number
+
+
 def _str(value: Any, field: str, *, limit: int = 4000, lower: bool = False) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ActionError(f"'{field}' must be a non-empty string.")
@@ -193,6 +212,7 @@ class Actions:
         audit: AuditLog | None = None,
         prop_accounts: Any = None,
         fund: Any = None,
+        prop_desk: Any = None,
     ) -> None:
         self.workspace = workspace
         self.library = library
@@ -222,6 +242,10 @@ class Actions:
         self.audit = audit
         self.prop_accounts = prop_accounts
         self.fund = fund
+        # The Prop Desk service. Optional so a bare registry can be built in a
+        # test; the actions that need it refuse by name rather than raising an
+        # attribute error.
+        self.prop_desk = prop_desk
         self._lock = threading.Lock()
         # Set for the duration of one `call`, so an action can attribute what it
         # writes without every signature growing an actor argument.
@@ -677,6 +701,7 @@ class Actions:
         self._register_validation()
         self._register_modes()
         self._register_prop()
+        self._register_prop_desk()
         self._register_fund()
 
     def _register_ir(self) -> None:
@@ -2642,6 +2667,676 @@ class Actions:
         except KeyError as exc:
             raise ActionError(f"No prop account '{account_id}'.") from exc
         return {"selected": account_id}
+
+
+    # ── the prop desk ────────────────────────────────────────────────────────
+    def _register_prop_desk(self) -> None:
+        """Multi-account execution, as bounded verbs.
+
+        Everything that *writes* here is `protected`, which means
+        `forge.modes.permissions` denies it to an AI actor in every mode and on
+        every stance. That is deliberate and it is the same rule the prop rule
+        engine already carries: a connection, a firm-permission policy, a copy
+        group and an allocation are all controls, and a control an agent can set
+        is not a control.
+
+        The reads are open, because an assistant that cannot look cannot report
+        honestly on what it found. `propdesk_plan_allocation` is a read in this
+        sense: it computes a proposal and writes nothing, and the proposal it
+        computes is bounded by the deterministic feasible set whoever asked for
+        it — a recommendation an agent produces cannot introduce a pairing the
+        judge, the firm policy and the account's rule engine did not already
+        permit.
+        """
+        self._add(
+            "propdesk_providers",
+            "The execution providers, the platforms that alias onto them, and which "
+            "of them this build has a live connector for. Currently: the simulator only.",
+            {},
+            self.propdesk_providers,
+        )
+        self._add(
+            "propdesk_connections",
+            "Broker connections, the accounts they expose, and the health of each.",
+            {},
+            self.propdesk_connections,
+        )
+        self._add(
+            "propdesk_create_connection",
+            "Record a broker connection. Protected: a connection is order authority "
+            "over every account under it.",
+            {
+                "provider": {"type": "string"},
+                "label": {"type": "string"},
+                "environment": {"type": "string", "optional": True},
+                "credential_ref": {"type": "string", "optional": True},
+                "platform": {"type": "string", "optional": True},
+            },
+            self.propdesk_create_connection,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_connect",
+            "Authenticate a connection and discover its accounts. Protected.",
+            {"connection_id": {"type": "string"}},
+            self.propdesk_connect,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_disconnect",
+            "Close a connection. Protected, though it only ever reduces reach.",
+            {"connection_id": {"type": "string"}},
+            self.propdesk_disconnect,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "propdesk_policies",
+            "The firm-permission policies recorded for accounts, and the questions "
+            "each one answers. AlgoForge ships no firm's rules.",
+            {},
+            self.propdesk_policies,
+        )
+        self._add(
+            "propdesk_save_policy",
+            "Record what an account programme permits. Protected: a permission an AI "
+            "could write is a permission an AI could grant itself.",
+            {"policy": {"type": "object"}},
+            self.propdesk_save_policy,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "propdesk_link_policy",
+            "Attach a recorded programme policy to an account. Protected.",
+            {
+                "account_uid": {"type": "string"},
+                "policy_id": {"type": "string", "optional": True},
+            },
+            self.propdesk_link_policy,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "propdesk_link_rules",
+            "Attach a funded-account rule set to a desk account, so its contract can "
+            "be evaluated. Protected.",
+            {
+                "account_uid": {"type": "string"},
+                "prop_account_id": {"type": "string", "optional": True},
+            },
+            self.propdesk_link_rules,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "propdesk_groups",
+            "Copy groups: leaders, followers, sizing and policies.",
+            {},
+            self.propdesk_groups,
+        )
+        self._add(
+            "propdesk_create_group",
+            "Create a copy group. Needs an attestation that every account in it has "
+            "one owner. Protected.",
+            {
+                "name": {"type": "string"},
+                "leader_account_uid": {"type": "string"},
+                "attested_by": {"type": "string"},
+            },
+            self.propdesk_create_group,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "propdesk_add_follower",
+            "Add a follower to a copy group, with its sizing policy. Protected.",
+            {
+                "group_id": {"type": "string"},
+                "account_uid": {"type": "string"},
+                "sizing": {"type": "object", "optional": True},
+            },
+            self.propdesk_add_follower,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "propdesk_remove_follower",
+            "Remove a follower from a copy group. Protected.",
+            {"group_id": {"type": "string"}, "account_uid": {"type": "string"}},
+            self.propdesk_remove_follower,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "propdesk_set_group_active",
+            "Start or stop replication for a copy group. Protected.",
+            {"group_id": {"type": "string"}, "active": {"type": "boolean"}},
+            self.propdesk_set_group_active,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_copy_pass",
+            "Evaluate a copy group against a leader position. Reports what each "
+            "follower would do and why; sends nothing unless dry_run is false, which "
+            "reaches accounts and is protected.",
+            {
+                "group_id": {"type": "string"},
+                "symbol": {"type": "string"},
+                "leader_position": {"type": "integer"},
+                "dry_run": {"type": "boolean", "optional": True},
+            },
+            self.propdesk_copy_pass,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_reconcile",
+            "Compare an account against its provider's own state and report every "
+            "disagreement. The provider is authoritative.",
+            {
+                "account_uid": {"type": "string"},
+                "trigger": {"type": "string", "optional": True},
+            },
+            self.propdesk_reconcile,
+            mutating=True,
+        )
+        self._add(
+            "propdesk_allocation",
+            "Which account is running which strategy, the constraints, and the history.",
+            {},
+            self.propdesk_allocation,
+        )
+        self._add(
+            "propdesk_plan_allocation",
+            "Which validated strategy each account could run, at what size, and every "
+            "pairing that was refused with the reason. Computes; records nothing. "
+            "Advisory recommendations can only narrow the deterministic feasible set.",
+            {
+                "strategy_ids": {"type": "array", "items": {"type": "string"}},
+                "advice": {"type": "array", "items": {"type": "object"}, "optional": True},
+            },
+            self.propdesk_plan_allocation,
+        )
+        self._add(
+            "propdesk_apply_allocation",
+            "Record which account runs which strategy. Protected: it decides where "
+            "capital is put to work, and it places nothing by itself.",
+            {
+                "allocations": {"type": "array", "items": {"type": "object"}},
+                "actor": {"type": "string", "optional": True},
+            },
+            self.propdesk_apply_allocation,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_set_constraints",
+            "Change the allocator's risk budget and ceilings. Protected: these are "
+            "deterministic controls.",
+            {"constraints": {"type": "object"}},
+            self.propdesk_set_constraints,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "propdesk_news",
+            "Scheduled economic events, which calendar sources could be read, and "
+            "whether a blackout window is open.",
+            {"days": {"type": "integer", "optional": True}},
+            self.propdesk_news,
+        )
+        self._add(
+            "propdesk_record_event",
+            "Record a scheduled economic event by hand. Protected: news feeds a risk "
+            "control, and a control an AI can write is not a control.",
+            {
+                "title": {"type": "string"},
+                "at": {"type": "string"},
+                "impact": {"type": "string", "optional": True},
+                "country": {"type": "string", "optional": True},
+                "note": {"type": "string", "optional": True},
+            },
+            self.propdesk_record_event,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "propdesk_set_news_policy",
+            "Change the blackout windows around economic events. Protected.",
+            {"policy": {"type": "object"}},
+            self.propdesk_set_news_policy,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
+            "propdesk_activity",
+            "Orders, refusals, reconciliation passes and allocation changes.",
+            {"limit": {"type": "integer", "optional": True}},
+            self.propdesk_activity,
+        )
+
+        self._add(
+            "propdesk_risk",
+            "Each account's risk mode, boundaries, appetite, last evaluation and "
+            "autonomy level, with the catalogue of what the modes promise and what "
+            "the advisory layer may never do.",
+            {"account_uid": {"type": "string", "optional": True}},
+            self.propdesk_risk,
+        )
+        self._add(
+            "propdesk_set_risk",
+            "Set an account's risk mode, appetite and boundaries. Protected: the "
+            "boundaries are the ceiling every automated proposal is clamped to, so an "
+            "actor that could write them could raise its own limit.",
+            {"settings": {"type": "object"}},
+            self.propdesk_set_risk,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_evaluate_risk",
+            "Run the risk scaler over one account and return what it proposes, with "
+            "every driver, the one that bound, and the governor limit that applied. "
+            "Evaluating writes a record and changes nothing; applying is a separate, "
+            "protected verb.",
+            {
+                "account_uid": {"type": "string"},
+                "strategy_id": {
+                    "type": "string",
+                    "optional": True,
+                    "description": (
+                        "Size against this strategy's measured drawdown when the account "
+                        "is not running one yet. Ignored when it is."
+                    ),
+                },
+                "advisory": {
+                    "type": "number",
+                    "optional": True,
+                    "description": (
+                        "A multiplier between 0 and 1. It may narrow the proposal and "
+                        "can never widen one."
+                    ),
+                },
+                "advisory_note": {"type": "string", "optional": True},
+            },
+            self.propdesk_evaluate_risk,
+            # Mutating because it appends the evaluation to the append-only
+            # record — the same treatment `propdesk_reconcile` gets, and for the
+            # same reason: it changes no control and places nothing, but a
+            # reader of the audit trail will see a row that this call wrote.
+            mutating=True,
+        )
+        self._add(
+            "propdesk_apply_risk",
+            "Apply the risk fraction the scaler proposed. Protected: this is the verb "
+            "that moves the number an order is sized from.",
+            {
+                "account_uid": {"type": "string"},
+                "advisory": {"type": "number", "optional": True},
+                "advisory_note": {"type": "string", "optional": True},
+            },
+            self.propdesk_apply_risk,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_disclosures",
+            "The safety disclosures, their current versions, and what has been "
+            "acknowledged.",
+            {},
+            self.propdesk_disclosures,
+        )
+        self._add(
+            "propdesk_acknowledge",
+            "Record that a person read a disclosure and accepted every statement in "
+            "it. Protected: an acknowledgement an agent could write is consent nobody "
+            "gave.",
+            {
+                "key": {"type": "string"},
+                "accepted": {"type": "array", "items": {"type": "string"}},
+                "account_uid": {"type": "string", "optional": True},
+            },
+            self.propdesk_acknowledge,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_set_autonomy",
+            "Set autonomous deployment to off, approval-required or fully autonomous "
+            "for one account. Protected, and refused without a current acknowledgement "
+            "of the autonomous-deployment disclosure.",
+            {"account_uid": {"type": "string"}, "level": {"type": "string"}},
+            self.propdesk_set_autonomy,
+            mutating=True,
+            risk=ActionRisk.HIGH,
+            protected=True,
+        )
+        self._add(
+            "propdesk_evaluate_deployment",
+            "Run every mandatory deployment control for one strategy on one account "
+            "and report which passed. It deploys nothing: this build has no live "
+            "connector and the lifecycle refuses the deployed stage outright.",
+            {"strategy_id": {"type": "string"}, "account_uid": {"type": "string"}},
+            self.propdesk_evaluate_deployment,
+            mutating=True,
+        )
+        self._add(
+            "propdesk_audit",
+            "The consequential audit trail: risk changes, deployment evaluations and "
+            "acknowledgements, with the state on both sides of each one.",
+            {
+                "account_uid": {"type": "string", "optional": True},
+                "limit": {"type": "integer", "optional": True},
+            },
+            self.propdesk_audit,
+        )
+        self._add(
+            "propdesk_why",
+            "Answer one of the desk's questions from recorded state: why risk changed, "
+            "why a deployment is blocked, why an account is blocked, why an allocation "
+            "changed. A question with no record behind it is declined rather than "
+            "answered.",
+            {
+                "question": {"type": "string"},
+                "account_uid": {"type": "string", "optional": True},
+                "strategy_id": {"type": "string", "optional": True},
+            },
+            self.propdesk_why,
+        )
+
+    def _desk(self) -> Any:
+        if self.prop_desk is None:
+            raise ActionError("no prop desk is configured in this process")
+        return self.prop_desk
+
+    def _desk_call(self, method: str, **arguments: Any) -> dict[str, Any]:
+        """Call one service method, turning its refusal into an action refusal.
+
+        Every prop-desk action goes through here so a refusal reads the same
+        whether it arrived over HTTP or from the assistant, and so the service
+        remains the single implementation rather than one of two.
+        """
+        from forge_api.propdesk import PropDeskError
+
+        try:
+            result: dict[str, Any] = getattr(self._desk(), method)(**arguments)
+        except PropDeskError as exc:
+            raise ActionError(str(exc)) from exc
+        except (KeyError, ValueError) as exc:
+            raise ActionError(str(exc)) from exc
+        return result
+
+    def propdesk_risk(self, account_uid: Any = None) -> dict[str, Any]:
+        return self._desk_call(
+            "risk",
+            account_uid=None if account_uid is None else _str(account_uid, "account_uid"),
+        )
+
+    def propdesk_set_risk(self, settings: Any) -> dict[str, Any]:
+        if not isinstance(settings, dict):
+            raise ActionError("settings must be an object")
+        return self._desk_call("save_risk_settings", settings=settings, actor=self._current_actor())
+
+    def propdesk_evaluate_risk(
+        self,
+        account_uid: Any,
+        strategy_id: Any = None,
+        advisory: Any = None,
+        advisory_note: Any = None,
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "evaluate_risk",
+            account_uid=_str(account_uid, "account_uid"),
+            strategy_id="" if strategy_id is None else _str(strategy_id, "strategy_id"),
+            advisory=None if advisory is None else _advisory(advisory),
+            advisory_note="" if advisory_note is None else _str(advisory_note, "advisory_note"),
+            apply_change=False,
+        )
+
+    def propdesk_apply_risk(
+        self, account_uid: Any, advisory: Any = None, advisory_note: Any = None
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "evaluate_risk",
+            account_uid=_str(account_uid, "account_uid"),
+            advisory=None if advisory is None else _advisory(advisory),
+            advisory_note="" if advisory_note is None else _str(advisory_note, "advisory_note"),
+            apply_change=True,
+            actor=self._current_actor(),
+        )
+
+    def propdesk_disclosures(self) -> dict[str, Any]:
+        return self._desk_call("disclosures")
+
+    def propdesk_acknowledge(
+        self, key: Any, accepted: Any, account_uid: Any = None
+    ) -> dict[str, Any]:
+        if not isinstance(accepted, list | tuple):
+            raise ActionError("accepted must be a list of the statements that were ticked")
+        return self._desk_call(
+            "acknowledge",
+            key=_str(key, "key", lower=True),
+            accepted=tuple(_str(item, "accepted") for item in accepted),
+            actor=self._current_actor(),
+            account_uid="" if account_uid is None else _str(account_uid, "account_uid"),
+        )
+
+    def propdesk_set_autonomy(self, account_uid: Any, level: Any) -> dict[str, Any]:
+        return self._desk_call(
+            "set_autonomy",
+            account_uid=_str(account_uid, "account_uid"),
+            level=_str(level, "level", lower=True),
+            actor=self._current_actor(),
+        )
+
+    def propdesk_evaluate_deployment(self, strategy_id: Any, account_uid: Any) -> dict[str, Any]:
+        return self._desk_call(
+            "evaluate_deployment",
+            strategy_id=_str(strategy_id, "strategy_id"),
+            account_uid=_str(account_uid, "account_uid"),
+        )
+
+    def propdesk_audit(self, account_uid: Any = None, limit: Any = None) -> dict[str, Any]:
+        return self._desk_call(
+            "audit",
+            account_uid=None if account_uid is None else _str(account_uid, "account_uid"),
+            limit=200 if limit is None else int(limit),
+        )
+
+    def propdesk_why(
+        self, question: Any, account_uid: Any = None, strategy_id: Any = None
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "why",
+            question=_str(question, "question", lower=True),
+            account_uid="" if account_uid is None else _str(account_uid, "account_uid"),
+            strategy_id="" if strategy_id is None else _str(strategy_id, "strategy_id"),
+        )
+
+    def propdesk_providers(self) -> dict[str, Any]:
+        return self._desk_call("providers")
+
+    def propdesk_connections(self) -> dict[str, Any]:
+        return self._desk_call("connections")
+
+    def propdesk_create_connection(
+        self,
+        provider: Any,
+        label: Any,
+        environment: Any = None,
+        credential_ref: Any = None,
+        platform: Any = None,
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "create_connection",
+            provider=_str(provider, "provider", lower=True),
+            label=_str(label, "label", limit=120),
+            environment=_str(environment or "simulation", "environment", lower=True),
+            credential_ref="" if credential_ref is None else _str(
+                credential_ref, "credential_ref", limit=120
+            ),
+            platform=None if platform is None else _str(platform, "platform", lower=True),
+        )
+
+    def propdesk_connect(self, connection_id: Any) -> dict[str, Any]:
+        return self._desk_call("connect", connection_id=_str(connection_id, "connection_id"))
+
+    def propdesk_disconnect(self, connection_id: Any) -> dict[str, Any]:
+        return self._desk_call(
+            "disconnect", connection_id=_str(connection_id, "connection_id")
+        )
+
+    def propdesk_policies(self) -> dict[str, Any]:
+        return self._desk_call("policies")
+
+    def propdesk_save_policy(self, policy: Any) -> dict[str, Any]:
+        if not isinstance(policy, dict):
+            raise ActionError("'policy' must be a programme policy object.")
+        return self._desk_call("save_policy", policy=policy)
+
+    def propdesk_link_policy(self, account_uid: Any, policy_id: Any = None) -> dict[str, Any]:
+        return self._desk_call(
+            "link_policy",
+            account_uid=_str(account_uid, "account_uid"),
+            policy_id=None if policy_id is None else _str(policy_id, "policy_id"),
+        )
+
+    def propdesk_link_rules(
+        self, account_uid: Any, prop_account_id: Any = None
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "link_prop_account",
+            account_uid=_str(account_uid, "account_uid"),
+            prop_account_id=(
+                None if prop_account_id is None else _str(prop_account_id, "prop_account_id")
+            ),
+        )
+
+    def propdesk_groups(self) -> dict[str, Any]:
+        return self._desk_call("groups")
+
+    def propdesk_create_group(
+        self, name: Any, leader_account_uid: Any, attested_by: Any
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "create_group",
+            name=_str(name, "name", limit=120),
+            leader_account_uid=_str(leader_account_uid, "leader_account_uid"),
+            attested_by=_str(attested_by, "attested_by", limit=120),
+        )
+
+    def propdesk_add_follower(
+        self, group_id: Any, account_uid: Any, sizing: Any = None
+    ) -> dict[str, Any]:
+        if sizing is not None and not isinstance(sizing, dict):
+            raise ActionError("'sizing' must be a sizing-policy object.")
+        return self._desk_call(
+            "add_follower",
+            group_id=_str(group_id, "group_id"),
+            account_uid=_str(account_uid, "account_uid"),
+            sizing=sizing,
+        )
+
+    def propdesk_remove_follower(self, group_id: Any, account_uid: Any) -> dict[str, Any]:
+        return self._desk_call(
+            "remove_follower",
+            group_id=_str(group_id, "group_id"),
+            account_uid=_str(account_uid, "account_uid"),
+        )
+
+    def propdesk_set_group_active(self, group_id: Any, active: Any) -> dict[str, Any]:
+        return self._desk_call(
+            "set_group_active", group_id=_str(group_id, "group_id"), active=bool(active)
+        )
+
+    def propdesk_copy_pass(
+        self, group_id: Any, symbol: Any, leader_position: Any, dry_run: Any = None
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "copy_pass",
+            group_id=_str(group_id, "group_id"),
+            symbol=_str(symbol, "symbol", limit=16),
+            leader_position=_bounded(
+                leader_position, 0, -10_000, 10_000, "leader_position"
+            ),
+            # Defaults to a dry run. An operator asking what a group would do
+            # must be able to find out without it happening.
+            dry_run=True if dry_run is None else bool(dry_run),
+        )
+
+    def propdesk_reconcile(self, account_uid: Any, trigger: Any = None) -> dict[str, Any]:
+        return self._desk_call(
+            "reconcile",
+            account_uid=_str(account_uid, "account_uid"),
+            trigger=_str(trigger or "periodic", "trigger", lower=True),
+        )
+
+    def propdesk_allocation(self) -> dict[str, Any]:
+        return self._desk_call("allocation_state")
+
+    def propdesk_plan_allocation(
+        self, strategy_ids: Any, advice: Any = None
+    ) -> dict[str, Any]:
+        if not isinstance(strategy_ids, list | tuple) or not strategy_ids:
+            raise ActionError("'strategy_ids' must be a non-empty list of strategy ids.")
+        if advice is not None and not isinstance(advice, list | tuple):
+            raise ActionError("'advice' must be a list of recommendation objects.")
+        return self._desk_call(
+            "plan_allocation",
+            strategy_ids=tuple(_str(item, "strategy_id") for item in strategy_ids),
+            advice=tuple(advice or ()),
+        )
+
+    def propdesk_apply_allocation(
+        self, allocations: Any, actor: Any = None
+    ) -> dict[str, Any]:
+        if not isinstance(allocations, list | tuple):
+            raise ActionError("'allocations' must be a list of allocation objects.")
+        return self._desk_call(
+            "apply_allocation",
+            allocations=tuple(allocations),
+            actor=_str(actor or "operator", "actor", limit=120),
+        )
+
+    def propdesk_set_constraints(self, constraints: Any) -> dict[str, Any]:
+        if not isinstance(constraints, dict):
+            raise ActionError("'constraints' must be an allocation-constraints object.")
+        return self._desk_call("save_constraints", constraints=constraints)
+
+    def propdesk_news(self, days: Any = None) -> dict[str, Any]:
+        return self._desk_call("news", days=_bounded(days, 7, 1, 60, "days"))
+
+    def propdesk_record_event(
+        self, title: Any, at: Any, impact: Any = None, country: Any = None, note: Any = None
+    ) -> dict[str, Any]:
+        return self._desk_call(
+            "record_event",
+            title=_str(title, "title", limit=200),
+            at=_str(at, "at", limit=64),
+            impact="" if impact is None else _str(impact, "impact", lower=True),
+            country="US" if country is None else _str(country, "country", limit=8),
+            note="" if note is None else _str(note, "note", limit=400),
+        )
+
+    def propdesk_set_news_policy(self, policy: Any) -> dict[str, Any]:
+        if not isinstance(policy, dict):
+            raise ActionError("'policy' must be a news-policy object.")
+        return self._desk_call("save_news_policy", policy=policy)
+
+    def propdesk_activity(self, limit: Any = None) -> dict[str, Any]:
+        return self._desk_call("activity", limit=_bounded(limit, 100, 1, 1000, "limit"))
 
     # ── the fund ─────────────────────────────────────────────────────────────
     def _register_fund(self) -> None:

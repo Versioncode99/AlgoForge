@@ -68,6 +68,119 @@ current state. Every call — allowed, held, denied or failed — lands in an
 append-only audit log with the ruling and the reason, so an unattended run is
 answerable rather than merely logged.
 
+## The Prop Desk
+
+Prop Firm mode opens on one account. The **Prop Desk** is the same discipline
+across many of them: connected accounts, what each is permitted to do, which
+validated strategy each should be running, and every order the desk refused with
+the reason.
+
+**No live broker connector exists.** Rithmic, Tradovate and ProjectX are
+*declared* — each carries its real authentication method, account key fields,
+bracket model, published rate limit, session lifetime and documented
+limitations — and each refuses every command with the reason and with what a
+live connector would still need, separated into engineering work and external
+requirements nobody can engineer around (Rithmic's conformance process, a
+Tradovate OAuth application, a ProjectX tenant subscription). The only adapter
+that executes is a local simulator, and it labels every fill simulated.
+
+**Providers are not platforms.** A provider is execution and account
+infrastructure that holds the account records. A platform is a front end. That
+distinction is modelled rather than assumed: NinjaTrader Desktop is a platform
+whose accounts belong to whichever provider it is connected to, NinjaTrader
+*Brokerage* accounts are Tradovate accounts, TopstepX is a ProjectX tenant, and
+a data feed's `routes_orders` is a `Literal[False]` rather than a setting.
+
+**Every order climbs one ladder**, and there is no other path from an intent to
+an adapter:
+
+```
+account bound → connection live → what backs this order → firm permission
+  → cross-account direction → news blackout → the account's own rule engine
+  → the pre-trade gate → the execution fabric → the provider
+```
+
+Rungs six and seven are the *existing* engines — `forge.prop.account.assess` and
+`forge.execution.gate.screen` — called, not reimplemented. A refused order keeps
+the whole ladder on the record, so "why is this follower flat while the leader is
+long three" is answered per stage, in words.
+
+**Unknown is never permission.** A firm's rules are four-valued — `ALLOWED`,
+`BLOCKED`, `UNKNOWN`, `REQUIRES_CONFIRMATION` — and AlgoForge ships none of them.
+Every permission starts `UNKNOWN`, which blocks every automatic action, because
+the research found no blanket rule across seven firms: copying allowed at some
+and only with approved tools at others, bots banned on one firm's tier and
+permitted at another, and one firm requiring that orders originate from the
+trader's own device.
+
+**The copy engine converges on net position targets.** A follower's target is a
+function of the leader's *current* net position, not of the stream of events that
+produced it — so a duplicated event, a reordered one or a missed one all converge
+to the same place, and a rounding rule that over-sizes on each of four partial
+fills cannot accumulate. Divergence is resolved against the provider, which is
+authoritative: a snapshot replaces local state rather than merging with it.
+
+**Allocation is deterministic; advice can only narrow it.** The feasible set is
+computed from the judge's verdict, out-of-sample strategy health, firm
+compatibility, the account's rule engine and a risk budget against its own buffer
+to the loss floor. A recommendation — from a model or from anywhere else — can
+reorder inside that set and reduce a size. It cannot introduce a pairing and it
+cannot raise a size, and `tests/propdesk/test_desk_allocation.py` asserts both
+against deliberately hostile input.
+
+**News can add a restriction and never removes one.** Forex Factory publishes no
+official calendar API and returns HTTP 403 to automated requests, so AlgoForge
+does not scrape it and ships no scraped dataset. What ships is a provider
+interface with two implementations: an operator-recorded calendar that works
+offline, and a real client for the Federal Reserve Bank of St. Louis FRED
+release-dates API, which refuses without a free `FRED_API_KEY` and carries the
+attribution its terms require. FRED gives release *dates* and not clock times,
+and every event it returns says so rather than supporting a fifteen-minute window
+in the wrong place.
+
+**Risk has three modes, and they differ in who moves the number.** *Manual* — I
+decide. *Adaptive* — AlgoForge calculates. *AI risk management* — AlgoForge
+manages within my boundaries. All three produce one thing: the share of an
+account's buffer to its loss floor that a single allocation may cost. Everything
+from there to an order is deterministic, so an adjuster that can only move one
+bounded scalar cannot reach anything by being wrong about it.
+
+**The appetite meter is not a contract dial.** It selects how far into the
+measured drawdown tail you size against — the 99th percentile at the
+conservative end, the 75th at the aggressive one — and what share of the buffer
+is at stake. Both effects depend on the shape of the strategy's own bootstrapped
+drawdown distribution, so the same turn of the meter costs far more on a
+fat-tailed strategy than a thin-tailed one. With fewer than thirty out-of-sample
+days there is no distribution and therefore no band: risk falls to the
+operator's own minimum, and the screen says why rather than assuming normality.
+
+**Risk rises slowly and falls immediately.** Eight drivers — buffer, strategy
+health, realised volatility, regime fit, correlation, account rules, scheduled
+news, evidence — each multiply the target by at most one, so none of them can
+raise anything; risk rises only when the measured band does. An increase
+requires every driver to be *measured*, a decrease requires none, and cooldown
+and the daily cap apply to increases only. Balance is not a driver: it enters as
+the buffer, which is a constraint, so equity growth with a degraded strategy
+moves nothing.
+
+**Autonomous deployment has one gate list.** Off, approval-required and fully
+autonomous evaluate the same thirteen mandatory controls; the level changes only
+what happens once every one of them has passed. One of those controls is the
+lifecycle, which refuses the deployed stage while no broker connector exists —
+so the strongest case this build can construct is still blocked, and a test
+constructs it to prove so.
+
+**Consequential settings carry their disclosure.** Turning on AI risk management
+or autonomous deployment shows what it does and what it cannot do, with a
+checkbox per statement, and records which version was acknowledged. The version
+is a hash of the text, so editing a sentence invalidates the old agreement. The
+disclosures state facts about the implementation and make no claim about
+liability; a validator refuses that language outright.
+
+**No VPS anywhere.** The execution fabric runs wherever the application runs. An
+always-on agent is a deployment option nobody has to take, and no hosting
+provider is named in the code.
+
 ## The fund loop
 
 Data, research, alpha, validation, portfolio construction, risk, the pre-trade

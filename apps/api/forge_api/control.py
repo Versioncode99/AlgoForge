@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import suppress
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -14,10 +15,17 @@ from forge.capabilities import nautilus_capability
 from forge.contracts.models import ApiEnvelope
 from forge.data.live import ProviderError
 from forge.execution.oms import ExecutionStore
+from forge.explain import Depth as PassportDepth
+from forge.explain import PassportSources, metric_catalogue, question_catalogue
+from forge.explain import build as build_passport
+from forge.explain import interpret as interpret_metric
 from forge.hedgefund.approvals import ApprovalError, ApprovalQueue
 from forge.hedgefund.audit import AuditLog
 from forge.hedgefund.config import FundConfigStore
 from forge.hedgefund.loop import describe as describe_loop
+from forge.modes.expertise import ALWAYS_VISIBLE
+from forge.modes.expertise import catalogue as expertise_catalogue
+from forge.modes.intents import catalogue as intent_catalogue
 from forge.modes.models import MODE_ORDER
 from forge.modes.models import catalogue as mode_catalogue
 from forge.modes.permissions import Actor
@@ -25,6 +33,7 @@ from forge.modes.store import ModeStore
 from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
 from forge.prop.accounts import PropAccountStore
 from forge.prop.engine import MAX_BACKTEST_BARS, MIN_TRADING_DAYS
+from forge.propdesk import PropDeskStore
 from forge.research import ResearchLedger
 from forge.research.knowledge import (
     NOT_EVIDENCE_NOTE,
@@ -58,6 +67,7 @@ from forge_api.ledger_view import _TradeShim as _Shim
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
 from forge_api.opencode import OPENCODE_GO_DEFAULT_URL
 from forge_api.orchestrator import Orchestrator
+from forge_api.propdesk import PropDeskService
 from forge_api.providers import (
     PROVIDER_OPENCODE,
     PROVIDERS,
@@ -375,6 +385,7 @@ class ControlSurface:
     approvals: ApprovalQueue
     audit: AuditLog
     campaigns: CampaignService
+    prop_desk: PropDeskService
 
 
 def build_control_router(
@@ -470,6 +481,63 @@ def build_control_router(
         decision = section.get("decision") if section.get("available") else None
         return str(decision) if decision else None
 
+    def desk_evidence(strategy_id: str) -> dict[str, Any]:
+        """What the risk and deployment layers may read about one strategy.
+
+        Every key is derived from an artefact that already exists — the
+        strategy's own spec, its out-of-sample runs, and the validation
+        evidence. Nothing here computes a statistic or fills a gap: a key this
+        cannot establish is simply absent, which the desk reads as unmeasured,
+        which in turn can only ever hold or reduce risk.
+
+        The out-of-sample daily series is the one worth reading closely. It is
+        aggregated from the *trades of out-of-sample runs only*, by the day each
+        trade closed, and it is what the drawdown bootstrap resamples. An
+        in-sample run's trades must never reach it: the whole point of sizing
+        against a bootstrapped drawdown is that the drawdown was not fitted.
+        """
+        from forge_api.strategies import load_evidence
+
+        payload: dict[str, Any] = {}
+        # A strategy with no readable spec has no declared instrument. The
+        # deployment gate reads an absent symbol as unknown, which never passes.
+        with suppress(KeyError, FileNotFoundError, OSError):
+            payload["symbol"] = library.get_spec(strategy_id).symbol
+
+        daily: dict[str, float] = {}
+        for run in store.for_strategy(strategy_id):
+            if run.get("evidence_tier") not in {"TRUTH_OOS", "HOLDOUT", "FORWARD"}:
+                continue
+            for trade in run.get("trades", ()):
+                stamp = str(trade.get("exit_time", ""))[:10]
+                net = trade.get("net_pnl")
+                if not stamp or net is None:
+                    continue
+                daily[stamp] = daily.get(stamp, 0.0) + float(net)
+        if daily:
+            payload["oos_daily_pnl"] = tuple(daily[day] for day in sorted(daily))
+            payload["evidence_tier"] = "TRUTH_OOS"
+
+        evidence = load_evidence(root, strategy_id)
+        if evidence:
+            walk_forward = evidence.get("walk_forward")
+            paths = evidence.get("paths")
+            if isinstance(walk_forward, dict):
+                payload["walk_forward_survives"] = bool(walk_forward.get("survives"))
+            if isinstance(paths, dict):
+                payload["paths_robust"] = bool(paths.get("robust"))
+        return payload
+
+    # The Prop Desk. Its store lives in the app-owned data root beside the other
+    # databases, and it reads verdicts through `verdict_for` — the same callable
+    # the fund uses — so one judge decision serves both.
+    prop_desk = PropDeskService(
+        store=PropDeskStore(workspace.data / "prop-desk.db"),
+        prop_accounts=prop_accounts,
+        verdict_for=verdict_for,
+        evidence_for=desk_evidence,
+    )
+
     fund = FundService(
         config_store=fund_config,
         execution_store=execution_store,
@@ -496,6 +564,7 @@ def build_control_router(
         audit=audit,
         prop_accounts=prop_accounts,
         fund=fund,
+        prop_desk=prop_desk,
     )
     orchestrator = Orchestrator(
         workspace.data / "missions.db", actions, agents, settings_store, log, mirror
@@ -1995,6 +2064,97 @@ def build_control_router(
             )
         )
 
+    def _passport_sources(strategy_id: str) -> PassportSources:
+        """Gather what exists for one strategy. Anything unreachable stays absent.
+
+        Every field is read from an artefact that already exists — the spec, the
+        dossier's verdict, the validation evidence, the desk's allocation. None
+        is computed here, and a field this cannot fill is left empty so the
+        passport shows it as unmeasured rather than as a plausible default.
+        """
+        from forge_api.dossier import build_dossier, latest_verdict
+
+        sources: dict[str, Any] = {"strategy_id": strategy_id}
+        with suppress(KeyError, FileNotFoundError, OSError):
+            spec = library.get_spec(strategy_id)
+            sources.update(
+                name=spec.name,
+                hypothesis=spec.hypothesis,
+                falsification=spec.falsifiable_prediction,
+                instruments=(spec.symbol,) if spec.symbol else (),
+                timeframe=spec.bar_spec,
+                lineage=tuple(spec.lineage),
+            )
+        dossier: dict[str, Any] = {}
+        with suppress(KeyError, ValueError, OSError):
+            dossier = build_dossier(
+                root=root,
+                library=library,
+                store=store,
+                experiments=engine.experiments,
+                memory=engine.memory,
+                snapshots=engine.snapshots,
+                scope=engine._scope(),
+                strategy_id=strategy_id,
+            )
+        with suppress(KeyError, ValueError, OSError):
+            # The same verdict the dossier shows, through the same function, so
+            # the passport cannot come to disagree with the Evidence screen.
+            spec = library.get_spec(strategy_id)
+            verdict, _reason = latest_verdict(
+                root=root,
+                library=library,
+                experiments=engine.experiments,
+                scope=engine._scope(),
+                spec=spec,
+                runs=store.for_strategy(strategy_id),
+            )
+            if verdict is not None:
+                sources["verdict"] = verdict
+        validation = dossier.get("validation") or {}
+        if validation.get("available"):
+            walk_forward = validation.get("walk_forward")
+            paths = validation.get("paths")
+            if isinstance(walk_forward, dict):
+                sources["walk_forward"] = walk_forward
+            if isinstance(paths, dict):
+                sources["monte_carlo"] = paths
+            if validation.get("configurations") is not None:
+                sources["parameter_surface"] = {
+                    "configurations": validation.get("configurations"),
+                    "probability_of_overfitting": validation.get(
+                        "probability_of_overfitting"
+                    ),
+                    "cscv_splits": validation.get("cscv_splits"),
+                    "best_parameters": validation.get("best_parameters"),
+                }
+        backtests = dossier.get("backtests") or {}
+        if backtests.get("available"):
+            runs = backtests.get("runs") or []
+            tiers = {str(run.get("evidence_tier")) for run in runs}
+            sources["data_summary"] = (
+                f"{backtests.get('count', len(runs))} run(s) over "
+                f"{', '.join(sorted(tiers)) or 'no recorded tier'}"
+            )
+        evidence = desk_evidence(strategy_id)
+        series = evidence.get("oos_daily_pnl") or ()
+        if series:
+            from forge.propdesk.survival import Unmeasurable, drawdown_distribution
+
+            distribution = drawdown_distribution(tuple(series))
+            if not isinstance(distribution, Unmeasurable):
+                sources["expected_drawdown_p95"] = distribution.p95
+        allocation = prop_desk.store.allocations()
+        placed = [item for item in allocation if item.strategy_id == strategy_id]
+        if placed:
+            sources["deployment_state"] = (
+                f"allocated to {len(placed)} account(s) at "
+                f"{placed[0].contracts} contract(s)"
+            )
+            sources["deployment_detail"] = placed[0].rationale
+        sources["assembled_at"] = datetime.now(UTC)
+        return PassportSources(**sources)
+
     # ── modes ────────────────────────────────────────────────────────────────
     # The shell reads these to draw the home screen and the mode's navigation.
     # Everything they return comes from `forge.modes`, so the interface and an
@@ -2024,6 +2184,83 @@ def build_control_router(
     @router.post("/modes/leave", response_model=ApiEnvelope[dict[str, Any]])
     def leave_mode() -> ApiEnvelope[dict[str, Any]]:
         return ApiEnvelope(data=_action("leave_mode", {}, confirmed=True))
+
+    @router.get("/modes/expertise", response_model=ApiEnvelope[dict[str, Any]])
+    def expertise_levels() -> ApiEnvelope[dict[str, Any]]:
+        """Guided, Advanced and Quant, and what each one surfaces.
+
+        Declared server-side for the same reason the mode manifest is: an agent
+        asked "what can the operator see right now" has to be able to answer
+        without a person, and two copies of this mapping is a mapping that
+        drifts.
+        """
+        return ApiEnvelope(
+            data={
+                "levels": expertise_catalogue(),
+                "always_visible": [surface.value for surface in ALWAYS_VISIBLE],
+            }
+        )
+
+    @router.get("/modes/intents", response_model=ApiEnvelope[dict[str, Any]])
+    def front_door(mode: str | None = None) -> ApiEnvelope[dict[str, Any]]:
+        """"What do you want to do?", answered with registered actions.
+
+        `mode` narrows to the intents that have a route in that mode. Each entry
+        names the actions it would run — the same actions the interface calls,
+        under the same permission policy.
+        """
+        try:
+            return ApiEnvelope(data={"intents": intent_catalogue(mode)})
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail={"reason": str(exc)}) from exc
+
+    @router.get("/explain/metrics", response_model=ApiEnvelope[dict[str, Any]])
+    def metric_glossary(keys: str = "") -> ApiEnvelope[dict[str, Any]]:
+        """What a metric is, why it matters, and what its caveats are.
+
+        `keys` is a comma-separated subset. Every entry names the function that
+        computes it and reads its threshold from the module that enforces it, so
+        a changed bar changes the glossary rather than making it wrong.
+        """
+        selected = tuple(key.strip() for key in keys.split(",") if key.strip())
+        return ApiEnvelope(data={"metrics": metric_catalogue(selected)})
+
+    @router.get("/explain/metrics/{key}", response_model=ApiEnvelope[dict[str, Any]])
+    def metric_value(key: str, value: float | None = None) -> ApiEnvelope[dict[str, Any]]:
+        """What one value of one metric means, here."""
+        try:
+            return ApiEnvelope(data=interpret_metric(key, value).as_dict())
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail={"reason": str(exc)}) from exc
+
+    @router.get("/explain/questions", response_model=ApiEnvelope[dict[str, Any]])
+    def explain_questions() -> ApiEnvelope[dict[str, Any]]:
+        """Every "why" the system can answer, and what each one needs."""
+        return ApiEnvelope(data={"questions": question_catalogue()})
+
+    @router.get(
+        "/explain/passport/{strategy_id}", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def strategy_passport(
+        strategy_id: str, depth: str = "advanced"
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """Every piece of evidence about one strategy, at one depth.
+
+        It composes and computes nothing: each section names the artefact it
+        came from, and a section that was never measured is present, marked
+        unmeasured, with what would measure it — so an unvalidated passport
+        reads as weaker rather than shorter.
+        """
+        try:
+            chosen = PassportDepth(depth)
+        except ValueError as exc:
+            valid = ", ".join(item.value for item in PassportDepth)
+            raise HTTPException(
+                status_code=422, detail={"reason": f"no depth '{depth}'. Depths: {valid}"}
+            ) from exc
+        return ApiEnvelope(
+            data=build_passport(_passport_sources(strategy_id)).at_depth(chosen).as_dict()
+        )
 
     @router.get("/modes/permissions", response_model=ApiEnvelope[dict[str, Any]])
     def mode_permissions() -> ApiEnvelope[dict[str, Any]]:
@@ -2267,4 +2504,5 @@ def build_control_router(
         approvals=approvals,
         audit=audit,
         campaigns=campaign_service,
+        prop_desk=prop_desk,
     )

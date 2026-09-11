@@ -164,6 +164,26 @@ _MODE_TEMPLATES: tuple[WorkspaceTemplate, ...] = (
         ),
     ),
     WorkspaceTemplate(
+        key="multi_account_desk",
+        name="Multi-Account Desk",
+        summary=(
+            "Every connected account, what each is running, and every order the "
+            "desk refused and why."
+        ),
+        panels=(
+            # Accounts first and widest: the question this layout exists for is
+            # "what is every account doing", and an answer that has to be
+            # scrolled to is not one. The activity panel is beside it rather than
+            # below because a refusal is only useful next to the account it
+            # refused for.
+            _panel(PanelKind.DESK_ACCOUNTS, 0, 0, 7, 7),
+            _panel(PanelKind.DESK_ACTIVITY, 7, 0, 5, 7),
+            _panel(PanelKind.DESK_ALLOCATION, 0, 7, 4, 6),
+            _panel(PanelKind.DESK_COPY, 4, 7, 4, 6),
+            _panel(PanelKind.DESK_NEWS, 8, 7, 4, 6),
+        ),
+    ),
+    WorkspaceTemplate(
         key="ai_desk",
         name="AI Workspace",
         summary="The specialists, what they have done, and the work they have done it to.",

@@ -63,6 +63,17 @@ class PanelKind(StrEnum):
     ACCOUNT = "account"
     RISK = "risk"
     PROP = "prop"
+    # The Prop Desk. Many accounts behind one set of deterministic controls;
+    # see `forge.propdesk`. Separate kinds from the single-account `PROP` panel
+    # because the question is different: that one asks how close *this* account
+    # is to breaching, and these ask what every account is doing and why.
+    DESK_ACCOUNTS = "desk_accounts"
+    DESK_COPY = "desk_copy"
+    DESK_ALLOCATION = "desk_allocation"
+    DESK_NEWS = "desk_news"
+    DESK_ACTIVITY = "desk_activity"
+    DESK_RISK = "desk_risk"
+    DESK_AI = "desk_ai"
     # Fund. The Hedge Fund loop's own surfaces, each backed by a deterministic
     # engine rather than by a narrative: `forge.portfolio`, `forge.risk.portfolio`,
     # `forge.execution.gate` and the approval and audit stores. They are panel
@@ -90,6 +101,15 @@ EXECUTION_PANELS = frozenset(
         PanelKind.ORDERS,
         PanelKind.ACCOUNT,
         PanelKind.RISK,
+        PanelKind.DESK_ACCOUNTS,
+        PanelKind.DESK_COPY,
+        PanelKind.DESK_ALLOCATION,
+        PanelKind.DESK_ACTIVITY,
+        # Risk sizing is execution: the fraction it moves is what an order is
+        # sized from. The AI panel is here for the same reason — it is where
+        # autonomous deployment is switched on.
+        PanelKind.DESK_RISK,
+        PanelKind.DESK_AI,
     }
 )
 

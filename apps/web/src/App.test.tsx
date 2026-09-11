@@ -202,7 +202,7 @@ describe('the opening screen', () => {
     renderApp()
     expect(await screen.findByRole('heading', { name: /choose your workspace/i })).toBeInTheDocument()
     for (const name of ['Normal', 'Prop Firm', 'AI', 'Hedge Fund']) {
-      expect(screen.getByRole('heading', { name, level: 2 })).toBeInTheDocument()
+      expect(await screen.findByRole('heading', { name, level: 2 })).toBeInTheDocument()
     }
     // Each panel says what it is for. Four names with no purpose would be a
     // pricing page, which is the thing this screen must not be.
@@ -215,7 +215,7 @@ describe('the opening screen', () => {
     await screen.findByRole('heading', { name: /choose your workspace/i })
     // The stance changes what an assistant may do unattended. Entering first and
     // asking later would mean the mode opens on a stance nobody picked.
-    expect(screen.getByRole('radiogroup', { name: /operating stance/i })).toBeInTheDocument()
+    expect(await screen.findByRole('radiogroup', { name: /operating stance/i })).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: /human in the loop/i })).toBeChecked()
     fireEvent.click(screen.getByRole('radio', { name: /autonomous/i }))
     expect(screen.getByRole('radio', { name: /autonomous/i })).toBeChecked()
@@ -231,7 +231,7 @@ describe('the opening screen', () => {
   test('opening a mode calls the API rather than only changing the screen', async () => {
     renderApp()
     await screen.findByRole('heading', { name: /choose your workspace/i })
-    fireEvent.click(screen.getByRole('button', { name: /open hedge fund/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /open hedge fund/i }))
     await new Promise((resolve) => setTimeout(resolve, 0))
     // Mode is server state: each mode remembers its own layout, so entering one
     // has to be recorded somewhere a refresh can read it back.
@@ -279,6 +279,18 @@ describe('the shell inside a mode', () => {
     // "gate" is a Hedge Fund route. Prop Firm opens on its own first section.
     await screen.findByRole('link', { name: /account status/i })
     expect(window.location.hash).toBe('#account')
+  })
+
+  test('a hash chosen before a mode is entered is left alone', async () => {
+    /* The opening screen is up, so the hash is not a route at all and the
+     * session still carries whichever mode was last described. Correcting
+     * against that manifest is how the front door's "start here" landed
+     * somebody on the previous mode's first section every time. */
+    session = { mode: null, stance: null, workspace_id: null }
+    window.history.replaceState(null, '', '#desk')
+    renderApp()
+    await screen.findByRole('heading', { name: /choose your workspace/i })
+    expect(window.location.hash).toBe('#desk')
   })
 })
 

@@ -2,6 +2,16 @@ import { useQuery } from '@tanstack/react-query'
 import { getJson } from '../api'
 import { useApprovals, useAudit, useFundOperations, useFundRisk, useFundState } from '../fund'
 import { usePropStatus, LEVEL_LABEL, LEVEL_TONE } from '../prop'
+import {
+  PERMISSION_LABEL,
+  PERMISSION_TONE,
+  useAllocation,
+  useConnections,
+  useDeskActivity,
+  useGroups,
+  useNews,
+  useRisk,
+} from '../propdesk'
 import { StatusPill } from './measures'
 import { ChartPanel, type TimeframeKey } from './PriceChart'
 import type { DatasetInfo } from '../types'
@@ -470,6 +480,253 @@ function BookPanel({ what }: { what: 'positions' | 'orders' | 'account' }) {
   )
 }
 
+
+/* ── the Prop Desk ────────────────────────────────────────────────────────────
+ *
+ * Small, dense versions of what the Prop Desk screens show, so an operator can
+ * put their accounts next to a chart. Each one is backed by the same endpoint
+ * the full screen reads; none of them invents a number, and an account whose
+ * provider has reported no balance says so rather than showing a zero.
+ */
+
+function DeskAccountsPanel() {
+  const connections = useConnections()
+  if (connections.isPending) return <Loading />
+  if (connections.error) return <Failed error={connections.error} />
+  const rows = connections.data?.accounts ?? []
+  const links = connections.data?.connections ?? []
+  if (rows.length === 0) {
+    return (
+      <Empty message="No accounts. Only the simulator executes in this build; a real provider's accounts are discovered from the provider." />
+    )
+  }
+  const state = new Map(links.map((item) => [item.connection_id, item.state]))
+  return (
+    <table className="panel-table">
+      <thead>
+        <tr><th>Account</th><th>Connection</th><th>Equity</th><th>Rules</th></tr>
+      </thead>
+      <tbody>
+        {rows.map((account) => (
+          <tr key={account.account_uid}>
+            <td>{account.display_name || account.account_uid}</td>
+            <td>{state.get(account.connection_id) ?? 'unknown'}</td>
+            <td>{account.equity == null ? 'not reported' : account.equity.toLocaleString()}</td>
+            <td>{account.prop_account_id ? 'linked' : 'none linked'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function DeskCopyPanel() {
+  const groups = useGroups()
+  if (groups.isPending) return <Loading />
+  if (groups.error) return <Failed error={groups.error} />
+  const rows = groups.data?.groups ?? []
+  if (rows.length === 0) {
+    return <Empty message="No copy groups. A group needs an attestation that every account in it belongs to one owner." />
+  }
+  return (
+    <table className="panel-table">
+      <thead>
+        <tr><th>Group</th><th>State</th><th>Leader</th><th>Followers</th></tr>
+      </thead>
+      <tbody>
+        {rows.map((group) => (
+          <tr key={group.group_id}>
+            <td>{group.name}</td>
+            <td>
+              <StatusPill tone={group.active ? 'good' : 'unknown'} label={group.active ? 'replicating' : 'stopped'} />
+            </td>
+            <td>{group.leader.account_uid}</td>
+            <td>{group.followers.filter((f) => f.active).length} of {group.followers.length}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function DeskAllocationPanel() {
+  const allocation = useAllocation()
+  if (allocation.isPending) return <Loading />
+  if (allocation.error) return <Failed error={allocation.error} />
+  const rows = allocation.data?.allocations ?? []
+  if (rows.length === 0) {
+    return (
+      <Empty message="No account is running an allocated strategy. An allocation needs a strategy the judge passed and an out-of-sample drawdown estimate to size against." />
+    )
+  }
+  return (
+    <table className="panel-table">
+      <thead>
+        <tr><th>Account</th><th>Strategy</th><th>Contracts</th><th>Source</th></tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.account_uid}>
+            <td>{row.account_uid}</td>
+            <td>{row.strategy_id}</td>
+            <td>{row.contracts}</td>
+            <td>
+              <StatusPill
+                tone={row.actionable ? 'good' : 'warn'}
+                label={row.actionable ? row.source : 'needs confirmation'}
+              />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function DeskNewsPanel() {
+  const news = useNews(7)
+  if (news.isPending) return <Loading />
+  if (news.error) return <Failed error={news.error} />
+  const state = news.data
+  if (!state) return <Empty message="The calendar could not be read." />
+  if (state.events.length === 0) {
+    return (
+      <Empty message="No scheduled events. Record them by hand, or set FRED_API_KEY to read the Federal Reserve Bank of St. Louis release calendar." />
+    )
+  }
+  return (
+    <>
+      {state.assessment.restricted && (
+        <p className="panel-state" role="status">
+          Inside a blackout window: {state.assessment.events.map((e) => e.title).join(', ')}
+        </p>
+      )}
+      <table className="panel-table">
+        <thead><tr><th>When</th><th>Event</th><th>Impact</th></tr></thead>
+        <tbody>
+          {state.events.slice(0, 20).map((event) => (
+            <tr key={event.event_id}>
+              <td>{new Date(event.at).toLocaleString()}</td>
+              <td>{event.title}</td>
+              <td>
+                <StatusPill
+                  tone={event.impact === 'high' ? 'bad' : event.impact === 'unknown' ? 'unknown' : 'warn'}
+                  label={event.impact}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  )
+}
+
+function DeskRiskPanel() {
+  const risk = useRisk()
+  if (risk.isPending) return <Loading />
+  if (risk.error) return <Failed error={risk.error} />
+  const rows = risk.data?.accounts ?? []
+  if (rows.length === 0) return <Empty message="No accounts are connected." />
+  const configured = rows.filter((row) => row.settings)
+  if (configured.length === 0) {
+    return <Empty message="No account has a risk mode yet. Until one is set, nothing can size a position." />
+  }
+  return (
+    <table className="panel-table">
+      <thead>
+        <tr><th>Account</th><th>Mode</th><th>Risk</th><th>Size</th></tr>
+      </thead>
+      <tbody>
+        {configured.map((row) => (
+          <tr key={row.account_uid}>
+            <td>{row.account_uid}</td>
+            <td>{row.settings!.mode.replace(/_/g, ' ')}</td>
+            <td className="num">
+              {row.state ? `${(row.state.current_fraction * 100).toFixed(2)}%` : '—'}
+            </td>
+            <td className="num">
+              {row.last_proposal?.contracts_after ?? (
+                <StatusPill tone="unknown" label="Not measured" />
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function DeskAiPanel() {
+  const risk = useRisk()
+  if (risk.isPending) return <Loading />
+  if (risk.error) return <Failed error={risk.error} />
+  const rows = risk.data?.accounts ?? []
+  const managed = rows.filter((row) => row.settings?.mode === 'ai_managed')
+  const autonomous = rows.filter((row) => row.autonomy !== 'off')
+  if (managed.length === 0 && autonomous.length === 0) {
+    return <Empty message="AI manages nothing. No account is on AI risk management and autonomous deployment is off everywhere." />
+  }
+  return (
+    <table className="panel-table">
+      <thead>
+        <tr><th>Account</th><th>AI risk</th><th>Deployment</th></tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.account_uid}>
+            <td>{row.account_uid}</td>
+            <td>
+              <StatusPill
+                tone={row.settings?.mode === 'ai_managed' ? 'warn' : 'plain'}
+                label={row.settings?.mode === 'ai_managed' ? 'Managed' : 'Off'}
+              />
+            </td>
+            <td>
+              <StatusPill
+                tone={row.autonomy === 'off' ? 'plain' : 'warn'}
+                label={row.autonomy.replace(/_/g, ' ')}
+              />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function DeskActivityPanel() {
+  const activity = useDeskActivity(50)
+  if (activity.isPending) return <Loading />
+  if (activity.error) return <Failed error={activity.error} />
+  const rows = activity.data?.decisions ?? []
+  if (rows.length === 0) return <Empty message="Nothing has been screened yet." />
+  return (
+    <table className="panel-table">
+      <thead>
+        <tr><th>When</th><th>Order</th><th>Outcome</th><th>Refused at</th></tr>
+      </thead>
+      <tbody>
+        {rows.map((decision) => (
+          <tr key={decision.decision_id}>
+            <td>{new Date(decision.at).toLocaleTimeString()}</td>
+            <td>
+              {decision.intent.side} {decision.intent.quantity} {decision.intent.symbol}
+            </td>
+            <td>
+              <StatusPill
+                tone={decision.cleared ? 'good' : 'bad'}
+                label={decision.cleared ? 'cleared' : 'refused'}
+              />
+            </td>
+            <td>{decision.blocking_stages.join(', ') || '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 export function PanelBody({ kind, settings, datasets, onSetting }: PanelProps) {
   switch (kind) {
     case 'chart': {
@@ -540,6 +797,20 @@ export function PanelBody({ kind, settings, datasets, onSetting }: PanelProps) {
       return <RiskPanel />
     case 'prop':
       return <PropPanel />
+    case 'desk_accounts':
+      return <DeskAccountsPanel />
+    case 'desk_copy':
+      return <DeskCopyPanel />
+    case 'desk_allocation':
+      return <DeskAllocationPanel />
+    case 'desk_news':
+      return <DeskNewsPanel />
+    case 'desk_activity':
+      return <DeskActivityPanel />
+    case 'desk_risk':
+      return <DeskRiskPanel />
+    case 'desk_ai':
+      return <DeskAiPanel />
     case 'fund_summary':
       return <FundSummaryPanel />
     case 'portfolio':
