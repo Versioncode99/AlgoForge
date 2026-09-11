@@ -44,6 +44,7 @@ from typing import Any
 from pydantic import Field, model_validator
 
 from forge.contracts.models import FrozenModel
+from forge.prop.account import Level
 from forge.propdesk.allocation import (
     MIN_OOS_TRADES,
     HealthGrade,
@@ -431,30 +432,52 @@ def _correlation_driver(observation: RiskObservation) -> Driver:
     )
 
 
-_RULES_EFFECT: dict[str, float] = {"OK": 1.0, "WATCH": 0.5, "BREACH": 0.0}
+#: Keyed by `forge.prop.account.Level` rather than by strings invented here.
+#: The account rule engine has five levels and an earlier version of this map
+#: knew three, so a `caution` or `warning` account read as *unmeasured* — which
+#: is the wrong answer twice over: it is a measurement, and it is one that
+#: should reduce size. Running the application is what surfaced it.
+#:
+#: `NOT_ASSESSED` is deliberately absent: "we could not check this" is not a
+#: level, and `_rules_driver` reports it as unmeasured.
+_RULES_EFFECT: dict[Level, float] = {
+    Level.OK: 1.0,
+    Level.CAUTION: 0.75,
+    Level.WARNING: 0.5,
+    Level.BREACH: 0.0,
+}
+
+_RULES_DETAIL: dict[Level, str] = {
+    Level.OK: "no configured account rule is close to breaching",
+    Level.CAUTION: "at least one configured account rule has narrowed",
+    Level.WARNING: "at least one configured account rule is close to breaching",
+    Level.BREACH: "at least one configured account rule is breached",
+}
 
 
 def _rules_driver(observation: RiskObservation) -> Driver:
-    level = observation.rules_level.upper()
+    unmeasured = Driver(
+        kind=DriverKind.PROP_CONSTRAINT,
+        measured=False,
+        detail=(
+            "this account's rules have not been assessed, so how close it is to a "
+            "breach is unknown"
+        ),
+    )
+    if not observation.rules_level:
+        return unmeasured
+    try:
+        level = Level(observation.rules_level.lower())
+    except ValueError:
+        return unmeasured
     if level not in _RULES_EFFECT:
-        return Driver(
-            kind=DriverKind.PROP_CONSTRAINT,
-            measured=False,
-            detail=(
-                "this account's rules have not been assessed, so how close it is to a "
-                "breach is unknown"
-            ),
-        )
+        return unmeasured
     return Driver(
         kind=DriverKind.PROP_CONSTRAINT,
         measured=True,
-        observed=level,
+        observed=level.value,
         effect=_RULES_EFFECT[level],
-        detail={
-            "OK": "no configured account rule is close to breaching",
-            "WATCH": "at least one configured account rule is close to breaching",
-            "BREACH": "at least one configured account rule is breached",
-        }[level],
+        detail=_RULES_DETAIL[level],
     )
 
 
@@ -524,7 +547,7 @@ def _emergency(observation: RiskObservation, boundaries: RiskBoundaries) -> bool
     breach. Neither can cause an increase — `apply` only consults this on the
     decreasing branch.
     """
-    if observation.rules_level.upper() == "BREACH":
+    if observation.rules_level.lower() == Level.BREACH.value:
         return True
     buffer, start = observation.buffer, observation.starting_buffer
     if buffer is None or start is None or start <= 0:

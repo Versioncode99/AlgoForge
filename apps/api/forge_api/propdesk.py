@@ -45,7 +45,7 @@ from forge.explain import (
     why_did_risk_change,
     why_is_this_account_blocked,
 )
-from forge.prop.account import AccountRules, AccountState
+from forge.prop.account import AccountAssessment, AccountRules, AccountState, Level
 from forge.prop.account import assess as assess_account
 from forge.prop.accounts import PropAccountStore
 from forge.propdesk import (
@@ -163,6 +163,63 @@ def adapter_for(connection: BrokerConnection) -> Any:
             credential_ref=connection.credential_ref,
         )
     return ADAPTERS[connection.provider]()
+
+
+#: Severity order for the levels a *configured* rule can report. Read from the
+#: rule engine's own ordering so the two cannot drift; NOT_ASSESSED is absent
+#: because `_configured_rules_level` handles it before this map is consulted.
+_LEVEL_SEVERITY: dict[Level, int] = {
+    Level.OK: 0,
+    Level.CAUTION: 1,
+    Level.WARNING: 2,
+    Level.BREACH: 3,
+}
+
+
+def _configured_rules_level(assessment: AccountAssessment | None) -> str:
+    """The worst level among the rules the operator actually configured.
+
+    `AccountAssessment.level` is the worst over *every* rule, and NOT_ASSESSED
+    deliberately sorts above OK there — the right answer for the account screen,
+    which must never summarise an unchecked account as clean.
+
+    It is the wrong answer for the risk driver, and running the application is
+    what showed why. A rule set with a maximum loss and a daily loss limit and
+    nothing else leaves seven optional rules reporting "no profit target is
+    configured", so the account's worst level is permanently NOT_ASSESSED, so
+    the driver is permanently unmeasured, so risk can never rise. Safe, and
+    silently wrong: a rule nobody configured cannot be breached.
+
+    So this asks a narrower question — how close is this account to breaching a
+    rule you *did* configure — and distinguishes the two shapes of
+    NOT_ASSESSED using the one field that separates them. A status with no
+    `limit` is a rule that does not exist; a status with a limit and no reading
+    is a rule that could not be checked, and that one still blocks an increase.
+    """
+    if assessment is None:
+        return ""
+    configured = [status for status in assessment.statuses if status.limit is not None]
+    if not configured:
+        return ""
+    if any(status.level is Level.NOT_ASSESSED for status in configured):
+        return ""
+    return max(configured, key=lambda status: _LEVEL_SEVERITY[status.level]).level.value
+
+
+def _rendered(row: dict[str, Any]) -> dict[str, Any]:
+    """A stored proposal, with the keys the screen reads added back.
+
+    The row holds the canonical model so that answering "why did my risk
+    change" can validate its own record. The derived keys — each driver's label,
+    whether it cut, the assembled explanation — are a rendering, so they are
+    added here on the way out rather than stored twice and allowed to disagree.
+    """
+    try:
+        return RiskProposal.model_validate(row).as_dict()
+    except ValidationError:
+        # A row written by an older schema. Returned as it stands rather than
+        # dropped: an audit record that cannot be rendered is still a record.
+        return row
 
 
 def _tri(value: Any) -> bool | None:
@@ -810,7 +867,7 @@ class PropDeskService:
                     "account_uid": uid,
                     "settings": settings.as_dict() if settings else None,
                     "state": state.model_dump(mode="json") if state else None,
-                    "last_proposal": proposals[0] if proposals else None,
+                    "last_proposal": _rendered(proposals[0]) if proposals else None,
                     "autonomy": self.store.autonomy(uid).value,
                 }
             )
@@ -960,6 +1017,13 @@ class PropDeskService:
             )
         return {"proposal": proposal.as_dict(), "applied": applied}
 
+    def _assessment(self, account_uid: str) -> AccountAssessment | None:
+        account = self.store.account(account_uid)
+        rules, state = self._rules_and_state(account.prop_account_id if account else None)
+        if rules is None or state is None:
+            return None
+        return assess_account(rules, state)
+
     def risk_observation(self, account_uid: str) -> RiskObservation:
         """Assemble what the scaler is allowed to look at, from real sources.
 
@@ -987,7 +1051,7 @@ class PropDeskService:
             realised_daily_volatility=_volatility(realised),
             modelled_daily_volatility=_volatility(oos),
             max_pairwise_correlation=self._correlation(account_uid),
-            rules_level=snapshot.rules_level,
+            rules_level=_configured_rules_level(self._assessment(account_uid)),
             news_restricted=bool(news.get("restricted")) if news.get("action") else None,
             news_detail=str(news.get("action") or ""),
             oos_daily_pnl=oos,
@@ -1250,7 +1314,9 @@ class PropDeskService:
         return {
             "records": list(self.store.audit(account_uid, limit=limit)),
             "deployments": list(self.store.deployments(account_uid, limit=limit)),
-            "proposals": list(self.store.proposals(account_uid, limit=limit)),
+            "proposals": [
+                _rendered(row) for row in self.store.proposals(account_uid, limit=limit)
+            ],
         }
 
     def why(self, *, question: str, account_uid: str = "", strategy_id: str = "") -> dict[str, Any]:

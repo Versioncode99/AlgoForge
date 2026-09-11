@@ -324,6 +324,192 @@ export type DeskActivity = {
   counts: Record<string, number>
 }
 
+// ── risk modes, autonomy and consent ─────────────────────────────────────────
+
+export type RiskMode = 'manual' | 'adaptive' | 'ai_managed'
+
+export type AutonomyLevel = 'off' | 'approval_required' | 'fully_autonomous'
+
+export type RiskBoundaries = {
+  minimum_fraction: number
+  maximum_fraction: number
+  max_step: number
+  cooldown_minutes: number
+  hysteresis: number
+  max_daily_change: number
+  max_contracts: number
+  emergency_buffer_ratio: number
+  boundaries_hash: string
+}
+
+export type RiskSettings = {
+  account_uid: string
+  mode: RiskMode
+  appetite: number
+  boundaries: RiskBoundaries
+  manual: { risk_fraction: number; max_contracts: number; note: string } | null
+  ai_capabilities: string[]
+  disclosure_version: string
+  updated_at: string
+  updated_by: string
+  promise: string
+  detail: string
+  automated: boolean
+}
+
+export type RiskDriver = {
+  kind: string
+  measured: boolean
+  observed: string
+  effect: number
+  detail: string
+  label: string
+  cuts: boolean
+}
+
+export type RiskBand = {
+  appetite: number
+  quantile: number
+  drawdown_per_contract: number
+  target_fraction: number
+  conservative_fraction: number
+  aggressive_fraction: number
+  contracts: number
+  distribution: {
+    observed_days: number
+    paths: number
+    horizon_days: number
+    p50: number
+    p75: number
+    p90: number
+    p95: number
+    p99: number
+    worst: number
+  }
+}
+
+export type RiskProposal = {
+  account_uid: string
+  strategy_id: string
+  mode: RiskMode
+  at: string
+  current_fraction: number
+  proposed_fraction: number
+  applied_fraction: number
+  direction: 'hold' | 'increase' | 'decrease'
+  drivers: RiskDriver[]
+  band: RiskBand | null
+  unmeasurable: { reason: string; observed_days: number; required_days: number } | null
+  clamp: string
+  clamp_detail: string
+  binding_driver: string | null
+  emergency: boolean
+  contracts_before: number | null
+  contracts_after: number | null
+  changed: boolean
+  why: string[]
+}
+
+export type ScalingState = {
+  account_uid: string
+  current_fraction: number
+  last_change_at: string | null
+  change_today: number
+  change_day: string
+  last_direction: string
+}
+
+export type RiskRow = {
+  account_uid: string
+  settings: RiskSettings | null
+  state: ScalingState | null
+  last_proposal: RiskProposal | null
+  autonomy: AutonomyLevel
+}
+
+export type Disclosure = {
+  key: string
+  title: string
+  body: string[]
+  acknowledgements: string[]
+  confirm_label: string
+  cancel_label: string
+  claims: { statement: string; enforced_by: string }[]
+  version: string
+}
+
+export type Acknowledgement = {
+  key: string
+  version: string
+  acknowledged_by: string
+  acknowledged_at: string
+  accepted: string[]
+  account_uid: string
+}
+
+export type RiskCatalogue = {
+  modes: { mode: RiskMode; promise: string; detail: string }[]
+  capabilities: { capability: string; label: string; detail: string }[]
+  prohibitions: { statement: string; enforced_by: string; detail: string }[]
+  autonomy_levels: { level: AutonomyLevel; label: string; detail: string }[]
+  mandatory_gates: { kind: string; name: string; question: string }[]
+  disclosures: Disclosure[]
+  questions: { question: string; label: string; requires: string }[]
+}
+
+export type GateOutcome = {
+  kind: string
+  passed: boolean
+  unknown: boolean
+  detail: string
+  name: string
+  question: string
+}
+
+export type DeploymentDecision = {
+  strategy_id: string
+  account_uid: string
+  level: AutonomyLevel
+  outcome: 'blocked' | 'recorded' | 'awaiting_approval' | 'proceed'
+  gates: GateOutcome[]
+  at: string
+  cleared: boolean
+  reasons: string[]
+  level_label: string
+}
+
+export type AuditRecord = {
+  action: string
+  at: string
+  actor: string
+  actor_name: string
+  account_uid: string
+  strategy_id: string
+  previous: Record<string, unknown>
+  current: Record<string, unknown>
+  risk_mode: string
+  risk_fraction: number | null
+  verdict: string
+  policy_state: string
+  automation_mode: string
+  reason: string
+  disclosure_version: string
+  approval: string
+  decision: string
+  execution_state: string
+  record_id: string
+}
+
+export type WhyAnswer = {
+  question: string
+  answered: boolean
+  headline: string
+  points: string[]
+  source: string
+  unavailable: string
+  label: string
+}
+
 const key = (...parts: unknown[]) => ['propdesk', ...parts]
 
 export function useProviders() {
@@ -398,6 +584,42 @@ export function useDeskActivity(limit = 100) {
  * allocation changes what the activity log holds. Being precise here would
  * mean maintaining a second model of what depends on what.
  */
+export function useRisk(accountUid?: string) {
+  return useQuery({
+    queryKey: key('risk', accountUid ?? 'all'),
+    queryFn: () =>
+      getJson<{ accounts: RiskRow[]; catalogue: RiskCatalogue }>(
+        accountUid ? `/propdesk/risk?account_uid=${encodeURIComponent(accountUid)}` : '/propdesk/risk',
+      ),
+  })
+}
+
+export function useDisclosures() {
+  return useQuery({
+    queryKey: key('disclosures'),
+    queryFn: () =>
+      getJson<{ disclosures: Disclosure[]; acknowledgements: Acknowledgement[] }>(
+        '/propdesk/disclosures',
+      ),
+  })
+}
+
+export function useDeskAudit(accountUid?: string, limit = 200) {
+  return useQuery({
+    queryKey: key('audit', accountUid ?? 'all', limit),
+    queryFn: () =>
+      getJson<{
+        records: AuditRecord[]
+        deployments: DeploymentDecision[]
+        proposals: RiskProposal[]
+      }>(
+        accountUid
+          ? `/propdesk/audit?account_uid=${encodeURIComponent(accountUid)}&limit=${limit}`
+          : `/propdesk/audit?limit=${limit}`,
+      ),
+  })
+}
+
 export function useDeskMutations() {
   const client = useQueryClient()
   const refresh = { onSuccess: () => client.invalidateQueries({ queryKey: ['propdesk'] }) }
@@ -487,6 +709,39 @@ export function useDeskMutations() {
     recordEvent: useMutation({
       mutationFn: (body: { title: string; at: string; impact?: string }) =>
         postJson('/propdesk/news/events', body),
+      ...refresh,
+    }),
+    saveRiskSettings: useMutation({
+      mutationFn: (settings: Record<string, unknown>) =>
+        postJson<{ settings: RiskSettings }>('/propdesk/risk/settings', settings),
+      ...refresh,
+    }),
+    evaluateRisk: useMutation({
+      mutationFn: ({ accountUid, ...body }: {
+        accountUid: string
+        advisory?: number
+        advisory_note?: string
+        apply?: boolean
+      }) =>
+        postJson<{ proposal: RiskProposal; applied: boolean }>(
+          `/propdesk/risk/${accountUid}/evaluate`,
+          body,
+        ),
+      ...refresh,
+    }),
+    acknowledge: useMutation({
+      mutationFn: (body: { key: string; accepted: string[]; account_uid?: string }) =>
+        postJson<{ acknowledgement: Acknowledgement }>('/propdesk/disclosures/acknowledge', body),
+      ...refresh,
+    }),
+    setAutonomy: useMutation({
+      mutationFn: ({ accountUid, level }: { accountUid: string; level: AutonomyLevel }) =>
+        postJson<{ autonomy: AutonomyLevel }>(`/propdesk/autonomy/${accountUid}`, { level }),
+      ...refresh,
+    }),
+    evaluateDeployment: useMutation({
+      mutationFn: (body: { strategy_id: string; account_uid: string }) =>
+        postJson<{ decision: DeploymentDecision }>('/propdesk/deployment/evaluate', body),
       ...refresh,
     }),
     saveNewsPolicy: useMutation({

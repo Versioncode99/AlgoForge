@@ -821,3 +821,98 @@ def test_the_risk_writing_actions_are_denied_to_ai_in_every_mode(tmp_path, monke
                     continue
                 ruling = evaluate(facts, actor=Actor.AI, mode=mode, stance=stance)
                 assert ruling.ruling is Ruling.DENY, f"{name} reachable in {mode}/{stance}"
+
+
+def test_a_stored_proposal_is_rendered_with_the_keys_the_screen_reads(rich_service) -> None:
+    """The row holds the model; the rendering is added on the way out.
+
+    Found by running the application: the screen reads each driver's label and
+    whether it cut, and the row deliberately does not hold them — so a proposal
+    that round-trips through the store has to be rendered rather than returned
+    raw.
+    """
+    _, _, follower = seeded(rich_service)
+    rich_service.save_risk_settings(
+        {"account_uid": follower, "mode": "adaptive", "appetite": 50}, actor="operator"
+    )
+    rich_service.evaluate_risk(follower)
+    proposal = rich_service.risk(follower)["accounts"][0]["last_proposal"]
+    assert proposal["why"]
+    assert all("label" in driver and "cuts" in driver for driver in proposal["drivers"])
+    assert rich_service.audit(account_uid=follower)["proposals"][0]["clamp_detail"]
+
+
+class TestTheRulesDriverReadsConfiguredRulesOnly:
+    """A rule nobody configured cannot be breached, and must not read as unknown.
+
+    Found by running the application. `AccountAssessment.level` is the worst
+    over *every* rule and NOT_ASSESSED sorts above OK there, which is right for
+    the account screen. It is wrong for the risk driver: a rule set with a
+    maximum loss and a daily loss limit leaves seven optional rules reporting
+    "not configured", so the account's worst level was permanently
+    NOT_ASSESSED, the driver was permanently unmeasured, and risk could never
+    rise. Safe, and silently wrong.
+    """
+
+    def test_a_sparse_rule_set_still_reports_a_measured_level(self, rich_service) -> None:
+        _, _, follower = seeded(rich_service)
+        observation = rich_service.risk_observation(follower)
+        assert observation.rules_level == "ok"
+
+    def test_the_driver_measures_rather_than_abstaining(self, rich_service) -> None:
+        from forge.propdesk.scaling import DriverKind, drivers_for
+
+        _, _, follower = seeded(rich_service)
+        observation = rich_service.risk_observation(follower)
+        settings = rich_service.save_risk_settings(
+            {"account_uid": follower, "mode": "adaptive", "appetite": 50}, actor="operator"
+        )
+        del settings
+        driver = next(
+            item
+            for item in drivers_for(
+                observation, rich_service.store.risk_settings(follower).boundaries
+            )
+            if item.kind is DriverKind.PROP_CONSTRAINT
+        )
+        assert driver.measured
+        assert driver.effect == 1.0
+
+    def test_an_account_with_no_rules_at_all_is_unmeasured(self, rich_service) -> None:
+        connection = rich_service.create_connection(provider="simulated", label="Sim")
+        connection_id = connection["connection"]["connection_id"]
+        rich_service.connect(connection_id)
+        bare = rich_service.seed_simulator(connection_id, account_id="BARE")["account"]
+        assert rich_service.risk_observation(bare["account_uid"]).rules_level == ""
+
+    def test_a_configured_rule_that_cannot_be_checked_still_blocks(self, rich_service) -> None:
+        # The other shape of NOT_ASSESSED: a rule that exists and has no
+        # reading. That one is genuinely unknown and must keep blocking.
+        from forge.prop.account import AccountRules, AccountState
+
+        connection = rich_service.create_connection(provider="simulated", label="Sim2")
+        connection_id = connection["connection"]["connection_id"]
+        rich_service.connect(connection_id)
+        account = rich_service.seed_simulator(connection_id, account_id="RISKCAP")["account"]
+        rules = AccountRules(
+            name="With a per-trade cap",
+            starting_balance=50_000.0,
+            maximum_loss=2_000.0,
+            max_risk_per_trade=500.0,
+        )
+        prop = rich_service.prop_accounts.create(rules)
+        rich_service.prop_accounts.record(
+            prop.account_id,
+            AccountState(
+                as_of=NOW,
+                balance=50_000.0,
+                equity=50_000.0,
+                high_water_balance=50_000.0,
+                high_water_equity=50_000.0,
+                # risk_per_trade deliberately absent: the rule exists and the
+                # state cannot answer it.
+            ),
+            source="test",
+        )
+        rich_service.link_prop_account(account["account_uid"], prop.account_id)
+        assert rich_service.risk_observation(account["account_uid"]).rules_level == ""

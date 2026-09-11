@@ -191,6 +191,12 @@ _PROP_FIRM = ModeDescriptor(
         Section("limits", "Desk Limits",
                 "Firm permissions, contract caps, copy limits and drawdown protection",
                 "Desk", ("desk_accounts", "risk")),
+        Section("risk_management", "Risk Management",
+                "Manual, adaptive or AI-managed, inside the boundaries you set",
+                "Desk", ("desk_risk",)),
+        Section("ai_management", "AI Management",
+                "What AI is permitted to control, what it may never touch, and what it did",
+                "Desk", ("desk_ai",)),
         Section("news", "News", "Scheduled economic events and blackout windows",
                 "Desk", ("desk_news",)),
         Section("desk_activity", "Desk Activity",
@@ -219,6 +225,12 @@ _PROP_FIRM = ModeDescriptor(
         "simulated.",
         "Firm permissions start UNKNOWN and you record them. An unrecorded rule "
         "is never treated as permission.",
+        "Adaptive and AI-managed risk move one number: the share of an account's "
+        "buffer that an allocation may cost. Everything from there to an order is "
+        "deterministic, and your boundaries are the ceiling.",
+        "Autonomous deployment cannot reach a venue in this build: the lifecycle "
+        "refuses the deployed stage while no broker connector exists, and reports "
+        "that refusal as a mandatory control that did not pass.",
     ),
 )
 

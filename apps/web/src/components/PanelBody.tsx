@@ -10,6 +10,7 @@ import {
   useDeskActivity,
   useGroups,
   useNews,
+  useRisk,
 } from '../propdesk'
 import { StatusPill } from './measures'
 import { ChartPanel, type TimeframeKey } from './PriceChart'
@@ -621,6 +622,79 @@ function DeskNewsPanel() {
   )
 }
 
+function DeskRiskPanel() {
+  const risk = useRisk()
+  if (risk.isPending) return <Loading />
+  if (risk.error) return <Failed error={risk.error} />
+  const rows = risk.data?.accounts ?? []
+  if (rows.length === 0) return <Empty message="No accounts are connected." />
+  const configured = rows.filter((row) => row.settings)
+  if (configured.length === 0) {
+    return <Empty message="No account has a risk mode yet. Until one is set, nothing can size a position." />
+  }
+  return (
+    <table className="panel-table">
+      <thead>
+        <tr><th>Account</th><th>Mode</th><th>Risk</th><th>Size</th></tr>
+      </thead>
+      <tbody>
+        {configured.map((row) => (
+          <tr key={row.account_uid}>
+            <td>{row.account_uid}</td>
+            <td>{row.settings!.mode.replace(/_/g, ' ')}</td>
+            <td className="num">
+              {row.state ? `${(row.state.current_fraction * 100).toFixed(2)}%` : '—'}
+            </td>
+            <td className="num">
+              {row.last_proposal?.contracts_after ?? (
+                <StatusPill tone="unknown" label="Not measured" />
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function DeskAiPanel() {
+  const risk = useRisk()
+  if (risk.isPending) return <Loading />
+  if (risk.error) return <Failed error={risk.error} />
+  const rows = risk.data?.accounts ?? []
+  const managed = rows.filter((row) => row.settings?.mode === 'ai_managed')
+  const autonomous = rows.filter((row) => row.autonomy !== 'off')
+  if (managed.length === 0 && autonomous.length === 0) {
+    return <Empty message="AI manages nothing. No account is on AI risk management and autonomous deployment is off everywhere." />
+  }
+  return (
+    <table className="panel-table">
+      <thead>
+        <tr><th>Account</th><th>AI risk</th><th>Deployment</th></tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.account_uid}>
+            <td>{row.account_uid}</td>
+            <td>
+              <StatusPill
+                tone={row.settings?.mode === 'ai_managed' ? 'warn' : 'plain'}
+                label={row.settings?.mode === 'ai_managed' ? 'Managed' : 'Off'}
+              />
+            </td>
+            <td>
+              <StatusPill
+                tone={row.autonomy === 'off' ? 'plain' : 'warn'}
+                label={row.autonomy.replace(/_/g, ' ')}
+              />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 function DeskActivityPanel() {
   const activity = useDeskActivity(50)
   if (activity.isPending) return <Loading />
@@ -733,6 +807,10 @@ export function PanelBody({ kind, settings, datasets, onSetting }: PanelProps) {
       return <DeskNewsPanel />
     case 'desk_activity':
       return <DeskActivityPanel />
+    case 'desk_risk':
+      return <DeskRiskPanel />
+    case 'desk_ai':
+      return <DeskAiPanel />
     case 'fund_summary':
       return <FundSummaryPanel />
     case 'portfolio':

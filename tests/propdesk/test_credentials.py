@@ -275,3 +275,57 @@ def test_a_credential_reference_is_deterministic() -> None:
     first = new_credential_ref(Provider.RITHMIC, "My login", NOW)
     assert first == new_credential_ref(Provider.RITHMIC, "My login", NOW)
     assert first != new_credential_ref(Provider.TRADOVATE, "My login", NOW)
+
+
+class TestTheAuditTrailCarriesNoSecret:
+    """§37, asserted rather than audited by hand.
+
+    The scrubber in `forge.propdesk.audit` is the last line: a caller that puts
+    a password into a state dictionary is putting a string into a free-shaped
+    field, and no type system catches that. This reads the SQLite file back as
+    bytes, which is the only check that cannot be satisfied by a redaction that
+    happens after storage.
+    """
+
+    def test_a_secret_shaped_key_never_reaches_the_file(self, tmp_path) -> None:
+        from forge.propdesk.audit import AuditAction, ConsequentialRecord
+        from forge.propdesk.store import PropDeskStore
+
+        store = PropDeskStore(tmp_path / "desk.db")
+        planted = [
+            ("api_key", "sk-live-0000000000000000"),
+            ("password", "hunter2-should-never-appear"),
+            ("access_token", "tok-abcdefghijklmnop"),
+            ("secret", "s3cr3t-value-here"),
+            ("passphrase", "correct horse battery staple"),
+        ]
+        store.record_audit(
+            ConsequentialRecord(
+                action=AuditAction.RISK_MODE_CHANGED,
+                account_uid="acct-1",
+                previous=dict(planted),
+                current={"nested": {"deeper": dict(planted)}, "list": [dict(planted)]},
+            )
+        )
+        raw = store.path.read_bytes()
+        for _, value in planted:
+            assert value.encode() not in raw, f"{value!r} survived into the database"
+
+    def test_an_ordinary_field_is_not_scrubbed(self, tmp_path) -> None:
+        # The scrubber must not eat the record it is protecting.
+        from forge.propdesk.audit import AuditAction, ConsequentialRecord
+        from forge.propdesk.store import PropDeskStore
+
+        store = PropDeskStore(tmp_path / "desk.db")
+        store.record_audit(
+            ConsequentialRecord(
+                action=AuditAction.RISK_ADJUSTED,
+                account_uid="acct-1",
+                previous={"risk_fraction": 0.12, "mode": "adaptive"},
+                current={"risk_fraction": 0.1, "mode": "adaptive"},
+                reason="realised volatility rose",
+            )
+        )
+        recorded = store.audit("acct-1")[0]
+        assert recorded["previous"]["risk_fraction"] == 0.12
+        assert recorded["reason"] == "realised volatility rose"

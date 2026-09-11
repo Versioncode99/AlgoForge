@@ -218,3 +218,76 @@ ruff and mypy clean across 177 files.
 ### Blocked
 
 Nothing.
+
+---
+
+## Phase 5 — the Prop Desk UI, and running it
+
+**Status: complete.**
+
+### What changed
+
+- `apps/web/src/propdesk.ts` — risk, autonomy, consent, audit and deployment
+  types; `useRisk`, `useDisclosures`, `useDeskAudit`; five new mutations.
+- `apps/web/src/views/PropDesk.tsx` — `RiskSection` and `AiSection`, plus
+  `DisclosureDialog`, `AppetiteMeter` and `DriverTable`.
+- `apps/web/src/components/PanelBody.tsx` — `desk_risk` and `desk_ai` panels.
+- `apps/web/src/styles/propdesk.css`, `apps/web/src/App.tsx`,
+  `packages/forge/workstation/models.py`, `packages/forge/modes/models.py`.
+- `apps/web/src/views/propdesk-risk.test.tsx` — 11 tests.
+
+### Visual verification (§35)
+
+The application was built and run: API on 8123, Vite on 5173, against a seeded
+workspace with two simulated accounts, a 50k rule set, a recorded firm policy
+and a declared Rithmic connection. Every Prop Desk section was opened in
+Chromium, screenshotted full-page, and its rendered text read back. The
+disclosure flow was driven end to end — choose AI risk management, read the
+warning, tick the statement, confirm — and the acknowledgement, the version and
+the audit rows were then read back out of the running API.
+
+**Running it found four bugs that the fixture-backed tests did not.**
+
+1. **The Risk screen crashed.** `Cannot read properties of undefined (reading
+   'map')`. A stored proposal round-trips through the database as the canonical
+   model, and the screen reads derived keys — each driver's label, whether it
+   cut, the assembled explanation — which the row deliberately does not hold.
+   Fixed by rendering on the way out (`_rendered`), with a regression test; the
+   screen now also tolerates a row an older schema wrote.
+2. **The rules driver knew three level names, and the rule engine has five.**
+   `forge.prop.account.Level` is `ok / caution / warning / breach /
+   not_assessed`; the driver's map used invented `OK / WATCH / BREACH`, so a
+   *caution* or *warning* account read as **unmeasured** rather than as a reason
+   to cut. Now keyed to the enum itself, with a test that iterates every member.
+3. **A sparse rule set locked risk at the minimum forever.**
+   `AccountAssessment.level` is the worst over *every* rule and `NOT_ASSESSED`
+   sorts above `OK` there — correct for the account screen, wrong here. A rule
+   set with a maximum loss and a daily loss limit leaves seven optional rules
+   reporting "not configured", so the worst level was permanently
+   `NOT_ASSESSED`, the driver permanently unmeasured, and risk could never rise.
+   The service now reads the worst level among rules that were *configured*, and
+   still treats a configured-but-uncheckable rule as unknown. Four tests.
+4. **Two heading and layout slips** — the mode promise rendered upper-case in a
+   heading meta slot, and the appetite number floated without its label.
+
+### Security audit (§37)
+
+- Every desk API response scanned for secret-shaped keys: eleven endpoints,
+  clean.
+- The running SQLite file scanned across all 19 tables for
+  password/secret/api-key/token/passphrase patterns: zero matches.
+- API and Vite logs: zero matches.
+- Git history across the whole branch for `sk-…`, `AKIA…` and PEM private-key
+  headers: zero matches.
+- Two new tests in `tests/propdesk/test_credentials.py` plant five secret-shaped
+  keys in an audit record, write it, and read the database back **as bytes** —
+  the only check a post-hoc redaction cannot satisfy.
+
+### What was tested
+
+Full suite: **2292 passed**. `ruff` and `mypy --strict` (177 files) clean.
+`tsc --noEmit` clean, `vitest` **79 passed**.
+
+### Blocked
+
+Nothing.

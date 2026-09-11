@@ -72,6 +72,8 @@ class PanelKind(StrEnum):
     DESK_ALLOCATION = "desk_allocation"
     DESK_NEWS = "desk_news"
     DESK_ACTIVITY = "desk_activity"
+    DESK_RISK = "desk_risk"
+    DESK_AI = "desk_ai"
     # Fund. The Hedge Fund loop's own surfaces, each backed by a deterministic
     # engine rather than by a narrative: `forge.portfolio`, `forge.risk.portfolio`,
     # `forge.execution.gate` and the approval and audit stores. They are panel
@@ -103,6 +105,11 @@ EXECUTION_PANELS = frozenset(
         PanelKind.DESK_COPY,
         PanelKind.DESK_ALLOCATION,
         PanelKind.DESK_ACTIVITY,
+        # Risk sizing is execution: the fraction it moves is what an order is
+        # sized from. The AI panel is here for the same reason — it is where
+        # autonomous deployment is switched on.
+        PanelKind.DESK_RISK,
+        PanelKind.DESK_AI,
     }
 )
 

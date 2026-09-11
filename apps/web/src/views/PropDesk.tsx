@@ -5,17 +5,24 @@ import {
   PERMISSION_LABEL,
   PERMISSION_TONE,
   type AllocationRow,
+  type AutonomyLevel,
   type CopyDecision,
   type DeskDecision,
+  type Disclosure,
   type Permission,
+  type RiskBand,
+  type RiskDriver,
+  type RiskMode,
   useAllocation,
   useConnections,
   useDeskActivity,
+  useDeskAudit,
   useDeskMutations,
   useGroups,
   useNews,
   usePolicies,
   useProviders,
+  useRisk,
 } from '../propdesk'
 
 /* The Prop Desk: many accounts, one set of deterministic controls.
@@ -37,9 +44,28 @@ import {
  *
  * And it does not invent an account state. An account with no rule set linked
  * says so, and the desk refuses to trade it rather than assuming a balance.
+ *
+ * The Risk and AI Management screens add two of their own.
+ *
+ * The appetite meter is never drawn as a size dial. Under the number sits what
+ * that appetite actually sizes against — a bootstrapped drawdown quantile and
+ * the contracts it buys on this account — because the meter's effect is a
+ * property of the strategy's measured tail rather than of the meter.
+ *
+ * A consequential setting is never switched on without its disclosure. The
+ * dialog appears where the switch is, every statement has its own checkbox, and
+ * the confirm button stays disabled until all of them are ticked.
  */
 
-type SectionKey = 'desk' | 'allocation' | 'copy' | 'limits' | 'news' | 'desk_activity'
+type SectionKey =
+  | 'desk'
+  | 'allocation'
+  | 'copy'
+  | 'limits'
+  | 'news'
+  | 'desk_activity'
+  | 'risk_management'
+  | 'ai_management'
 
 const TITLE: Record<SectionKey, string> = {
   desk: 'Prop Desk',
@@ -48,6 +74,8 @@ const TITLE: Record<SectionKey, string> = {
   limits: 'Desk Limits',
   news: 'News',
   desk_activity: 'Desk Activity',
+  risk_management: 'Risk Management',
+  ai_management: 'AI Management',
 }
 
 export function PropDeskView({ section }: { section: SectionKey }) {
@@ -65,6 +93,8 @@ export function PropDeskView({ section }: { section: SectionKey }) {
       {section === 'limits' && <LimitsSection />}
       {section === 'news' && <NewsSection />}
       {section === 'desk_activity' && <ActivitySection />}
+      {section === 'risk_management' && <RiskSection />}
+      {section === 'ai_management' && <AiSection />}
     </div>
   )
 }
@@ -596,6 +626,666 @@ function DecisionLadder({ decisions }: { decisions: DeskDecision[] }) {
         </details>
       ))}
     </div>
+  )
+}
+
+/* ── Risk: who decides how large a position is ─────────────────────────────── */
+
+/** The safety disclosure, shown where the thing is being switched on.
+ *
+ * Every statement has its own checkbox and the confirm button stays disabled
+ * until all of them are ticked — because a disclosure with two acknowledgements
+ * is making two separate statements, and "they ticked one" is a different fact
+ * from "they ticked both".
+ */
+function DisclosureDialog({
+  disclosure,
+  onCancel,
+  onConfirm,
+  busy,
+}: {
+  disclosure: Disclosure
+  onCancel: () => void
+  onConfirm: (accepted: string[]) => void
+  busy?: boolean
+}) {
+  const [ticked, setTicked] = useState<string[]>([])
+  const complete = disclosure.acknowledgements.every((item) => ticked.includes(item))
+  return (
+    <div className="desk-disclosure" role="dialog" aria-label={disclosure.title}>
+      <header>
+        <StatusPill tone="warn" label="Before this takes effect" />
+        <h3>{disclosure.title}</h3>
+      </header>
+      {disclosure.body.map((paragraph) => (
+        <p key={paragraph}>{paragraph}</p>
+      ))}
+      <ul className="desk-ticks">
+        {disclosure.acknowledgements.map((statement) => (
+          <li key={statement}>
+            <label>
+              <input
+                type="checkbox"
+                checked={ticked.includes(statement)}
+                onChange={(event) =>
+                  setTicked((current) =>
+                    event.target.checked
+                      ? [...current, statement]
+                      : current.filter((item) => item !== statement),
+                  )
+                }
+              />
+              <span>{statement}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <footer>
+        <button type="button" onClick={onCancel}>
+          {disclosure.cancel_label}
+        </button>
+        <button
+          type="button"
+          data-primary="yes"
+          disabled={!complete || busy}
+          onClick={() => onConfirm(disclosure.acknowledgements)}
+        >
+          {disclosure.confirm_label}
+        </button>
+      </footer>
+      <p className="desk-muted">Version {disclosure.version}. Recorded against your name.</p>
+    </div>
+  )
+}
+
+/** Conservative to Aggressive, drawn against what it actually buys.
+ *
+ * The number under the meter is the appetite; the line under that is what the
+ * appetite costs on this strategy, which is the part that differs between a
+ * thin-tailed strategy and a fat-tailed one. Showing only the appetite would
+ * make the meter look like a size dial, which is precisely what it is not.
+ */
+function AppetiteMeter({
+  appetite,
+  band,
+  onChange,
+  disabled,
+}: {
+  appetite: number
+  band: RiskBand | null
+  onChange?: (value: number) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="desk-meter">
+      <div className="desk-meter-track">
+        <span>Conservative</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={appetite}
+          disabled={disabled || !onChange}
+          onChange={(event) => onChange?.(Number(event.target.value))}
+          aria-label="Risk appetite"
+        />
+        <span>Aggressive</span>
+      </div>
+      <div className="desk-meter-read">
+        <b className="desk-meter-value">{appetite}</b>
+        <span>{appetite <= 33 ? 'Conservative' : appetite >= 67 ? 'Aggressive' : 'Balanced'}</span>
+      </div>
+      {band ? (
+        <p className="desk-muted">
+          Sizes against the {(band.quantile * 100).toFixed(0)}th-percentile bootstrapped
+          drawdown of {band.drawdown_per_contract.toLocaleString(undefined, {
+            maximumFractionDigits: 0,
+          })}{' '}
+          per contract, at {(band.target_fraction * 100).toFixed(2)}% of this account&rsquo;s
+          buffer &mdash; {band.contracts} contract{band.contracts === 1 ? '' : 's'}.
+        </p>
+      ) : (
+        <p className="desk-muted">
+          No risk band has been derived for this account yet, so the meter has nothing to
+          size against.
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** Every driver, measured or not, with what it did to the target. */
+function DriverTable({ drivers }: { drivers: RiskDriver[] }) {
+  if (drivers.length === 0) return null
+  return (
+    <table className="desk-table">
+      <thead>
+        <tr>
+          <th>Driver</th>
+          <th>Observed</th>
+          <th>Effect</th>
+          <th>Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        {drivers.map((driver) => (
+          <tr key={driver.kind}>
+            <td>{driver.label}</td>
+            <td>
+              {driver.measured ? (
+                driver.observed
+              ) : (
+                <StatusPill tone="unknown" label="Not measured" />
+              )}
+            </td>
+            <td className="desk-mono">
+              {driver.measured ? `x${driver.effect.toFixed(2)}` : '—'}
+            </td>
+            <td>{driver.detail}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function RiskSection() {
+  const risk = useRisk()
+  const connections = useConnections()
+  const mutations = useDeskMutations()
+  const [selected, setSelected] = useState('')
+  const [pending, setPending] = useState<{ mode: RiskMode; appetite: number } | null>(null)
+  const [error, setError] = useState('')
+
+  if (risk.isLoading) return <p className="desk-muted">Reading risk configuration…</p>
+  if (risk.error) return <Empty title="Risk is unavailable" detail={String(risk.error)} />
+
+  const rows = risk.data?.accounts ?? []
+  const catalogue = risk.data?.catalogue
+  const accounts = connections.data?.accounts ?? []
+  const account = selected || rows[0]?.account_uid || ''
+  const row = rows.find((item) => item.account_uid === account)
+  const name =
+    accounts.find((item) => item.account_uid === account)?.display_name || account
+
+  if (rows.length === 0) {
+    return (
+      <Empty
+        title="No accounts to configure"
+        detail="Connect an account on the Prop Desk screen first. Risk is configured per account, because the buffer it is a fraction of belongs to one account."
+      />
+    )
+  }
+
+  const aiDisclosure = catalogue?.disclosures.find((item) => item.key === 'ai_risk_management')
+
+  const save = (mode: RiskMode, appetite: number) => {
+    setError('')
+    const body: Record<string, unknown> = { account_uid: account, mode, appetite }
+    if (mode === 'manual') {
+      body.manual = {
+        risk_fraction: row?.state?.current_fraction ?? 0.1,
+        max_contracts: row?.settings?.boundaries.max_contracts ?? 2,
+      }
+    }
+    if (mode === 'ai_managed') body.ai_capabilities = ['position_sizing', 'risk_reduction']
+    mutations.saveRiskSettings.mutate(body, {
+      onError: (cause) => setError(String(cause)),
+      onSuccess: () => setPending(null),
+    })
+  }
+
+  return (
+    <>
+      <section className="desk-block">
+        <PanelHead
+          title="Risk management"
+          meta={`${rows.length} account${rows.length === 1 ? '' : 's'}`}
+        />
+        <label className="desk-select">
+          <span>Account</span>
+          <select value={account} onChange={(event) => setSelected(event.target.value)}>
+            {rows.map((item) => (
+              <option key={item.account_uid} value={item.account_uid}>
+                {accounts.find((a) => a.account_uid === item.account_uid)?.display_name ||
+                  item.account_uid}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="desk-modes">
+          {catalogue?.modes.map((mode) => {
+            const active = row?.settings?.mode === mode.mode
+            return (
+              <button
+                key={mode.mode}
+                type="button"
+                className="desk-mode"
+                data-active={active ? 'yes' : undefined}
+                onClick={() => {
+                  if (mode.mode === 'ai_managed' && aiDisclosure) {
+                    setPending({ mode: mode.mode, appetite: row?.settings?.appetite ?? 50 })
+                    return
+                  }
+                  save(mode.mode, row?.settings?.appetite ?? 50)
+                }}
+              >
+                <span className="desk-mode-dot" aria-hidden="true" />
+                <b>{mode.promise}</b>
+                <span className="desk-mode-name">{mode.mode.replace(/_/g, ' ')}</span>
+                <p>{mode.detail}</p>
+              </button>
+            )
+          })}
+        </div>
+        {error && <p className="desk-error">{error}</p>}
+      </section>
+
+      {pending && aiDisclosure && (
+        <DisclosureDialog
+          disclosure={aiDisclosure}
+          busy={mutations.acknowledge.isPending}
+          onCancel={() => setPending(null)}
+          onConfirm={(accepted) =>
+            mutations.acknowledge.mutate(
+              { key: aiDisclosure.key, accepted },
+              {
+                onError: (cause) => setError(String(cause)),
+                onSuccess: () => save(pending.mode, pending.appetite),
+              },
+            )
+          }
+        />
+      )}
+
+      {row?.settings ? (
+        <>
+          <section className="desk-block">
+            <PanelHead
+              title="Risk profile"
+              meta={row.settings.mode.replace(/_/g, ' ')}
+            />
+            <AppetiteMeter
+              appetite={row.settings.appetite}
+              band={row.last_proposal?.band ?? null}
+              disabled={row.settings.mode === 'manual'}
+              onChange={
+                row.settings.mode === 'manual'
+                  ? undefined
+                  : (value) => save(row.settings!.mode, value)
+              }
+            />
+            <div className="desk-stats">
+              <Stat
+                label="Current risk"
+                value={
+                  row.state ? `${(row.state.current_fraction * 100).toFixed(2)}%` : 'Not set'
+                }
+                note="of this account's buffer to its loss floor"
+              />
+              <Stat
+                label="Your ceiling"
+                value={`${(row.settings.boundaries.maximum_fraction * 100).toFixed(2)}%`}
+                note="nothing proposes above this"
+              />
+              <Stat
+                label="Position size"
+                value={
+                  row.last_proposal?.contracts_after === null ||
+                  row.last_proposal?.contracts_after === undefined
+                    ? 'Not measured'
+                    : `${row.last_proposal.contracts_after} contracts`
+                }
+                tone={row.last_proposal?.contracts_after ? 'plain' : 'unknown'}
+              />
+              <Stat
+                label="Autonomous deployment"
+                value={row.autonomy.replace(/_/g, ' ')}
+                tone={row.autonomy === 'off' ? 'plain' : 'warn'}
+              />
+            </div>
+            <button
+              type="button"
+              className="desk-action"
+              disabled={mutations.evaluateRisk.isPending || row.settings.mode === 'manual'}
+              onClick={() =>
+                mutations.evaluateRisk.mutate(
+                  { accountUid: account },
+                  { onError: (cause) => setError(String(cause)) },
+                )
+              }
+            >
+              Evaluate now
+            </button>
+            {row.settings.mode === 'manual' && (
+              <p className="desk-muted">
+                This account is on manual risk. Nothing evaluates or adjusts it; your account
+                rules, the refusal ladder and the pre-trade gate still apply.
+              </p>
+            )}
+          </section>
+
+          <section className="desk-block">
+            <PanelHead
+              title="Why?"
+              meta={row.last_proposal ? row.last_proposal.at.slice(0, 16).replace('T', ' ') : ''}
+            />
+            {row.last_proposal ? (
+              <>
+                {/* Both lists are derived server-side and added when a stored
+                  * proposal is rendered. A row written by an older schema comes
+                  * back without them, and a blank section is a better answer
+                  * than a screen that will not draw. */}
+                <ul className="desk-why">
+                  {(row.last_proposal.why ?? []).map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                <DriverTable drivers={row.last_proposal.drivers ?? []} />
+              </>
+            ) : (
+              <NotMeasured
+                what="Nothing has been evaluated for this account yet"
+                why="The drivers, the band and the governor all report against an evaluation. Run one to see what they say."
+              />
+            )}
+          </section>
+
+          <section className="desk-block">
+            <PanelHead title="Your boundaries" meta={row.settings.boundaries.boundaries_hash.slice(0, 8)} />
+            <p className="desk-note">
+              Every one of these constrains an increase strictly and a decrease leniently.
+              De-risking is never delayed by a cooldown or a daily limit.
+            </p>
+            <table className="desk-table">
+              <tbody>
+                {[
+                  ['Minimum risk', `${(row.settings.boundaries.minimum_fraction * 100).toFixed(2)}%`],
+                  ['Maximum risk', `${(row.settings.boundaries.maximum_fraction * 100).toFixed(2)}%`],
+                  ['Largest single change', `${(row.settings.boundaries.max_step * 100).toFixed(2)}%`],
+                  ['Cooldown between increases', `${row.settings.boundaries.cooldown_minutes} minutes`],
+                  ['Hysteresis band', `${(row.settings.boundaries.hysteresis * 100).toFixed(2)}%`],
+                  ['Daily change limit', `${(row.settings.boundaries.max_daily_change * 100).toFixed(2)}%`],
+                  ['Contract ceiling', `${row.settings.boundaries.max_contracts}`],
+                  [
+                    'Emergency de-risk below',
+                    `${(row.settings.boundaries.emergency_buffer_ratio * 100).toFixed(0)}% of the starting buffer`,
+                  ],
+                ].map(([label, value]) => (
+                  <tr key={label}>
+                    <td>{label}</td>
+                    <td className="desk-mono">{value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        </>
+      ) : (
+        <Empty
+          title={`${name} has no risk configuration`}
+          detail="Choose a risk mode above. Until one is set, nothing can size a position on this account."
+        />
+      )}
+    </>
+  )
+}
+
+/* ── AI management ────────────────────────────────────────────────────────── */
+
+function AiSection() {
+  const risk = useRisk()
+  const audit = useDeskAudit()
+  const mutations = useDeskMutations()
+  const [error, setError] = useState('')
+  const [pendingAutonomy, setPendingAutonomy] = useState<{
+    accountUid: string
+    level: AutonomyLevel
+  } | null>(null)
+
+  if (risk.isLoading) return <p className="desk-muted">Reading AI configuration…</p>
+  const catalogue = risk.data?.catalogue
+  const rows = risk.data?.accounts ?? []
+  const managed = rows.filter((row) => row.settings?.mode === 'ai_managed')
+  const strategies = new Set(
+    rows.map((row) => row.last_proposal?.strategy_id).filter((item): item is string => !!item),
+  )
+  const deploymentDisclosure = catalogue?.disclosures.find(
+    (item) => item.key === 'autonomous_deployment',
+  )
+
+  return (
+    <>
+      <section className="desk-block">
+        <PanelHead
+          title="AI management"
+          meta={
+            <StatusPill
+              tone={managed.length > 0 ? 'warn' : 'plain'}
+              label={managed.length > 0 ? 'Active' : 'Off'}
+            />
+          }
+        />
+        <div className="desk-stats">
+          <Stat label="Accounts managed" value={managed.length} note={`of ${rows.length}`} />
+          <Stat label="Strategies" value={strategies.size} note="with a recorded evaluation" />
+          <Stat
+            label="Autonomous deployment"
+            value={rows.filter((row) => row.autonomy !== 'off').length}
+            note="accounts above off"
+          />
+        </div>
+        {managed.length === 0 && (
+          <p className="desk-muted">
+            No account is on AI risk management. Turn it on from the Risk screen; it asks you
+            to read a disclosure first.
+          </p>
+        )}
+      </section>
+
+      <section className="desk-block">
+        <PanelHead title="What it may do" />
+        <ul className="desk-permissions">
+          {catalogue?.capabilities.map((capability) => {
+            const granted = managed.some((row) =>
+              row.settings?.ai_capabilities.includes(capability.capability),
+            )
+            return (
+              <li key={capability.capability} data-granted={granted ? 'yes' : 'no'}>
+                <span aria-hidden="true">{granted ? '✓' : '—'}</span>
+                <div>
+                  <b>{capability.label}</b>
+                  <p>{capability.detail}</p>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      </section>
+
+      <section className="desk-block">
+        <PanelHead title="What it may never do" meta="and what stops it" />
+        <p className="desk-note">
+          Each line names the deterministic control that refuses it. These are not settings:
+          there is no configuration in which any of them becomes permitted.
+        </p>
+        <ul className="desk-permissions">
+          {catalogue?.prohibitions.map((item) => (
+            <li key={item.statement} data-granted="never">
+              <span aria-hidden="true">✗</span>
+              <div>
+                <b>{item.statement}</b>
+                <p>{item.detail}</p>
+                <code className="desk-mono">{item.enforced_by}</code>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="desk-block">
+        <PanelHead title="Autonomous deployment" />
+        <p className="desk-note">
+          The mandatory control list below is identical at every level. The level changes only
+          what happens once every control has passed.
+        </p>
+        <table className="desk-table">
+          <thead>
+            <tr>
+              <th>Account</th>
+              <th>Level</th>
+              <th>Set</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.account_uid}>
+                <td className="desk-mono">{row.account_uid}</td>
+                <td>
+                  <StatusPill
+                    tone={row.autonomy === 'off' ? 'plain' : 'warn'}
+                    label={row.autonomy.replace(/_/g, ' ')}
+                  />
+                </td>
+                <td>
+                  <select
+                    value={row.autonomy}
+                    onChange={(event) => {
+                      const level = event.target.value as AutonomyLevel
+                      setError('')
+                      if (level !== 'off' && deploymentDisclosure) {
+                        setPendingAutonomy({ accountUid: row.account_uid, level })
+                        return
+                      }
+                      mutations.setAutonomy.mutate(
+                        { accountUid: row.account_uid, level },
+                        { onError: (cause) => setError(String(cause)) },
+                      )
+                    }}
+                  >
+                    {catalogue?.autonomy_levels.map((level) => (
+                      <option key={level.level} value={level.level}>
+                        {level.label}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {error && <p className="desk-error">{error}</p>}
+      </section>
+
+      {pendingAutonomy && deploymentDisclosure && (
+        <DisclosureDialog
+          disclosure={deploymentDisclosure}
+          busy={mutations.acknowledge.isPending}
+          onCancel={() => setPendingAutonomy(null)}
+          onConfirm={(accepted) =>
+            mutations.acknowledge.mutate(
+              { key: deploymentDisclosure.key, accepted },
+              {
+                onError: (cause) => setError(String(cause)),
+                onSuccess: () =>
+                  mutations.setAutonomy.mutate(
+                    { accountUid: pendingAutonomy.accountUid, level: pendingAutonomy.level },
+                    {
+                      onError: (cause) => setError(String(cause)),
+                      onSuccess: () => setPendingAutonomy(null),
+                    },
+                  ),
+              },
+            )
+          }
+        />
+      )}
+
+      <section className="desk-block">
+        <PanelHead title="Mandatory controls" meta={`${catalogue?.mandatory_gates.length ?? 0}`} />
+        <table className="desk-table">
+          <tbody>
+            {catalogue?.mandatory_gates.map((gate) => (
+              <tr key={gate.kind}>
+                <td>{gate.name}</td>
+                <td>{gate.question}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="desk-block">
+        <PanelHead title="Deployment evaluations" />
+        {audit.data?.deployments.length ? (
+          <div className="desk-ladder">
+            {audit.data.deployments.slice(0, 10).map((decision) => (
+              <details key={`${decision.strategy_id}-${decision.at}`} open={!decision.cleared}>
+                <summary>
+                  <StatusPill
+                    tone={decision.cleared ? 'good' : 'bad'}
+                    label={decision.outcome.replace(/_/g, ' ')}
+                  />
+                  <span>
+                    {decision.strategy_id} on {decision.account_uid}
+                  </span>
+                </summary>
+                <ol className="desk-stages">
+                  {decision.gates.map((gate) => (
+                    <li key={gate.kind} data-passed={gate.passed}>
+                      <StatusPill
+                        tone={gate.passed ? 'good' : gate.unknown ? 'unknown' : 'bad'}
+                        label={gate.name}
+                      />
+                      <span>{gate.detail || gate.question}</span>
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            ))}
+          </div>
+        ) : (
+          <NotMeasured
+            what="No deployment has been evaluated"
+            why="A deployment evaluation runs every mandatory control and records what each one found. Nothing has asked for one yet."
+          />
+        )}
+      </section>
+
+      <section className="desk-block">
+        <PanelHead title="Audit trail" meta={`${audit.data?.records.length ?? 0} records`} />
+        {audit.data?.records.length ? (
+          <table className="desk-table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Action</th>
+                <th>Account</th>
+                <th>By</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {audit.data.records.slice(0, 40).map((record) => (
+                <tr key={record.record_id}>
+                  <td className="desk-mono">{record.at.slice(0, 16).replace('T', ' ')}</td>
+                  <td>{record.action.replace(/_/g, ' ')}</td>
+                  <td className="desk-mono">{record.account_uid || '—'}</td>
+                  <td>{record.actor_name || record.actor}</td>
+                  <td>{record.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <Empty
+            title="Nothing recorded yet"
+            detail="Risk changes, deployment evaluations and acknowledgements are written here as they happen. The table has no update and no delete."
+          />
+        )}
+      </section>
+    </>
   )
 }
 

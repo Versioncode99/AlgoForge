@@ -92,6 +92,8 @@ function viewFor(mode: ModeKey, route: string): React.ReactNode {
     'prop_firm/limits': <PropDeskView section="limits" />,
     'prop_firm/news': <PropDeskView section="news" />,
     'prop_firm/desk_activity': <PropDeskView section="desk_activity" />,
+    'prop_firm/risk_management': <PropDeskView section="risk_management" />,
+    'prop_firm/ai_management': <PropDeskView section="ai_management" />,
     'ai/assistant': <ConsoleView />,
     'ai/actions': <ActionsView />,
     'ai/activity': <OperatingLogView />,

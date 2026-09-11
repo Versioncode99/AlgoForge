@@ -167,11 +167,39 @@ class TestEachDriver:
         assert drivers_for(perfect, RiskBoundaries())[4].effect == 0.0
 
     def test_a_breached_account_rule_zeroes_the_rules_driver(self) -> None:
-        assert drivers_for(observation(rules_level="BREACH"), RiskBoundaries())[5].effect == 0.0
+        assert drivers_for(observation(rules_level="breach"), RiskBoundaries())[5].effect == 0.0
+
+    def test_every_level_the_rule_engine_can_report_is_handled(self) -> None:
+        # An earlier version of this map knew three level names, none of which
+        # the rule engine actually uses for its middle states — so a `caution`
+        # or `warning` account read as unmeasured, which is the wrong answer
+        # twice over. Running the application is what surfaced it, and this is
+        # what stops it coming back.
+        from forge.prop.account import Level
+
+        for level in Level:
+            driver = drivers_for(observation(rules_level=level.value), RiskBoundaries())[5]
+            if level is Level.NOT_ASSESSED:
+                assert not driver.measured, "not_assessed is not a level, it is an absence"
+            else:
+                assert driver.measured, f"{level.value} is a measurement and must read as one"
+
+    def test_the_middle_levels_reduce_without_zeroing(self) -> None:
+        for level in ("caution", "warning"):
+            effect = drivers_for(observation(rules_level=level), RiskBoundaries())[5].effect
+            assert 0.0 < effect < 1.0
+
+    def test_severity_orders_the_effects(self) -> None:
+        effects = [
+            drivers_for(observation(rules_level=level), RiskBoundaries())[5].effect
+            for level in ("ok", "caution", "warning", "breach")
+        ]
+        assert effects == sorted(effects, reverse=True)
 
     def test_an_unassessed_account_is_unmeasured_not_ok(self) -> None:
-        driver = drivers_for(observation(rules_level=""), RiskBoundaries())[5]
-        assert not driver.measured
+        for value in ("", "not_assessed", "something_else"):
+            driver = drivers_for(observation(rules_level=value), RiskBoundaries())[5]
+            assert not driver.measured
 
     def test_a_news_blackout_zeroes_the_news_driver(self) -> None:
         assert drivers_for(observation(news_restricted=True), RiskBoundaries())[6].effect == 0.0
