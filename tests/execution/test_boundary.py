@@ -34,6 +34,11 @@ from forge.execution import (
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGES = ROOT / "packages"
+#: The importable package root. Two scans below used to be given `packages/<name>`
+#: — a path that has never existed, since the package lives at
+#: `packages/forge/<name>` — so `rglob` matched nothing and both tests passed over
+#: an empty file list. They were asserting nothing at all.
+FORGE = PACKAGES / "forge"
 API = ROOT / "apps" / "api"
 
 
@@ -194,17 +199,89 @@ def test_the_oms_will_not_route_an_order_without_gate_clearance() -> None:
             oms.submit(order, None, reference_price=100.0)
 
 
-def test_the_execution_package_places_nothing() -> None:
-    """The module that owns the boundary must not cross it."""
-    for path in python_sources(PACKAGES / "execution"):
-        source = path.read_text(encoding="utf-8")
-        assert "import requests" not in source
-        assert "urllib.request" not in source
-        assert "httpx" not in source
+def test_the_execution_packages_reach_no_network() -> None:
+    """The modules that own the boundary must not cross it.
+
+    Covers `forge.execution` and `forge.propdesk`: the desk holds provider
+    adapters, and an adapter that opened a socket would be the moment this build
+    stopped being unable to trade. The one module in the repository that does
+    reach a network for the desk is the economic-calendar client, which is
+    excluded by name — it reads a public statistical API and cannot place an
+    order.
+    """
+    calendar = FORGE / "propdesk" / "news.py"
+    offenders: list[str] = []
+    for path in python_sources(FORGE / "execution", FORGE / "propdesk"):
+        if path == calendar:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [(node.module or "").split(".")[0]]
+            else:
+                continue
+            for name in names:
+                if name in {"requests", "httpx", "urllib", "socket", "aiohttp", "http"}:
+                    offenders.append(f"{path.relative_to(ROOT)}: {name}")
+    assert not offenders, (
+        "An execution module now imports a network client:\n" + "\n".join(offenders)
+    )
+
+
+def test_the_calendar_client_is_the_only_networked_desk_module() -> None:
+    """Named so that the exception above cannot quietly become two."""
+    source = (FORGE / "propdesk" / "news.py").read_text(encoding="utf-8")
+    assert "api.stlouisfed.org" in source
+    assert "order" not in source.lower().split("def events")[0].split("class ")[0]
 
 
 def test_live_execution_is_reported_as_unavailable() -> None:
     assert LIVE_EXECUTION_AVAILABLE is False
+
+
+def test_no_prop_desk_provider_claims_an_implemented_live_connector() -> None:
+    """The Prop Desk declares Rithmic, Tradovate and ProjectX and reaches none.
+
+    One field per provider says whether a live connector exists, and only the
+    local simulator's is `True`. Flipping one of the others is the deliberate act
+    that would make this build able to trade, and this test is where that gets
+    noticed.
+    """
+    from forge.propdesk import PROVIDER_DESCRIPTORS, Provider
+
+    implemented = {
+        provider
+        for provider, descriptor in PROVIDER_DESCRIPTORS.items()
+        if descriptor.live_connector_implemented
+    }
+    assert implemented == {Provider.SIMULATED}
+
+
+def test_every_prop_desk_adapter_refuses_or_reports_itself_simulated() -> None:
+    """Three categories, and no adapter may be silent about which it is."""
+    from forge.propdesk.adapters import (
+        SimulatedAdapter,
+        projectx_adapter,
+        rithmic_adapter,
+        tradovate_adapter,
+    )
+
+    assert SimulatedAdapter().simulated is True
+    for factory in (rithmic_adapter, tradovate_adapter, projectx_adapter):
+        adapter = factory()
+        # Not a simulator either: it produces nothing at all.
+        assert adapter.simulated is False
+        assert adapter.descriptor.live_connector_implemented is False
+
+
+def test_the_prop_desk_dispatches_only_through_its_own_gate_ladder() -> None:
+    """`PropDesk` exposes no verb that reaches the fabric without screening."""
+    from forge.propdesk.desk import PropDesk
+
+    public = {name for name in dir(PropDesk) if not name.startswith("_")}
+    assert public == {"screen", "screen_all", "dispatch", "recent"}
 
 
 # ── research cannot reach execution ──────────────────────────────────────────
@@ -212,16 +289,49 @@ def test_live_execution_is_reported_as_unavailable() -> None:
 RESEARCH_PACKAGES = ("research", "judge", "strategy", "memory", "analytics", "provenance")
 
 
+#: Packages an execution module may import, and which may not import one back.
+#: `forge.propdesk` is here for the same reason as the other two: research must
+#: not be able to reach the thing that trades.
+BANNED_IN_RESEARCH = ("forge.execution", "forge.risk", "forge.connectors", "forge.propdesk")
+
+
 def test_research_modules_do_not_import_execution_or_risk() -> None:
-    """Dependency direction. Execution may know about research; not the reverse."""
+    """Dependency direction. Execution may know about research; not the reverse.
+
+    Checked on the import graph rather than on a substring of the source. The
+    substring version matched a *docstring* mentioning `forge.execution.oms.Fill`
+    by name, so making the path correct would have failed on a comment — which
+    is how a real check gets weakened back into a vacuous one.
+    """
     offenders: list[str] = []
     for name in RESEARCH_PACKAGES:
-        for path in python_sources(PACKAGES / name):
-            source = path.read_text(encoding="utf-8")
-            for banned in ("forge.execution", "forge.risk", "forge.connectors"):
-                if banned in source:
-                    offenders.append(f"{path.relative_to(ROOT)} imports {banned}")
+        for path in python_sources(FORGE / name):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    modules = [node.module or ""]
+                else:
+                    continue
+                for module in modules:
+                    for banned in BANNED_IN_RESEARCH:
+                        if module == banned or module.startswith(f"{banned}."):
+                            offenders.append(
+                                f"{path.relative_to(ROOT)}:{node.lineno} imports {module}"
+                            )
     assert not offenders, "\n".join(offenders)
+
+
+def test_the_research_package_scan_actually_reads_files() -> None:
+    """The guard on the guard.
+
+    Both scans above were handed a path that does not exist and silently
+    asserted nothing. A count is cheap and makes that failure mode loud.
+    """
+    for name in RESEARCH_PACKAGES:
+        assert python_sources(FORGE / name), f"no sources found under {name}"
+    assert python_sources(FORGE / "execution", FORGE / "propdesk")
 
 
 # ── the lifecycle graph ──────────────────────────────────────────────────────

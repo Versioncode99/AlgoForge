@@ -181,6 +181,21 @@ _PROP_FIRM = ModeDescriptor(
         Section("daily", "Daily Loss", "What is left of today", "Risk", ("prop", "risk")),
         Section("target", "Profit Target", "Distance, and what it takes", "Risk", ("prop",)),
         Section("risk", "Risk", "Exposure and per-trade size", "Risk", ("risk", "positions")),
+        Section("desk", "Prop Desk", "Every connected account, its provider and its health",
+                "Desk", ("desk_accounts",)),
+        Section("allocation", "Allocation",
+                "Which validated strategy each account should be running, and why",
+                "Desk", ("desk_allocation",)),
+        Section("copy", "Copy Trader", "Leaders, followers, sizing and execution status",
+                "Desk", ("desk_copy",)),
+        Section("limits", "Desk Limits",
+                "Firm permissions, contract caps, copy limits and drawdown protection",
+                "Desk", ("desk_accounts", "risk")),
+        Section("news", "News", "Scheduled economic events and blackout windows",
+                "Desk", ("desk_news",)),
+        Section("desk_activity", "Desk Activity",
+                "Orders, refusals, reconciliation passes and allocation changes",
+                "Desk", ("desk_activity",)),
         Section("book", "Trades", "What was done, and what it cost", "Record",
                 ("positions", "orders")),
         Section("simulation", "Rule Simulation", "How this account fares over many paths",
@@ -198,6 +213,12 @@ _PROP_FIRM = ModeDescriptor(
         "Rule sets are supplied by you. AlgoForge makes no claim about what any "
         "named firm's live contract says.",
         "An assessment describes the configured rules, not a firm's discretion.",
+        "The Prop Desk has no live broker connector. Rithmic, Tradovate and "
+        "ProjectX are declared with their real interfaces and refuse every "
+        "command; only the local simulator executes, and it labels every fill "
+        "simulated.",
+        "Firm permissions start UNKNOWN and you record them. An unrecorded rule "
+        "is never treated as permission.",
     ),
 )
 

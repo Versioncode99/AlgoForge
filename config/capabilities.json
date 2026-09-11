@@ -15,6 +15,11 @@
     "prop_account_signup": false,
     "payment": false,
     "kyc": false,
-    "production_broker_credentials": false
+    "production_broker_credentials": false,
+    "multi_account_desk": true,
+    "copy_trading_simulated": true,
+    "strategy_allocation": "advisory-bounded-by-deterministic-gates",
+    "broker_connector_live": false,
+    "economic_calendar": "manual-or-fred-with-operator-key"
   }
 }

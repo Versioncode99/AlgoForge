@@ -51,6 +51,7 @@ const ResearchMemoryView = lazy(() => import('./views/ResearchMemory').then(m =>
 const ResearchCampaignView = lazy(() => import('./views/ResearchCampaign').then(m => ({ default: m.ResearchCampaignView })))
 const WorkspaceView = lazy(() => import('./views/Workspace').then(m => ({ default: m.WorkspaceView })))
 const PropAccountView = lazy(() => import('./views/PropAccount').then(m => ({ default: m.PropAccountView })))
+const PropDeskView = lazy(() => import('./views/PropDesk').then(m => ({ default: m.PropDeskView })))
 const ActionsView = lazy(() => import('./views/Actions').then(m => ({ default: m.ActionsView })))
 const OperatingLogView = lazy(() => import('./views/OperatingLog').then(m => ({ default: m.OperatingLogView })))
 const BookView = lazy(() => import('./views/Book').then(m => ({ default: m.BookView })))
@@ -85,6 +86,12 @@ function viewFor(mode: ModeKey, route: string): React.ReactNode {
     'prop_firm/target': <PropAccountView section="target" />,
     'prop_firm/risk': <PropAccountView section="risk" />,
     'prop_firm/simulation': <PropFirmView />,
+    'prop_firm/desk': <PropDeskView section="desk" />,
+    'prop_firm/allocation': <PropDeskView section="allocation" />,
+    'prop_firm/copy': <PropDeskView section="copy" />,
+    'prop_firm/limits': <PropDeskView section="limits" />,
+    'prop_firm/news': <PropDeskView section="news" />,
+    'prop_firm/desk_activity': <PropDeskView section="desk_activity" />,
     'ai/assistant': <ConsoleView />,
     'ai/actions': <ActionsView />,
     'ai/activity': <OperatingLogView />,

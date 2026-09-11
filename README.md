@@ -68,6 +68,80 @@ current state. Every call — allowed, held, denied or failed — lands in an
 append-only audit log with the ruling and the reason, so an unattended run is
 answerable rather than merely logged.
 
+## The Prop Desk
+
+Prop Firm mode opens on one account. The **Prop Desk** is the same discipline
+across many of them: connected accounts, what each is permitted to do, which
+validated strategy each should be running, and every order the desk refused with
+the reason.
+
+**No live broker connector exists.** Rithmic, Tradovate and ProjectX are
+*declared* — each carries its real authentication method, account key fields,
+bracket model, published rate limit, session lifetime and documented
+limitations — and each refuses every command with the reason and with what a
+live connector would still need, separated into engineering work and external
+requirements nobody can engineer around (Rithmic's conformance process, a
+Tradovate OAuth application, a ProjectX tenant subscription). The only adapter
+that executes is a local simulator, and it labels every fill simulated.
+
+**Providers are not platforms.** A provider is execution and account
+infrastructure that holds the account records. A platform is a front end. That
+distinction is modelled rather than assumed: NinjaTrader Desktop is a platform
+whose accounts belong to whichever provider it is connected to, NinjaTrader
+*Brokerage* accounts are Tradovate accounts, TopstepX is a ProjectX tenant, and
+a data feed's `routes_orders` is a `Literal[False]` rather than a setting.
+
+**Every order climbs one ladder**, and there is no other path from an intent to
+an adapter:
+
+```
+account bound → connection live → what backs this order → firm permission
+  → cross-account direction → news blackout → the account's own rule engine
+  → the pre-trade gate → the execution fabric → the provider
+```
+
+Rungs six and seven are the *existing* engines — `forge.prop.account.assess` and
+`forge.execution.gate.screen` — called, not reimplemented. A refused order keeps
+the whole ladder on the record, so "why is this follower flat while the leader is
+long three" is answered per stage, in words.
+
+**Unknown is never permission.** A firm's rules are four-valued — `ALLOWED`,
+`BLOCKED`, `UNKNOWN`, `REQUIRES_CONFIRMATION` — and AlgoForge ships none of them.
+Every permission starts `UNKNOWN`, which blocks every automatic action, because
+the research found no blanket rule across seven firms: copying allowed at some
+and only with approved tools at others, bots banned on one firm's tier and
+permitted at another, and one firm requiring that orders originate from the
+trader's own device.
+
+**The copy engine converges on net position targets.** A follower's target is a
+function of the leader's *current* net position, not of the stream of events that
+produced it — so a duplicated event, a reordered one or a missed one all converge
+to the same place, and a rounding rule that over-sizes on each of four partial
+fills cannot accumulate. Divergence is resolved against the provider, which is
+authoritative: a snapshot replaces local state rather than merging with it.
+
+**Allocation is deterministic; advice can only narrow it.** The feasible set is
+computed from the judge's verdict, out-of-sample strategy health, firm
+compatibility, the account's rule engine and a risk budget against its own buffer
+to the loss floor. A recommendation — from a model or from anywhere else — can
+reorder inside that set and reduce a size. It cannot introduce a pairing and it
+cannot raise a size, and `tests/propdesk/test_desk_allocation.py` asserts both
+against deliberately hostile input.
+
+**News can add a restriction and never removes one.** Forex Factory publishes no
+official calendar API and returns HTTP 403 to automated requests, so AlgoForge
+does not scrape it and ships no scraped dataset. What ships is a provider
+interface with two implementations: an operator-recorded calendar that works
+offline, and a real client for the Federal Reserve Bank of St. Louis FRED
+release-dates API, which refuses without a free `FRED_API_KEY` and carries the
+attribution its terms require. FRED gives release *dates* and not clock times,
+and every event it returns says so rather than supporting a fifteen-minute window
+in the wrong place.
+
+**No VPS anywhere.** The execution fabric runs wherever the application runs. An
+always-on agent is a deployment option nobody has to take, and no hosting
+provider is named in the code.
+
 ## The fund loop
 
 Data, research, alpha, validation, portfolio construction, risk, the pre-trade

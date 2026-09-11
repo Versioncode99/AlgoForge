@@ -39,6 +39,18 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
         "list_workspaces",
         "pending_approvals",
         "prop_account_status",
+        # The Prop Desk's reads. Every desk verb that *writes* is protected and
+        # never reaches this list, which is the property this test is really
+        # asserting: an assistant may look at every account and refuse every
+        # order on none of them.
+        "propdesk_activity",
+        "propdesk_allocation",
+        "propdesk_connections",
+        "propdesk_groups",
+        "propdesk_news",
+        "propdesk_plan_allocation",
+        "propdesk_policies",
+        "propdesk_providers",
         "read_research",
         "research_memory",
         "strategy_definition",

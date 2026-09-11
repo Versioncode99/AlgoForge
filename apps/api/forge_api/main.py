@@ -27,6 +27,7 @@ from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.catalog import build_catalog_router
 from forge_api.control import build_control_router
 from forge_api.missions import build_mission_router
+from forge_api.propdesk import build_propdesk_router
 from forge_api.research_loop import ResearchLoop, build_research_loop_router
 from forge_api.storage import build_storage_router
 from forge_api.strategies import build_router
@@ -373,6 +374,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     app.include_router(build_catalog_router(families, templates, mirror, log))
     app.include_router(build_mission_router(surface.orchestrator, surface.actions))
     app.include_router(build_research_loop_router(research_loop))
+    app.include_router(build_propdesk_router(surface.prop_desk))
     app.include_router(
         build_storage_router(
             workspace, mirror, log, library, store, families, surface.agents.research

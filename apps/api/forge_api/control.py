@@ -25,6 +25,7 @@ from forge.modes.store import ModeStore
 from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
 from forge.prop.accounts import PropAccountStore
 from forge.prop.engine import MAX_BACKTEST_BARS, MIN_TRADING_DAYS
+from forge.propdesk import PropDeskStore
 from forge.research import ResearchLedger
 from forge.research.knowledge import (
     NOT_EVIDENCE_NOTE,
@@ -58,6 +59,7 @@ from forge_api.ledger_view import _TradeShim as _Shim
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
 from forge_api.opencode import OPENCODE_GO_DEFAULT_URL
 from forge_api.orchestrator import Orchestrator
+from forge_api.propdesk import PropDeskService
 from forge_api.providers import (
     PROVIDER_OPENCODE,
     PROVIDERS,
@@ -375,6 +377,7 @@ class ControlSurface:
     approvals: ApprovalQueue
     audit: AuditLog
     campaigns: CampaignService
+    prop_desk: PropDeskService
 
 
 def build_control_router(
@@ -470,6 +473,15 @@ def build_control_router(
         decision = section.get("decision") if section.get("available") else None
         return str(decision) if decision else None
 
+    # The Prop Desk. Its store lives in the app-owned data root beside the other
+    # databases, and it reads verdicts through `verdict_for` — the same callable
+    # the fund uses — so one judge decision serves both.
+    prop_desk = PropDeskService(
+        store=PropDeskStore(workspace.data / "prop-desk.db"),
+        prop_accounts=prop_accounts,
+        verdict_for=verdict_for,
+    )
+
     fund = FundService(
         config_store=fund_config,
         execution_store=execution_store,
@@ -496,6 +508,7 @@ def build_control_router(
         audit=audit,
         prop_accounts=prop_accounts,
         fund=fund,
+        prop_desk=prop_desk,
     )
     orchestrator = Orchestrator(
         workspace.data / "missions.db", actions, agents, settings_store, log, mirror
@@ -2267,4 +2280,5 @@ def build_control_router(
         approvals=approvals,
         audit=audit,
         campaigns=campaign_service,
+        prop_desk=prop_desk,
     )
