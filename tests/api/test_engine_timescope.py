@@ -112,7 +112,7 @@ def test_the_engine_loads_the_selected_window_not_the_tail(built) -> None:
     engine.director.attach(campaign)
 
     default_bars, dataset = engine.market.load("synthetic", limit=6000)
-    scoped, scoped_dataset, _version = engine._bars_for(0, (default_bars, dataset))
+    scoped, scoped_dataset, _version, _parts = engine._bars_for(0, (default_bars, dataset))
 
     assert len(scoped) < len(default_bars), "the scope returned the whole default window"
     assert scoped[0].event_time >= half
@@ -144,9 +144,9 @@ def test_two_campaigns_researching_different_windows_get_different_bars(built) -
 
     default = engine.market.load("synthetic", limit=6000)
     engine.director.attach(early)
-    early_bars, _, _ = engine._bars_for(0, default)
+    early_bars, _, _, _ = engine._bars_for(0, default)
     engine.director.attach(late)
-    late_bars, _, _ = engine._bars_for(0, default)
+    late_bars, _, _, _ = engine._bars_for(0, default)
 
     assert early_bars[0].event_time < late_bars[0].event_time
     assert early_bars[-1].event_time < late_bars[-1].event_time
@@ -187,7 +187,7 @@ def test_an_unreadable_window_falls_back_and_says_so(built) -> None:
         raise RuntimeError("archive unavailable")
 
     engine.market.load_scope = refuse  # type: ignore[method-assign]
-    bars, _, _ = engine._bars_for(0, (default_bars, dataset))
+    bars, _, _, _ = engine._bars_for(0, (default_bars, dataset))
     assert bars is default_bars
     assert any(
         "could not be loaded" in event.message for event in engine.log.recent(20)
@@ -219,3 +219,65 @@ def test_a_range_reaching_before_the_archive_is_clamped_and_stays_visible(built)
     assert scope.selected_start >= start
     # Both ends are on the record, so the clamp is inspectable rather than lost.
     assert scope.available_start == start
+
+
+def test_the_partitions_come_from_the_scoped_bars_not_the_default_window(built) -> None:
+    """The bug this test exists for, and why it hid.
+
+    `ResearchPartitions` holds actual bar *lists*. The cycle used to resolve
+    `self._partitions or chronological_split(bars, ...)`, and `self._partitions`
+    is cut from the run's default window. So a scoped cycle would have
+    backtested the *default* window's development partition and reported it
+    against the scope -- the window silently ignored, on real data only, with
+    nothing on screen to show it.
+
+    It hid because the synthetic dataset is not `is_real`, so the partitioned
+    path never ran in the other tests here. This one drives `_bars_for`
+    directly and compares the bars the partitions actually hold.
+    """
+    engine, service = built
+    start, end = _reservoir(engine)
+    half = start + (end - start) / 2
+    campaign = service.campaigns.create(
+        name="Recent half", objective=OBJECTIVE, dataset="synthetic",
+        start_date=half.isoformat(), end_date=end.isoformat(),
+    )
+    engine.director.attach(campaign)
+
+    default_bars, dataset = engine.market.load("synthetic", limit=6000)
+    # Stand in for a real-data run: give the engine run-level partitions cut
+    # from the *whole* default window, as a live engine would have.
+    from forge.research import chronological_split
+
+    engine._partitions = chronological_split(default_bars, warmup_bars=50)
+
+    # Called twice on purpose. The first call misses the cache and the second
+    # hits it, and the two return through different branches -- a leak in the
+    # cached branch is invisible to a test that only ever loads once. Proven by
+    # re-introducing exactly that leak: the single-call version of this test
+    # passed with it in place.
+    engine._bars_for(0, (default_bars, dataset))
+    scoped_bars, _, _, scoped_parts = engine._bars_for(0, (default_bars, dataset))
+
+    assert scoped_parts is not engine._partitions, "the run's partitions leaked into a scope"
+    if scoped_parts is not None:
+        # Every partitioned bar must come from the window that was selected.
+        assert scoped_parts.development[0].event_time >= half
+        assert scoped_parts.development[0].event_time >= scoped_bars[0].event_time
+
+
+def test_a_campaign_without_a_scope_still_gets_the_runs_partitions(built) -> None:
+    """The fallback the change must not break."""
+    from forge.research import chronological_split
+
+    engine, service = built
+    campaign = service.campaigns.create(
+        name="No dates", objective=OBJECTIVE, dataset="synthetic"
+    )
+    engine.director.attach(campaign)
+    default_bars, dataset = engine.market.load("synthetic", limit=6000)
+    engine._partitions = chronological_split(default_bars, warmup_bars=50)
+
+    bars, _, _, parts = engine._bars_for(0, (default_bars, dataset))
+    assert bars is default_bars
+    assert parts is engine._partitions

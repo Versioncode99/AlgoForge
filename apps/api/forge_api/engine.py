@@ -508,24 +508,33 @@ class AutonomousEngine:
             return None
         return campaign.time_scope(available_start, available_end)
 
-    def _bars_for(self, worker: int, default: tuple[Any, Any]) -> tuple[Any, Any, str]:
-        """The bars this cycle runs on, and the data version they carry.
+    def _bars_for(
+        self, worker: int, default: tuple[Any, Any]
+    ) -> tuple[Any, Any, str, ResearchPartitions | None]:
+        """The bars this cycle runs on, their version, and *their* partitions.
 
         Returns the run's loaded window unless the worker's campaign selects
         one of its own. Cached per scope fingerprint: without that, a campaign
         with dates would re-slice the archive every cycle.
+
+        The partitions travel with the bars, and that is not a convenience.
+        `ResearchPartitions` holds actual bar *lists*, so handing a cycle
+        scoped bars while it split the run's default window would have run the
+        backtest on the default window's development partition and reported it
+        against the scope -- the scope silently ignored, on real data only,
+        with nothing to show it had happened.
         """
         scope = self.scope_for(worker)
         if scope is None:
             bars, dataset = default
-            return bars, dataset, self._data_version
+            return bars, dataset, self._data_version, self._partitions
 
         key = scope.fingerprint()
         with self._data_lock:
             cached = self._scoped.get(key)
             if cached is not None:
-                bars, dataset, _partitions, version = cached
-                return bars, dataset, version
+                bars, dataset, partitions, version = cached
+                return bars, dataset, version, partitions
         # Loaded outside the lock: slicing a multi-million-row frame under the
         # same lock every other worker needs would serialise the whole engine
         # behind one campaign's first cycle.
@@ -539,7 +548,7 @@ class AutonomousEngine:
                 "warn",
             )
             bars, dataset = default
-            return bars, dataset, self._data_version
+            return bars, dataset, self._data_version, self._partitions
 
         partitions = None
         version = source_data_hash(bars)
@@ -566,7 +575,7 @@ class AutonomousEngine:
             f"{dataset.label}: {len(bars):,} bars for {scope.describe()}",
             "pass" if dataset.is_real else "warn",
         )
-        return bars, dataset, version
+        return bars, dataset, version, partitions
 
     # ── the loop ─────────────────────────────────────────────────────────────
     def _loop(self, worker: int = 0) -> None:
@@ -620,9 +629,11 @@ class AutonomousEngine:
                 # Resolved per cycle rather than once per run: the worker may
                 # be serving a different campaign than it was last cycle, and
                 # campaigns may select different windows.
-                cycle_bars, cycle_dataset, _version = self._bars_for(worker, (bars, dataset))
+                cycle_bars, cycle_dataset, _version, cycle_parts = self._bars_for(
+                    worker, (bars, dataset)
+                )
                 outcome, reason = self._cycle(
-                    rng, cycle_bars, cycle_dataset.is_real, worker
+                    rng, cycle_bars, cycle_dataset.is_real, worker, partitions=cycle_parts
                 )
             except Exception as exc:  # a bad cycle must not kill the engine
                 with self._state_lock:
@@ -935,7 +946,13 @@ class AutonomousEngine:
             )
 
     def _cycle(
-        self, rng: random.Random, bars: list[Bar], real_data: bool, worker: int = 0
+        self,
+        rng: random.Random,
+        bars: list[Bar],
+        real_data: bool,
+        worker: int = 0,
+        *,
+        partitions: ResearchPartitions | None = None,
     ) -> tuple[Outcome, str]:
         """Run one research cycle and say what it produced.
 
@@ -1210,9 +1227,11 @@ class AutonomousEngine:
                 spec.strategy_id,
             )
         started = time.time()
-        partitions: ResearchPartitions | None = None
         if real_data:
-            partitions = self._partitions or chronological_split(
+            # The caller's partitions when it has them -- they are the ones cut
+            # from *these* bars. Falling through to `self._partitions` here
+            # would splice the run's default window into a scoped experiment.
+            partitions = partitions or self._partitions or chronological_split(
                 bars, warmup_bars=max(t.warmup_bars for t in TEMPLATES.values())
             )
             development = run_backtest(
