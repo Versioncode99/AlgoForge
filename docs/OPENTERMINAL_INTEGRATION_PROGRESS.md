@@ -19,14 +19,14 @@ no merge to main; logical commits.
 |---|---|---|
 | 0 — Audit | **done** | `docs/OPENTERMINAL_PATTERN_AUDIT.md` |
 | 1 — Architecture | **done** | workstation context; campaign verbs in the registry |
-| 2 — Workstation UX | **partly done** | palette runs commands; instrument search; context bar pending |
-| 3 — Data / market | **partly done** | freshness, tiers, service health, Data Health; news and calendar surfacing pending |
-| 4 — Research | not started | |
-| 5 — Prop Desk | not started | |
-| 6 — AI | not started | |
-| 7 — Visual / performance QA | not started | |
-| 8 — Verification | not started | |
-| 9 — Documentation | not started | |
+| 2 — Workstation UX | **done** | palette commands, instrument search, context bar, panel resolution |
+| 3 — Data / market | **partly done** | freshness, tiers, service health, Data Health shipped; **nothing consumes `Served` yet**; calendar/news surfacing not started |
+| 4 — Research | **partly done** | campaign verbs in the registry; research panels do not read the context |
+| 5 — Prop Desk | **not started** | nothing in this phase touched it |
+| 6 — AI | **not started** | assistant context still a fixed global blob |
+| 7 — Visual / performance QA | **done** | four widths, no overflow, no console errors, measured under load |
+| 8 — Verification | **done** | 2,590 backend + 117 frontend, ruff clean, mypy clean |
+| 9 — Documentation | **done** | eight documents |
 
 ## Baselines measured before any change
 
@@ -172,3 +172,66 @@ crypto-public `NOT_OBSERVED`, three absent capabilities named.
   returns bare frames. **This is scaffolding until that lands** and is reported
   as such.
 - Calendar and news surfacing out of Prop Desk (§3.3 of the audit).
+
+
+---
+
+## Phase 7-9 — QA, verification, documentation (done)
+
+### Verification
+
+| | Before | After |
+|---|---|---|
+| Backend | 2,498 | **2,590** |
+| Frontend | 86 | **117** |
+
+`ruff check .` clean. `mypy` clean, 187 source files. G0–G13 untouched
+(`git diff origin/main...HEAD -- packages/forge/judge/` is empty).
+
+### Visual QA
+
+1920 / 1440 / 1024 / 420 on the running application, across the shell, the
+palette, the palette with a query, and Data Health. **No horizontal overflow at
+any width. No console errors. No page errors.**
+
+Four faults found by looking rather than reasoning, all fixed and all now
+pinned by tests:
+
+1. Typing `NQ` put "Start campaign · NQ Momentum" above the instrument.
+2. MNQ sorted above NQ.
+3. A panel header read "MNQ 5m" over a body reading "no archive for NQ".
+4. A resumed campaign un-resumed itself (the lost update).
+
+### Performance
+
+Measured with 60 campaigns: palette search 39 ms, `data_health` 28 ms median,
+`describe_context` 5 ms median, Data Health first render 831 ms, five requests
+in 20 idle seconds.
+
+### Documents
+
+`OPENTERMINAL_PATTERN_AUDIT.md`, this file, `WORKSTATION_ARCHITECTURE.md`,
+`DATA_PROVIDER_ARCHITECTURE.md`, `CONTEXT_ARCHITECTURE.md`,
+`COMMAND_PALETTE_ARCHITECTURE.md`, `UX_IMPLEMENTATION_REPORT.md` (part two
+appended), `FINAL_OPENTERMINAL_INTEGRATION_REPORT.md`.
+
+---
+
+## For the next session
+
+The three things to do next, in order, with the reasoning in the final report's
+"Recommended next phase":
+
+1. **Consume `Served` on the market-data read path.** Everything for the tier
+   ladder exists and is tested; nothing calls `admissible()`. Until that lands
+   the ladder describes a capability, not a control in force, and both the
+   provider document and the final report say so.
+2. **Scope the assistant's context.** `assistant.py:context()` still returns a
+   fixed global blob regardless of the screen. The workstation context now
+   exists to scope it against.
+3. **Lift the calendar out of Prop Desk.** The implementation is good and is
+   reachable only through `propdesk_news` and one panel kind.
+
+Untouched by this phase and not claimed: Prop Desk (§28-§33), AI (§26, §53),
+research panel context, market regime (§17-§18), the keyboard map beyond the
+palette (§5 — deliberately, pending a real conflict check).
