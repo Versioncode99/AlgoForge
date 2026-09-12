@@ -916,3 +916,55 @@
   .service-explain dt { margin-top: 6px; }
   .tier-ladder dl > div { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ── what is being looked at ───────────────────────────────────────────────*/
+/* A separate group from `.context-facts`, which is telemetry, and from the
+   mode badge, which is permissions. Three different kinds of fact; §7 asks
+   that they not be run together, and the previous phase's bug was exactly
+   that kind of conflation. */
+.context-subject {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  overflow: hidden;
+}
+.context-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px 0 var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--brand) 40%, var(--line));
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+  font-size: var(--fs-nano);
+}
+.context-chip svg { width: 13px; height: 13px; color: var(--brand); }
+.context-chip b { font-weight: 600; letter-spacing: .02em; }
+.context-chip-sub { color: var(--fg-3); font-style: normal; }
+.context-chip button {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-3);
+}
+.context-chip button:hover:not(:disabled) { background: var(--bg-2); color: var(--fg-0); }
+.context-chip button svg { width: 11px; height: 11px; color: inherit; }
+
+/* Narrow. The subject outranks the telemetry: which instrument you are looking
+   at matters more on a phone than the strategy count, so the counts go first
+   and the chips stay. */
+@media (max-width: 900px) {
+  .context-facts > span:not(:first-child) { display: none; }
+}
+@media (max-width: 620px) {
+  .context-chip-sub { display: none; }
+}

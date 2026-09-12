@@ -134,3 +134,40 @@ test('a navigation row still navigates and does not call the registry', async ()
   expect(onRoute).toHaveBeenCalledWith('strategies')
   expect(actionCalls()).toHaveLength(0)
 })
+
+
+test('an exact match sorts above a longer one that merely contains it', async () => {
+  // Found in visual QA: typing NQ listed MNQ first, because a substring filter
+  // has no opinion. On a keyboard-first surface that is a wrong instrument one
+  // Enter away.
+  open()
+  type('NQ')
+  const rows = await screen.findAllByRole('button')
+  const instruments = rows
+    .map(row => row.querySelector('strong')?.textContent)
+    .filter(label => label === 'NQ' || label === 'MNQ')
+  expect(instruments[0]).toBe('NQ')
+})
+
+
+test('an instrument ticker outranks a command that merely mentions it', async () => {
+  /* Found in QA on the running application, and the reason group order is not
+   * fixed once something is typed: with Commands pinned first, typing "NQ"
+   * put "Start campaign · NQ Momentum" at the top because the campaign's name
+   * contains NQ. Enter would have started a research campaign when the reader
+   * meant to look at an instrument. */
+  open()
+  type('NQ')
+  const rows = await screen.findAllByRole('button')
+  expect(rows[0].querySelector('strong')?.textContent).toBe('NQ')
+})
+
+test('with nothing typed, commands still lead', async () => {
+  open()
+  // Wait for the async campaign list, not merely for the first button to
+  // exist: routes render synchronously, so findAllByRole would resolve on the
+  // navigation rows before any command had arrived.
+  await screen.findByRole('button', { name: /Pause campaign/i })
+  const rows = screen.getAllByRole('button')
+  expect(rows[0].querySelector('strong')?.textContent).toMatch(/campaign/i)
+})

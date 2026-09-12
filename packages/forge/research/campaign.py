@@ -487,16 +487,26 @@ class CampaignStore:
         return found[0] if found else None
 
     def set_status(self, campaign_id: str, status: str, *, reason: str = "") -> Campaign:
-        campaign = self.get(campaign_id)
-        if campaign is None:
-            raise CampaignError(f"No campaign '{campaign_id}'.")
-        if status == "running" and campaign.archived:
-            raise CampaignError(
-                f"'{campaign.name}' is archived. Restore it before running it again."
-            )
-        campaign.status = status
-        campaign.stopped_reason = reason
-        return self.save(campaign)
+        # Locked across the read *and* the write.
+        #
+        # `save` writes every column, so a get/mutate/save pair that is not
+        # atomic is a lost update: a worker that read the campaign while it was
+        # paused and called `record` after the operator resumed it wrote
+        # `status='paused'` back over the resume. That was reproducible -- a
+        # campaign resumed from the palette silently un-resumed itself a second
+        # later, because a research worker mid-cycle still held the old row.
+        # The lock is an RLock precisely so `save` can take it again.
+        with self._lock:
+            campaign = self.get(campaign_id)
+            if campaign is None:
+                raise CampaignError(f"No campaign '{campaign_id}'.")
+            if status == "running" and campaign.archived:
+                raise CampaignError(
+                    f"'{campaign.name}' is archived. Restore it before running it again."
+                )
+            campaign.status = status
+            campaign.stopped_reason = reason
+            return self.save(campaign)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def duplicate(self, campaign_id: str, *, name: str = "", seed: int | None = None) -> Campaign:
@@ -533,43 +543,53 @@ class CampaignStore:
         )
 
     def archive(self, campaign_id: str) -> Campaign:
-        campaign = self.get(campaign_id)
-        if campaign is None:
-            raise CampaignError(f"No campaign '{campaign_id}'.")
-        if campaign.running:
-            raise CampaignError("Stop the campaign before archiving it.")
-        campaign.archived_at = _now()
-        return self.save(campaign)
+        # Locked across the read and the write; see `set_status`.
+        with self._lock:
+            campaign = self.get(campaign_id)
+            if campaign is None:
+                raise CampaignError(f"No campaign '{campaign_id}'.")
+            if campaign.running:
+                raise CampaignError("Stop the campaign before archiving it.")
+            campaign.archived_at = _now()
+            return self.save(campaign)
 
     def restore(self, campaign_id: str) -> Campaign:
-        campaign = self.get(campaign_id)
-        if campaign is None:
-            raise CampaignError(f"No campaign '{campaign_id}'.")
-        campaign.archived_at = ""
-        return self.save(campaign)
+        # Locked across the read and the write; see `set_status`.
+        with self._lock:
+            campaign = self.get(campaign_id)
+            if campaign is None:
+                raise CampaignError(f"No campaign '{campaign_id}'.")
+            campaign.archived_at = ""
+            return self.save(campaign)
 
     def prioritise(self, campaign_id: str, priority: int) -> Campaign:
-        campaign = self.get(campaign_id)
-        if campaign is None:
-            raise CampaignError(f"No campaign '{campaign_id}'.")
-        campaign.priority = max(0, min(100, int(priority)))
-        return self.save(campaign)
+        # Locked across the read and the write; see `set_status`.
+        with self._lock:
+            campaign = self.get(campaign_id)
+            if campaign is None:
+                raise CampaignError(f"No campaign '{campaign_id}'.")
+            campaign.priority = max(0, min(100, int(priority)))
+            return self.save(campaign)
 
     def set_agent_target(self, campaign_id: str, agents: int) -> Campaign:
-        campaign = self.get(campaign_id)
-        if campaign is None:
-            raise CampaignError(f"No campaign '{campaign_id}'.")
-        campaign.agent_target = max(1, int(agents))
-        return self.save(campaign)
+        # Locked across the read and the write; see `set_status`.
+        with self._lock:
+            campaign = self.get(campaign_id)
+            if campaign is None:
+                raise CampaignError(f"No campaign '{campaign_id}'.")
+            campaign.agent_target = max(1, int(agents))
+            return self.save(campaign)
 
     def rename(self, campaign_id: str, name: str) -> Campaign:
-        campaign = self.get(campaign_id)
-        if campaign is None:
-            raise CampaignError(f"No campaign '{campaign_id}'.")
-        if not name.strip():
-            raise CampaignError("A campaign needs a name.")
-        campaign.name = name.strip()[:120]
-        return self.save(campaign)
+        # Locked across the read and the write; see `set_status`.
+        with self._lock:
+            campaign = self.get(campaign_id)
+            if campaign is None:
+                raise CampaignError(f"No campaign '{campaign_id}'.")
+            if not name.strip():
+                raise CampaignError("A campaign needs a name.")
+            campaign.name = name.strip()[:120]
+            return self.save(campaign)
 
     def record(self, campaign_id: str, **counters: Any) -> Campaign:
         """Add to the campaign's counters. Unknown counters are refused.
@@ -579,25 +599,27 @@ class CampaignStore:
         experiments and discovered nothing, which is indistinguishable from the
         failure this subsystem exists to detect.
         """
-        campaign = self.get(campaign_id)
-        if campaign is None:
-            raise CampaignError(f"No campaign '{campaign_id}'.")
-        progress = campaign.progress
-        for key, value in counters.items():
-            if key == "bucket":
-                bucket = str(Bucket(str(value)))
-                progress.spend[bucket] = progress.spend.get(bucket, 0) + 1
-                continue
-            if key == "consecutive_duplicates" and value == 0:
-                progress.consecutive_duplicates = 0
-                continue
-            if not hasattr(progress, key):
-                raise CampaignError(
-                    f"Unknown campaign counter '{key}'. A counter that does not exist would "
-                    "silently record nothing."
-                )
-            setattr(progress, key, getattr(progress, key) + value)
-        return self.save(campaign)
+        # Locked across the read and the write; see `set_status`.
+        with self._lock:
+            campaign = self.get(campaign_id)
+            if campaign is None:
+                raise CampaignError(f"No campaign '{campaign_id}'.")
+            progress = campaign.progress
+            for key, value in counters.items():
+                if key == "bucket":
+                    bucket = str(Bucket(str(value)))
+                    progress.spend[bucket] = progress.spend.get(bucket, 0) + 1
+                    continue
+                if key == "consecutive_duplicates" and value == 0:
+                    progress.consecutive_duplicates = 0
+                    continue
+                if not hasattr(progress, key):
+                    raise CampaignError(
+                        f"Unknown campaign counter '{key}'. A counter that does not exist would "
+                        "silently record nothing."
+                    )
+                setattr(progress, key, getattr(progress, key) + value)
+            return self.save(campaign)
 
     def set_progress(self, campaign_id: str, **values: Any) -> Campaign:
         """Set counters to absolute values, for the ones derived from stores.
@@ -606,14 +628,16 @@ class CampaignStore:
         graph rather than incremented, because a proposal that deduplicated into
         an existing node must not increment anything.
         """
-        campaign = self.get(campaign_id)
-        if campaign is None:
-            raise CampaignError(f"No campaign '{campaign_id}'.")
-        for key, value in values.items():
-            if not hasattr(campaign.progress, key):
-                raise CampaignError(f"Unknown campaign counter '{key}'.")
-            setattr(campaign.progress, key, value)
-        return self.save(campaign)
+        # Locked across the read and the write; see `set_status`.
+        with self._lock:
+            campaign = self.get(campaign_id)
+            if campaign is None:
+                raise CampaignError(f"No campaign '{campaign_id}'.")
+            for key, value in values.items():
+                if not hasattr(campaign.progress, key):
+                    raise CampaignError(f"Unknown campaign counter '{key}'.")
+                setattr(campaign.progress, key, value)
+            return self.save(campaign)
 
     def delete(self, campaign_id: str) -> bool:
         with self._lock, closing(self._connect()) as db, db:

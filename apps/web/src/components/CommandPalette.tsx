@@ -151,9 +151,42 @@ export function CommandPalette({
       })),
     ]
     const matched = rows.filter(item => !needle || `${item.label} ${item.detail}`.toLowerCase().includes(needle))
+    /* An exact label match sorts first within its group.
+     *
+     * Found in visual QA: typing "NQ" listed MNQ above NQ, because a plain
+     * substring filter has no opinion and MNQ happens to come first in the
+     * catalogue. Somebody typing NQ means NQ, and the row they meant was the
+     * second one — which on a keyboard-first surface is a wrong instrument one
+     * Enter away. */
+    const rank = (item: Row) => {
+      const label = item.label.toLowerCase()
+      if (label === needle) return 0
+      if (label.startsWith(needle)) return 1
+      return 2
+    }
     const grouped = GROUP_ORDER
-      .map(group => ({ group, items: matched.filter(item => item.group === group).slice(0, 6) }))
+      .map(group => ({
+        group,
+        items: matched
+          .filter(item => item.group === group)
+          .sort((a, b) => rank(a) - rank(b))
+          .slice(0, 6),
+      }))
       .filter(section => section.items.length > 0)
+    /* Groups are ordered by their best match, not by a fixed list.
+     *
+     * Found in QA on the running application: with Commands pinned first,
+     * typing "NQ" put "Start campaign · NQ Momentum" at the top, because the
+     * campaign's name contains NQ. The reader meant the instrument, and Enter
+     * would have started a research campaign instead. A fixed order is right
+     * only while nothing is typed; once there is a query, the best match wins
+     * and GROUP_ORDER is the tie-break. */
+    if (needle) {
+      grouped.sort((a, b) => {
+        const best = rank(a.items[0]) - rank(b.items[0])
+        return best !== 0 ? best : GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group)
+      })
+    }
     return { grouped, flat: grouped.flatMap(section => section.items) }
   }, [query, routes, strategies, experiments.data, runs.data, memory.data, datasets.data, instruments.data, campaigns.data])
 

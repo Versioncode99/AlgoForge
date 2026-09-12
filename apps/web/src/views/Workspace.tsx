@@ -4,6 +4,7 @@ import { FolderCog, Plus, Trash2, X } from 'lucide-react'
 import { API, getJson } from '../api'
 import { playSound } from '../sound'
 import { PanelBody } from '../components/PanelBody'
+import { symbolFor, useWorkstationContext } from '../workstation'
 import { WorkspaceManager } from '../components/WorkspaceManager'
 import type { DatasetInfo } from '../types'
 
@@ -100,6 +101,47 @@ export function WorkspaceView() {
 
   const workspace = active.data ?? null
   const id = workspace?.workspace_id
+
+  /* What each panel actually shows.
+   *
+   * `link_group` used to be a label attached to nothing: the field was
+   * written, this view drew it as a badge, and no code made any panel follow
+   * anything. Resolution happens here, at render, and writes nothing — so a
+   * panel pinned to MNQ keeps its MNQ in the record while a linked neighbour
+   * follows the workspace onto NQ, and unlinking brings MNQ straight back.
+   */
+  const context = useWorkstationContext()
+  const resolved = context.data?.panels ?? []
+  const resolvedFor = useCallback(
+    (panelId: string) => symbolFor(panelId, resolved),
+    [resolved],
+  )
+  const titleFor = useCallback(
+    (panel: { panel_id: string; title: string }) => {
+      const shown = symbolFor(panel.panel_id, resolved)
+      if (!shown || shown.source !== 'context' || !shown.symbol) return panel.title
+      return `${shown.symbol} ${shown.timeframe}`.trim()
+    },
+    [resolved],
+  )
+  const settingsFor = useCallback(
+    (panel: { panel_id: string; settings: Record<string, unknown> }) => {
+      const shown = symbolFor(panel.panel_id, resolved)
+      if (!shown || shown.source !== 'context') return panel.settings
+      // Only the facets the context actually sets are overlaid. A context with
+      // no timeframe must not blank a panel's own.
+      return {
+        ...panel.settings,
+        ...(shown.symbol ? { symbol: shown.symbol } : {}),
+        ...(shown.timeframe ? { timeframe: shown.timeframe } : {}),
+        // The panel's stored dataset would win over the followed symbol in
+        // `PanelBody`, which resolves `settings.dataset` first. Dropping it
+        // here is what makes following actually change the chart.
+        dataset: '',
+      }
+    },
+    [resolved],
+  )
 
   const mutate = useMutation({
     mutationFn: (job: { path: string; method: string; body?: unknown }) =>
@@ -306,8 +348,29 @@ export function WorkspaceView() {
                 aria-label={`${panel.title} panel`}
               >
                 <header className="wpanel-head" onPointerDown={onPointerDown(panel, 'move')}>
-                  <span className="wpanel-title">{panel.title}</span>
-                  {panel.link_group && <span className="wpanel-link mono">{panel.link_group}</span>}
+                  {/* The title follows what is *shown*, not what is stored.
+                    * Caught in QA on the running application: a panel pinned to
+                    * MNQ and linked to a context on NQ drew "MNQ 5m" over a
+                    * body reading "no archive for NQ". A header that disagrees
+                    * with its own body is worse than either being wrong. */}
+                  <span className="wpanel-title">{titleFor(panel)}</span>
+                  {/* The badge now names something that happens. It used to be
+                    * a label attached to nothing: the field was written, the
+                    * badge was drawn, and no code made any panel follow any
+                    * other. `title` says what the panel is actually showing
+                    * and where that came from. */}
+                  {panel.link_group && (
+                    <span
+                      className="wpanel-link mono"
+                      title={
+                        resolvedFor(panel.panel_id)?.source === 'context'
+                          ? `Following the "${panel.link_group}" context: ${resolvedFor(panel.panel_id)?.symbol}`
+                          : `In the "${panel.link_group}" group. Its context sets no instrument, so this panel shows its own.`
+                      }
+                    >
+                      {panel.link_group}
+                    </span>
+                  )}
                   <button
                     type="button"
                     aria-label={`Remove ${panel.title}`}
@@ -326,7 +389,11 @@ export function WorkspaceView() {
                 <div className="wpanel-body">
                   <PanelBody
                     kind={panel.kind}
-                    settings={panel.settings}
+                    /* Resolved, not stored. A panel in a link group displays
+                     * the group's context; a panel outside one displays its
+                     * own settings. Nothing is written either way, so
+                     * unlinking reveals the symbol it was pinned to. */
+                    settings={settingsFor(panel)}
                     datasets={datasets.data ?? []}
                     onSetting={(key, value) =>
                       mutate.mutate({

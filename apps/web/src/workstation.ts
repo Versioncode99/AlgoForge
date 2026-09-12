@@ -177,6 +177,6 @@ export function useClearContext() {
  * resolved list: a caller that cannot tell "no symbol" from "we did not look"
  * will eventually render one as the other.
  */
-export function symbolFor(panelId: string, resolved: ResolvedPanel[]): ResolvedPanel | null {
-  return resolved.find((item) => item.panel_id === panelId) ?? null
+export function symbolFor(panelId: string, resolved: ResolvedPanel[] | undefined): ResolvedPanel | null {
+  return resolved?.find((item) => item.panel_id === panelId) ?? null
 }

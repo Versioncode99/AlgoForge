@@ -6,6 +6,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { getJson } from './api'
 import { CommandPalette } from './components/CommandPalette'
+import { ContextBar } from './components/ContextBar'
 import { Wordmark } from './components/Logo'
 import { ViewErrorBoundary } from './components/ViewErrorBoundary'
 import { sectionIcon } from './components/icons'
@@ -340,6 +341,9 @@ export function App() {
         </button>
       </div>
       <div className="context-title"><span>{active?.group}</span><strong>{active?.label}</strong></div>
+      {/* The subject, separate from the telemetry beside it and from the mode
+        * badge before it. Three different kinds of fact. */}
+      <ContextBar />
       <div className="context-facts">
         <span><i className={online ? 'pulse' : 'pulse is-off'} />{online ? health.data?.engine_running ? 'ENGINE RUNNING' : 'API CONNECTED' : health.isPending ? 'CONNECTING' : 'API OFFLINE'}</span>
         <span>DATA <b className={!online ? 'unknown' : health.data?.data_gate?.startsWith('REAL') ? 'good' : 'warn'}>{health.data?.data_gate ?? 'UNKNOWN'}</b></span>
