@@ -485,6 +485,53 @@ class AutonomousEngine:
         except Exception as exc:
             self.log.record("RESEARCH", f"observation failed: {type(exc).__name__}: {exc}", "warn")
 
+    def _split_for(
+        self, bars: list[Bar], template: Any, worker: int
+    ) -> ResearchPartitions | None:
+        """Partitions for *this* candidate, purged for the template under test.
+
+        The purge gap exists to stop a feature window spanning an evidence
+        boundary, and the feature window belongs to the template being tested.
+        Using the largest warm-up in the whole catalogue is conservative and was
+        fine while every template was shipped and similar -- but the director
+        *composes* templates, and one generated construction with a long warm-up
+        then sizes the purge for every candidate in the campaign.
+
+        Measured: a generated `trend_strength_gate` arrived with 1,007 warm-up
+        bars against a shipped maximum of 520, and from that cycle on
+        `chronological_split` raised `split fractions produce an undersized
+        partition` for **every** subsequent cycle, including ones running
+        20-bar templates. One template stopped the campaign.
+
+        So the catalogue-wide maximum is tried first -- it is the stricter
+        gap, and keeps boundaries identical across candidates while it fits --
+        and only when it does not fit does this fall back to the candidate's own
+        warm-up, which is the gap that candidate actually needs. Returns `None`
+        when even that will not fit, because a window too small for the
+        strategy under test is a fact about the window and the caller should
+        say so rather than run.
+        """
+        widest = max(t.warmup_bars for t in TEMPLATES.values())
+        own = int(getattr(template, "warmup_bars", widest))
+        for warmup, shared in ((widest, True), (own, False)):
+            try:
+                split = chronological_split(bars, warmup_bars=warmup)
+            except ValueError:
+                continue
+            if not shared:
+                # Said out loud: this candidate's evidence boundaries differ
+                # from the campaign's others, and a reader comparing two
+                # results needs to know that before comparing them.
+                self.log.record(
+                    "DATA",
+                    f"partitioned for {getattr(template, 'key', '?')} alone at a "
+                    f"{warmup}-bar purge; the catalogue's widest ({widest}) does not fit "
+                    f"{len(bars):,} bars, so these boundaries are not the campaign's shared ones",
+                    "warn",
+                )
+            return split
+        return None
+
     # ── temporal scope ───────────────────────────────────────────────────────
 
     def scope_for(self, worker: int) -> Any:
@@ -1238,9 +1285,23 @@ class AutonomousEngine:
             # The caller's partitions when it has them -- they are the ones cut
             # from *these* bars. Falling through to `self._partitions` here
             # would splice the run's default window into a scoped experiment.
-            partitions = partitions or self._partitions or chronological_split(
-                bars, warmup_bars=max(t.warmup_bars for t in TEMPLATES.values())
+            partitions = partitions or self._partitions or self._split_for(
+                bars, template, worker
             )
+            if partitions is None:
+                reason = (
+                    f"the window holds {len(bars):,} bars, too few to partition with the "
+                    f"{template.warmup_bars}-bar warm-up {template_key} needs"
+                )
+                self._observe(
+                    research,
+                    campaign_id,
+                    strategy_id="",
+                    status="blocked",
+                    reason=reason,
+                    real_data=real_data,
+                )
+                return Outcome.BLOCKED, reason
             development = run_backtest(
                 module,
                 spec,

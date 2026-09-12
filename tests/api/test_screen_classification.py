@@ -115,3 +115,120 @@ def test_an_unclassified_observation_produces_nothing() -> None:
         net_pnl=-240.0,
     )
     assert derive(silent) == []
+
+
+# ── one template must not stop a campaign ────────────────────────────────────
+
+
+def _engine(tmp_path):
+    """An engine wired to a real director, as a campaign has."""
+    import shutil
+    from pathlib import Path
+
+    from forge.research import ResearchLedger
+    from forge.strategy import FamilyRegistry, StrategyLibrary, TemplateStore
+    from forge.vault import Workspace
+    from forge_api.activity import ActivityLog, BacktestStore
+    from forge_api.campaigns import CampaignService
+    from forge_api.director import ResearchDirector
+    from forge_api.engine import AutonomousEngine, EngineConfig
+    from forge_api.market import MarketService
+
+    shutil.copytree(Path("rules"), tmp_path / "rules", dirs_exist_ok=True)
+    workspace = Workspace(repo=tmp_path, root=tmp_path, vault_mode=False).ensure()
+    log = ActivityLog(tmp_path / "a.ndjson")
+    engine = AutonomousEngine(
+        StrategyLibrary(tmp_path / "s"), BacktestStore(tmp_path / "b"), log,
+        MarketService(Path(".")), workspace, ResearchLedger(tmp_path / "r.db"),
+    )
+    service = CampaignService(workspace.data, log=log)
+    service.director = ResearchDirector(
+        campaigns=service.campaigns, frontier=service.frontier,
+        hypotheses=service.hypotheses, journal=service.journal,
+        sources=service.sources, promotion=service.promotion,
+        families=FamilyRegistry(tmp_path / "f"), templates=TemplateStore(tmp_path / "t"),
+        log=log,
+    )
+    engine.director = service.director
+    engine.orchestrator = service.orchestrator
+    engine.state.config = EngineConfig(dataset="synthetic", max_bars=12_000, workers=1)
+    return engine, service
+
+
+def test_a_long_warmup_template_does_not_stop_every_other_cycle(tmp_path) -> None:
+    """The measured failure, pinned.
+
+    The director *composes* templates. One generated `trend_strength_gate`
+    arrived with 1,007 warm-up bars against a shipped maximum of 520, and the
+    split was sized from the catalogue-wide maximum -- so from that cycle on
+    `chronological_split` raised for **every** subsequent candidate, including
+    ones running 20-bar templates. Three experiments, then five dead cycles.
+
+    Driven through the real-data arm explicitly, because the synthetic dataset
+    is FIXTURE and the whole partitioned path is otherwise unreachable.
+    """
+    import random
+
+    from forge.research.runtime import Outcome
+    from forge.strategy import TEMPLATES
+
+    engine, service = _engine(tmp_path)
+    campaign = service.campaigns.create(
+        name="Warmup", dataset="synthetic", symbol="MNQ",
+        objective="Discover intraday alpha on NQ one-minute bars, stated falsifiably.",
+        stopping={"max_experiments": 200},
+    )
+    service.campaigns.set_status(campaign.campaign_id, "running")
+    campaign = service.campaigns.get(campaign.campaign_id)
+    service.director.prepare(campaign)
+    service.director.attach(campaign)
+
+    bars, _ = engine.market.load("synthetic", limit=12_000)
+    started = max(t.warmup_bars for t in TEMPLATES.values())
+
+    outcomes = []
+    for index in range(8):
+        outcome, _reason = engine._cycle(random.Random(1000 + index), list(bars), True, worker=0)
+        outcomes.append(outcome)
+
+    widest = max(t.warmup_bars for t in TEMPLATES.values())
+    if widest <= started:
+        pytest.skip("no generated template widened the catalogue's warm-up in this run")
+
+    # The campaign kept working. Before the fix everything after the wide
+    # template raised and came back as a cycle error.
+    assert outcomes.count(Outcome.PROGRESS) >= 4, outcomes
+    assert Outcome.ERROR not in outcomes, "a cycle still died on the split"
+
+
+def test_a_window_too_small_for_the_candidate_blocks_by_name(tmp_path) -> None:
+    """`None` from `_split_for` must become a named refusal, not a crash.
+
+    A window too small for the strategy under test is a fact about the window,
+    and the cycle should say which template and how many bars rather than
+    raising something a reader has to trace.
+    """
+    from forge.strategy import TEMPLATES
+
+    engine, _service = _engine(tmp_path)
+    bars, _ = engine.market.load("synthetic", limit=12_000)
+    widest = max(TEMPLATES.values(), key=lambda t: t.warmup_bars)
+
+    # A window that cannot support even the candidate's own purge.
+    assert engine._split_for(list(bars)[:80], widest, 0) is None
+
+
+def test_the_shared_purge_is_preferred_while_it_fits(tmp_path) -> None:
+    """The stricter gap wins when it fits, so boundaries stay comparable."""
+    from forge.strategy import TEMPLATES
+
+    engine, _service = _engine(tmp_path)
+    bars, _ = engine.market.load("synthetic", limit=12_000)
+    widest = max(t.warmup_bars for t in TEMPLATES.values())
+    narrow = min(TEMPLATES.values(), key=lambda t: t.warmup_bars)
+
+    split = engine._split_for(list(bars), narrow, 0)
+    assert split is not None
+    # Purged at the catalogue's widest rather than the candidate's own, so two
+    # candidates in the same campaign share boundaries while that is possible.
+    assert split.receipt.purge_bars == widest
