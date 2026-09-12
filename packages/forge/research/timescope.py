@@ -36,9 +36,10 @@ the plan gate decides whether a plan carrying one may run.
 from __future__ import annotations
 
 import builtins
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import Field, model_validator
 
@@ -305,6 +306,32 @@ class TimeScope(FrozenModel):
         span += ")"
         extra = f" over {', '.join(self.segments)}" if self.segments else ""
         return f"{self.method}: {span}{extra}"
+
+    #: Keys `as_dict` adds that are *derived* from the fields rather than stored.
+    #: `from_payload` drops them so a scope can be round-tripped: a surface that
+    #: proposes a window and then hands it to the plan gate must not be refused
+    #: for echoing back the numbers it was just given.
+    DERIVED: ClassVar[frozenset[str]] = frozenset(
+        {
+            "scope_id",
+            "fingerprint",
+            "selected_days",
+            "selected_years",
+            "coverage",
+            "summary",
+            "note",
+        }
+    )
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> TimeScope:
+        """Rebuild a scope from `as_dict` output, ignoring the derived keys.
+
+        The model forbids extra fields on purpose -- a typo in a window should
+        be refused, not silently dropped -- so the derived keys have to be named
+        rather than the rule relaxed.
+        """
+        return cls(**{k: v for k, v in payload.items() if k not in cls.DERIVED})
 
     def as_dict(self) -> dict[str, Any]:
         payload = self.model_dump(mode="json")

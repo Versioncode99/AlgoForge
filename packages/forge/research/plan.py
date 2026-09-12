@@ -34,6 +34,16 @@ from forge.contracts.hashing import content_hash, stable_id
 from forge.contracts.models import FrozenModel, Preregistration
 from forge.research.timescope import TimeScope
 
+
+def _scope_from(value: Any) -> TimeScope:
+    """A scope from a model or from `as_dict` output.
+
+    `propose_time_scope` returns a payload carrying derived keys, and a caller
+    that hands that straight to the plan gate must not be refused for echoing
+    back the numbers it was just given.
+    """
+    return value if isinstance(value, TimeScope) else TimeScope.from_payload(value)
+
 #: A prediction shorter than this cannot name a direction and a magnitude, and a
 #: claim that names neither cannot be wrong.
 MIN_PREDICTION = 30

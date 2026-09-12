@@ -29,7 +29,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -67,6 +67,17 @@ from forge.research import chronological_split
 from forge.research.agents import MAX_AGENTS, AgentRole
 from forge.research.campaign import CampaignError
 from forge.research.frontier import FrontierState
+from forge.research.plan import ResearchPlan
+from forge.research.plan import review as plan_review
+from forge.research.timescope import (
+    ScopeError,
+    SelectionMethod,
+    TimeScope,
+    fixed_range,
+    full_history,
+    recent_years,
+    rolling,
+)
 from forge.strategy import (
     DESCRIBED_TARGETS,
     TEMPLATES,
@@ -737,6 +748,7 @@ class Actions:
         self._register_campaigns()
         self._register_context()
         self._register_data_health()
+        self._register_timescope()
 
     def _register_ir(self) -> None:
         """The Strategy IR verbs.
@@ -4863,6 +4875,260 @@ class Actions:
             {},
             self.data_health,
         )
+
+    # ── temporal scope ───────────────────────────────────────────────────────
+    # The sixteen-year archive is a reservoir. Which slice of it an experiment
+    # runs on is part of its claim, so these verbs exist for the same reason the
+    # campaign verbs do: the interface could set a campaign's dates and the
+    # assistant had no way to reason about a window at all.
+
+    def _reservoir(self, dataset: str) -> tuple[Any, Any]:
+        if self.market is None:
+            raise ActionError("no market service is configured in this process")
+        try:
+            span: tuple[Any, Any] = self.market.reservoir(_str(dataset, "dataset", limit=80))
+            return span
+        except Exception as exc:
+            raise ActionError(f"the span of '{dataset}' could not be read: {exc}") from exc
+
+    def describe_reservoir(self, dataset: str) -> dict[str, Any]:
+        """What history a dataset actually holds, measured from the archive.
+
+        The number an experiment's window is a *fraction of*. Measured rather
+        than taken from the dataset's declared span, because a purchased archive
+        can still begin later than its label says.
+        """
+        start, end = self._reservoir(dataset)
+        years = (end - start).total_seconds() / (365.25 * 86400.0)
+        return {
+            "dataset": dataset,
+            "available_start": start.isoformat(),
+            "available_end": end.isoformat(),
+            "years": round(years, 3),
+            "note": (
+                "This is the reservoir, not the experiment window. An experiment "
+                "selects from it and records why."
+            ),
+        }
+
+    def propose_time_scope(
+        self,
+        dataset: str,
+        rationale: str,
+        method: str = "RECENT_N_YEARS",
+        years: float = 2.0,
+        start: str | None = None,
+        end: str | None = None,
+        train_months: int = 24,
+        test_months: int = 6,
+        folds: int = 3,
+    ) -> dict[str, Any]:
+        """Build a time scope over a dataset. Refuses one that could not be run.
+
+        The rationale is required and is not decoration: the whole reason a
+        window is recorded is that somebody can later ask "why this one?" and
+        get an answer rather than a method name they can already see.
+
+        This *proposes*. Nothing here runs an experiment, and a scope only
+        becomes binding when a plan carrying it is preregistered -- at which
+        point moving the window becomes a G1 failure rather than a free retry.
+        """
+        available_start, available_end = self._reservoir(dataset)
+        chosen = _str(method, "method").upper()
+        reason = _str(rationale, "rationale", limit=2000)
+        common = {
+            "dataset": dataset,
+            "available_start": available_start,
+            "available_end": available_end,
+            "rationale": reason,
+            "selected_by": str(self._current_actor()),
+        }
+        try:
+            if chosen == str(SelectionMethod.RECENT_N_YEARS):
+                scope = recent_years(**common, years=float(years))
+            elif chosen == str(SelectionMethod.FULL_AVAILABLE_HISTORY):
+                scope = full_history(**common)
+            elif chosen == str(SelectionMethod.FIXED_DATE_RANGE):
+                if not start or not end:
+                    raise ActionError("a fixed date range needs both 'start' and 'end'.")
+                scope = fixed_range(
+                    **common,
+                    start=_moment(start, "start"),
+                    end=_moment(end, "end"),
+                )
+            elif chosen in {str(SelectionMethod.ROLLING), str(SelectionMethod.ANCHORED)}:
+                scope = rolling(
+                    **common,
+                    train_months=_bounded(train_months, 24, 1, 240, "train_months"),
+                    test_months=_bounded(test_months, 6, 1, 120, "test_months"),
+                    folds=_bounded(folds, 3, 1, 40, "folds"),
+                    anchored=chosen == str(SelectionMethod.ANCHORED),
+                )
+            else:
+                raise ActionError(
+                    f"'{method}' is not a selection method. Known methods: "
+                    + ", ".join(str(m) for m in SelectionMethod)
+                )
+        except ScopeError as exc:
+            raise ActionError(str(exc)) from exc
+        except ValidationError as exc:
+            raise ActionError(_first_problem(exc)) from exc
+
+        payload = scope.as_dict()
+        payload["note"] = (
+            f"This window is {scope.coverage:.0%} of the available history. It is a "
+            "proposal until a plan carrying it is preregistered."
+        )
+        return payload
+
+    def scope_exposure(self, fingerprints: list[str] | None = None) -> dict[str, Any]:
+        """How many distinct windows have been tried, and what that costs.
+
+        Searching windows is searching. A programme that tried two years, then
+        five, then ten and reported the ten-year number ran three experiments,
+        and the multiple-testing correction has to see three.
+        """
+        seen = sorted({str(f) for f in (fingerprints or []) if str(f).strip()})
+        return {
+            "windows_tried": len(seen),
+            "counts_as_selection": len(seen) > 1,
+            "note": (
+                "Each distinct window is a separate look at the data. Multiple-testing "
+                "corrections must include them, or the reported result is selected."
+                if len(seen) > 1
+                else "One window or none. Window selection adds no exposure."
+            ),
+        }
+
+    def review_research_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
+        """Run the deterministic plan gate over a plan. No model is consulted.
+
+        A model may *write* a plan; nothing a model says can make one pass. The
+        four outcomes need four different actions, and the one worth naming is
+        ``PLAN_BLOCKED_DATA``: the research is sound and the data is absent, so
+        the plan is kept rather than discarded and nothing is substituted for
+        the missing data.
+        """
+        if not isinstance(plan, dict):
+            raise ActionError("'plan' must be an object describing the research plan.")
+        body = dict(plan)
+        # `propose_time_scope` returns derived keys alongside the stored ones.
+        # Refusing a caller for echoing back the payload this registry just
+        # handed it would make the two verbs impossible to compose.
+        if isinstance(body.get("scope"), dict):
+            body["scope"] = {
+                k: v for k, v in body["scope"].items() if k not in TimeScope.DERIVED
+            }
+        if isinstance(body.get("pilot"), dict) and isinstance(body["pilot"].get("scope"), dict):
+            body["pilot"] = dict(body["pilot"])
+            body["pilot"]["scope"] = {
+                k: v for k, v in body["pilot"]["scope"].items() if k not in TimeScope.DERIVED
+            }
+        try:
+            parsed = ResearchPlan(**body)
+        except ValidationError as exc:
+            raise ActionError(_first_problem(exc)) from exc
+        campaign = None
+        if parsed.campaign_id and self.campaigns is not None:
+            campaign = self.campaigns.campaigns.get(parsed.campaign_id)
+        verdict = plan_review(parsed, campaign=campaign)
+        return {
+            "plan": parsed.as_dict(),
+            "verdict": verdict.as_dict(),
+            "preregistration": {
+                "content_hash": parsed.preregister().content_hash,
+                "scope_fingerprint": parsed.scope.fingerprint(),
+                "note": (
+                    "G1 re-derives this hash at judge time. Moving the claim or the "
+                    "window after a result fails the gate."
+                ),
+            },
+        }
+
+    def _register_timescope(self) -> None:
+        self._add(
+            "describe_reservoir",
+            "What history a dataset actually holds, measured from the archive rather "
+            "than taken from its declared span. This is the reservoir an experiment "
+            "selects a window from - it is not the experiment window.",
+            {"dataset": {"type": "string", "description": "A dataset key, e.g. nq_1m_16y."}},
+            self.describe_reservoir,
+        )
+        self._add(
+            "propose_time_scope",
+            "Build the historical window an experiment would run on, with the reason "
+            "for choosing it. Refuses a window that reaches outside the archive, a "
+            "walk-forward longer than the data, or a selection with no stated reason. "
+            "Proposes only: a window becomes binding when a plan carrying it is "
+            "preregistered, after which moving it fails G1.",
+            {
+                "dataset": {"type": "string"},
+                "rationale": {
+                    "type": "string",
+                    "description": "Why this window suits this hypothesis. 40 characters minimum.",
+                },
+                "method": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "RECENT_N_YEARS, FIXED_DATE_RANGE, FULL_AVAILABLE_HISTORY, "
+                    "ROLLING or ANCHORED.",
+                },
+                "years": {"type": "number", "optional": True},
+                "start": {"type": "string", "optional": True, "description": "ISO date."},
+                "end": {"type": "string", "optional": True, "description": "ISO date."},
+                "train_months": {"type": "integer", "optional": True},
+                "test_months": {"type": "integer", "optional": True},
+                "folds": {"type": "integer", "optional": True},
+            },
+            self.propose_time_scope,
+        )
+        self._add(
+            "scope_exposure",
+            "How many distinct historical windows have been tried for one claim, and "
+            "whether that counts as selection. Searching windows is searching.",
+            {
+                "fingerprints": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "optional": True,
+                }
+            },
+            self.scope_exposure,
+        )
+        self._add(
+            "review_research_plan",
+            "Run the deterministic plan gate: accepted, rejected, blocked by data, or "
+            "needs a person. Refuses a prediction that names no observation, success "
+            "criteria decided after the run, parameters that may still move, and a "
+            "claim over a window that was already settled. No model is consulted.",
+            {"plan": {"type": "object", "description": "The research plan."}},
+            self.review_research_plan,
+        )
+
+
+def _moment(value: Any, field: str) -> datetime:
+    """An ISO date or timestamp, refused rather than guessed at."""
+    text = _str(value, field, limit=40)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ActionError(
+            f"'{field}' must be an ISO date such as 2024-01-01; got '{text}'."
+        ) from exc
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _first_problem(exc: ValidationError) -> str:
+    """The first validation failure, as the sentence the model wrote.
+
+    Pydantic's full error is a list of dicts; a caller being refused needs the
+    reason, not the structure.
+    """
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error.get("loc", ()) if part != "body")
+        message = str(error.get("msg", "invalid"))
+        return f"{location}: {message}" if location else message
+    return str(exc)
 
 
 def _parse_rules(rules: Any) -> AccountRules:
