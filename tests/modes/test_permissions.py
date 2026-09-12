@@ -193,3 +193,129 @@ def test_the_three_allowlists_do_not_overlap() -> None:
     assert not PREPARATORY & AUTOMATION
     assert not PREPARATORY & CONSEQUENTIAL
     assert not AUTOMATION & CONSEQUENTIAL
+
+
+# ── the actions that exist are described by the allowlists ───────────────────
+#
+# The test above checks one direction: no list names a verb that is gone. The
+# direction nobody was checking is the one that actually bit — a verb *added*
+# to the registry and never classified. Rule 9 holds it, so nothing becomes
+# unsafe; it becomes unavailable, silently, to the assistant the verb was
+# written for. Twenty campaign, sidebar and context verbs sat in exactly that
+# state before this test existed.
+
+#: Mutating actions that reach an AI actor through no allowlist. Every name
+#: here is held on purpose, and saying so out loud is the point: a verb that
+#: joins this set without somebody typing it here is a verb nobody classified.
+HELD_WITHOUT_A_LIST: frozenset[str] = frozenset(
+    {
+        # Destructive. Rule 5 holds these in every mode before any list is read,
+        # so listing them would change nothing and would read as permission.
+        "archive_campaign",
+        "delete_workspace",
+        "reset_sidebar",
+        # Protected controls. Rule 2 denies them outright — mode, stance, the
+        # kill switch, the fund and prop configuration, the whole prop desk.
+        "create_prop_account",
+        "enter_mode",
+        "leave_mode",
+        "record_prop_state",
+        "select_prop_account",
+        "set_fund_config",
+        "set_stance",
+        "update_prop_rules",
+        "propdesk_acknowledge",
+        "propdesk_add_follower",
+        "propdesk_apply_allocation",
+        "propdesk_apply_risk",
+        "propdesk_connect",
+        "propdesk_copy_pass",
+        "propdesk_create_connection",
+        "propdesk_create_group",
+        "propdesk_disconnect",
+        "propdesk_link_policy",
+        "propdesk_link_rules",
+        "propdesk_record_event",
+        "propdesk_remove_follower",
+        "propdesk_save_policy",
+        "propdesk_set_autonomy",
+        "propdesk_set_constraints",
+        "propdesk_set_group_active",
+        "propdesk_set_news_policy",
+        "propdesk_set_risk",
+        # Money-adjacent measurement. These only measure, and `assess_prop_account`
+        # is preparatory on that reasoning — but they also write reconciliation
+        # and evaluation state against a funded account, and a held default in
+        # the one domain that touches somebody's real balance is the answer that
+        # costs nothing if it is wrong.
+        "propdesk_evaluate_deployment",
+        "propdesk_evaluate_risk",
+        "propdesk_reconcile",
+        "link_account_to_workspace",
+    }
+)
+
+
+def test_every_registered_action_has_a_decided_ai_ruling(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ALGOFORGE_VAULT", str(tmp_path / "workspace"))
+    from forge_api.main import create_app
+
+    app = create_app(tmp_path / "permissions.db")
+    registry = app.state.actions._registry
+
+    fell_through = {
+        name
+        for name, action in registry.items()
+        if action.mutating
+        and name not in PREPARATORY
+        and name not in AUTOMATION
+        and name not in CONSEQUENTIAL
+    }
+
+    undecided = sorted(fell_through - HELD_WITHOUT_A_LIST)
+    assert not undecided, (
+        "these mutating actions reach an AI actor through no allowlist and nobody "
+        f"said so on purpose: {undecided}. Classify each one, or add it to "
+        "HELD_WITHOUT_A_LIST with the reason it is held."
+    )
+
+    gone = sorted(HELD_WITHOUT_A_LIST - fell_through)
+    assert not gone, (
+        f"HELD_WITHOUT_A_LIST names actions that are now classified or removed: {gone}"
+    )
+
+
+def test_the_newly_classified_verbs_rule_the_way_the_policy_says(tmp_path, monkeypatch) -> None:
+    """Screen state runs everywhere; committing a campaign is automation.
+
+    Asserted through the real registry rather than hand-built `ActionFacts`, so
+    a verb whose risk or `protected` flag changes underneath the classification
+    fails here instead of quietly ruling differently.
+    """
+    monkeypatch.setenv("ALGOFORGE_VAULT", str(tmp_path / "workspace"))
+    from forge_api.main import create_app
+
+    registry = create_app(tmp_path / "permissions.db").state.actions._registry
+
+    def ruling_for(name: str, mode: WorkspaceMode) -> Ruling:
+        action = registry[name]
+        facts = ActionFacts(
+            name=name,
+            mutating=action.mutating,
+            risk=str(action.risk),
+            protected=action.protected,
+        )
+        stance = (MODES[mode].stances or (None,))[0]
+        return evaluate(facts, actor=Actor.AI, mode=mode, stance=stance).ruling
+
+    for name in ("set_context", "add_sidebar_item", "create_campaign", "rename_campaign"):
+        for mode in MODE_ORDER:
+            assert ruling_for(name, mode) is Ruling.ALLOW, f"{name} was held in {mode}"
+
+    for name in ("start_campaign", "stop_campaign", "deploy_campaign_agents"):
+        assert ruling_for(name, WorkspaceMode.NORMAL) is Ruling.REQUIRE_APPROVAL
+        assert ruling_for(name, WorkspaceMode.AI) is Ruling.ALLOW
+
+    # Still held, and by the rule that fires before any list.
+    assert ruling_for("reset_sidebar", WorkspaceMode.AI) is Ruling.REQUIRE_APPROVAL
+    assert ruling_for("archive_campaign", WorkspaceMode.AI) is Ruling.REQUIRE_APPROVAL

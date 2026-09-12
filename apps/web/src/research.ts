@@ -101,6 +101,8 @@ export type CampaignRuntime = {
   campaign_id: string
   workers: number
   health: number
+  /** Cycles behind `health`. Zero means it is a scheduling prior, not a measurement. */
+  health_observed: number
   barren_run: number
   stalled: boolean
   last_progress_at: string

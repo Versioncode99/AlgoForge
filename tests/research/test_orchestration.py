@@ -115,6 +115,30 @@ def test_an_unproven_campaign_gets_the_benefit_of_the_doubt(fabric) -> None:
     assert orchestrator._runtime(campaign.campaign_id).health() == 1.0
 
 
+def test_the_benefit_of_the_doubt_is_marked_as_one(fabric) -> None:
+    """1.0 from nothing and 1.0 from sixty successes are the same number.
+
+    They are not the same fact, and the scheduler does not need to tell them
+    apart — it wants the prior either way. Anything *reporting* the score does:
+    a surface that renders the prior as a percentage is telling an operator
+    their campaign is doing perfectly when it has not yet done anything.
+    """
+    orchestrator, campaigns, _ = fabric
+    campaign = _campaign(campaigns, "Brand new")
+    runtime = orchestrator._runtime(campaign.campaign_id)
+
+    assert runtime.health() == 1.0
+    assert runtime.observed == 0
+    assert runtime.as_dict()["health_observed"] == 0
+
+    for _ in range(60):
+        orchestrator.observe(campaign.campaign_id, Outcome.PROGRESS)
+
+    earned = orchestrator._runtime(campaign.campaign_id)
+    assert earned.health() == 1.0
+    assert earned.observed == 60, "the sample behind an identical score is not visible"
+
+
 def test_a_stalled_campaign_is_named(fabric) -> None:
     orchestrator, campaigns, _ = fabric
     campaign = _campaign(campaigns, "Stuck")
