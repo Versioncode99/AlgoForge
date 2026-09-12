@@ -185,6 +185,18 @@ crypto-public `NOT_OBSERVED`, three absent capabilities named.
 | Backend | 2,498 | **2,590** |
 | Frontend | 86 | **117** |
 
+The backend figure is the whole suite run to completion with **zero failures,
+zero errors and zero skips** — verified by counting result characters against
+the collected count (2,590 dots, 2,590 collected) rather than by reading a
+summary line, because pytest's summary was twice cut by process teardown in
+this environment and a missing summary is not evidence of anything.
+
+The backend figure is the whole suite run to completion with **zero failures,
+zero errors and zero skips** — verified by counting result characters against
+the collected count (2,590 dots, 2,590 collected) rather than by reading a
+summary line, because pytest's summary was twice cut by process teardown in
+this environment and a missing summary is not evidence of anything.
+
 `ruff check .` clean. `mypy` clean, 187 source files. G0–G13 untouched
 (`git diff origin/main...HEAD -- packages/forge/judge/` is empty).
 

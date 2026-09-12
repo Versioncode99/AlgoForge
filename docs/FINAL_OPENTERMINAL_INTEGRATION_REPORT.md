@@ -193,6 +193,12 @@ Stated because the surfaces state them, and they should agree:
 | Backend (`pytest`) | 2,498 | **2,590** |
 | Frontend (`vitest`) | 86 | **117** |
 
+The backend figure is the whole suite run to completion with **zero failures,
+zero errors and zero skips** — verified by counting result characters against
+the collected count (2,590 dots, 2,590 collected) rather than by reading a
+summary line, because pytest's summary was twice cut by process teardown in
+this environment and a missing summary is not evidence of anything.
+
 **121 new tests.** Backend by file:
 
 | File | Tests | Covers |
