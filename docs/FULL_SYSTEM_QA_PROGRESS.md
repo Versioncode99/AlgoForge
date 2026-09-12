@@ -311,13 +311,46 @@ windows-latest** plus a Node 24 web job. The Windows leg is what catches the
 path and line-ending assumptions this codebase can make on Linux alone. Branch
 status is on the pull request.
 
+### Q1 · Is the discovery ontology truthful? — swept, 1 ceiling found
+**Method.** The archetype vocabulary and the shipped template catalogue read
+directly; 1,200 compositions built across all 10 archetypes and their entry
+signatures compared.
+
+```
+archetypes                                   10   (all 10 structurally distinct)
+shipped templates                            12   (7 distinct feature sets)
+name overlap                                  1   (opening_range_break)
+compositions built                        1,200
+distinct composed shapes                    280   (28 per archetype)
+distinct ENTRY SIGNATURES reached            10
+```
+
+**No defect. A ceiling.** A composed template's key carries the definition hash,
+so composition can mint up to 280 distinct *keys* — but `Archetype.signature()`
+is the feature set plus the entry condition's structure tokens, and ignores
+exits and sessions by design, so all 280 collapse to 10 constructions. That is
+the mechanism behind the 67.5% NOT_NOVEL rate measured earlier: 78 of 81
+refusals were `SAME_CONSTRUCTION`. The gate is doing exactly its job on a
+vocabulary that has run out.
+
+**This corrected a claim in this repository's own earlier report.**
+`RESEARCH_EFFECTIVENESS_REPORT.md` said the engine "genuinely creates new
+constructions" and cited 1.3 configurations per construction. The ratio stands;
+what was never measured was the size of the space it is computed over. A
+120-cycle campaign reached 22 distinct template keys against a vocabulary of
+roughly 17-21 constructions — essentially all of it. §2.1 of that report now
+carries the measurement and the amended conclusion.
+
 ---
 
 ## Not yet swept
 
 - **N** — product QA against the six personas
 - **O** — quality of life
-- **Q** — strategy-discovery ontology truthfulness
+
+Both are product judgement rather than defect-finding. They are not attempted,
+and saying so is the point: an area is reported clean only where a method and a
+number are recorded for it.
 
 ## Standing verification
 

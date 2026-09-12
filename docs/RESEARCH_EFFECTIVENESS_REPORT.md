@@ -8,6 +8,15 @@ parameter configurations per construction, which is close to the floor. It is
 not a parameter-variation engine. But it currently learns very little from what
 it runs, and two-thirds of its cycles produce nothing at all.
 
+**Amended after the Part Q sweep (see §2.1).** The 1.3 stands, and so does the
+conclusion that this is not parameter variation. What the original version of
+this report did not measure is the *size of the space* that ratio is computed
+over. The engine composes from a fixed vocabulary of ten archetypes plus twelve
+shipped templates, and the 120-cycle campaign reached 22 distinct template
+keys — essentially all of it. "Good discovery" is more precisely **good
+discipline inside a small fixed vocabulary that one campaign exhausts**, and
+the 67.5% refusal rate in §3.1 is that same fact seen from the other side.
+
 Everything below is measured from a bounded campaign driven through the real
 engine, director, campaign store, frontier and hypothesis graph. Method and
 limits are in §5, and they matter.
@@ -52,6 +61,40 @@ one repeat.
 
 So the answer to the brief's most important question is favourable, and it is
 favourable on the measure that would expose the opposite.
+
+### 2.1 But how big is the space? — measured afterwards
+
+The ratio above says the engine does not re-parameterise. It says nothing about
+how much there is to discover. Measured directly:
+
+```
+archetypes the director composes from        10   (all 10 structurally distinct)
+shipped templates                            12   (7 distinct feature sets)
+name overlap between the two                  1   (opening_range_break)
+→ distinct constructions reachable at all   ~17-21
+```
+
+A composed template's key carries the definition hash
+(`gen_{archetype}_{hash[:8]}`), so 10 archetypes × 28 composable shapes —
+direction, session window, exit style — can mint up to 280 distinct *keys*. The
+novelty gate is not fooled by that: `Archetype.signature()` is the feature set
+plus the structure tokens of the entry condition, and it deliberately ignores
+exits and sessions, so all 280 collapse back to **10 entry signatures**.
+
+That is the mechanism behind §3.1. The director keeps composing keys the
+novelty gate recognises as the same construction, and refuses them. 78 of the
+81 NOT_NOVEL refusals were `SAME_CONSTRUCTION`, which is exactly what a search
+looks like once it has walked its whole vocabulary.
+
+**This is not a defect in the gate — the gate is doing precisely its job.** It
+is a ceiling on the product. The highest-leverage improvement to research
+output is not tuning the loop or the allocation: it is growing the archetype
+vocabulary, because every other number in this report is bounded by it.
+
+One qualification: the 17-21 range compares two vocabularies keyed differently
+— archetype signatures include structure tokens, shipped-template feature sets
+do not — so it is a bound rather than an exact count. The bound is what
+matters; the exact figure would not change the conclusion.
 
 ## 3. Where it is weak
 
@@ -203,9 +246,13 @@ In order of expected effect:
 
 ## 7. Verdict
 
-**Discovery: good.** 1.3 configurations per construction, 11 distinct
-mechanisms in 11 hypotheses, new families composed at runtime. It is not
-mutating parameters and calling it research.
+**Discovery: good, inside a small space.** 1.3 configurations per construction,
+11 distinct mechanisms in 11 hypotheses, new families composed at runtime. It
+is not mutating parameters and calling it research. But the space it searches
+is roughly 17-21 constructions wide and a single 120-cycle campaign reached 22
+template keys across it, so the discipline is real and the ceiling is low. See
+§2.1 — growing the archetype vocabulary dominates every other improvement
+available here.
 
 **Learning: poor.** One follow-up from eight failures, with a root cause now
 fixed but unmeasurable in this environment.
