@@ -96,7 +96,6 @@ def test_a_classified_screen_produces_a_research_question() -> None:
         failure_class=_screen_failure(net_pnl=-240.0, trades=180),
         trades=180,
         net_pnl=-240.0,
-        was_profitable=False,
     )
     assert derive(observation), "a classified screen still produced no question"
 

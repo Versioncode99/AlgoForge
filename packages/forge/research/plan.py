@@ -32,6 +32,7 @@ from pydantic import Field, model_validator
 
 from forge.contracts.hashing import content_hash, stable_id
 from forge.contracts.models import FrozenModel, Preregistration
+from forge.data.freshness import NOT_EVIDENCE, Freshness
 from forge.research.timescope import TimeScope
 
 
@@ -165,7 +166,10 @@ class ResearchPlan(FrozenModel):
     pilot: PilotDesign | None = None
     #: Capabilities this plan needs beyond bars.
     data_requirements: tuple[str, ...] = ()
-    #: The freshness state this plan will accept. See `forge.data.freshness`.
+    #: The freshness state this plan will accept as evidence. Checked by the
+    #: gate against `forge.data.freshness.Freshness`, because a field the gate
+    #: ignores is configuration accepted and thrown away -- which is the defect
+    #: this codebase has now shipped three times.
     freshness_requirement: str = "FRESH"
 
     success_criteria: str = Field(default="", max_length=500)
@@ -342,7 +346,38 @@ def review(
             )
         )
 
-    # 4. Has this exact plan already been settled?
+    # 4. Will this plan accept data it should not?
+    requirement = plan.freshness_requirement.strip().upper()
+    if requirement not in {str(state) for state in Freshness}:
+        findings.append(
+            PlanFinding(
+                code="unknown_freshness",
+                severity="block",
+                summary=(
+                    f"'{plan.freshness_requirement}' is not a freshness state. "
+                    f"Known states: {', '.join(str(s) for s in Freshness)}."
+                ),
+                remedy="State which freshness this plan will accept as evidence.",
+            )
+        )
+    elif Freshness(requirement) in NOT_EVIDENCE:
+        findings.append(
+            PlanFinding(
+                code="inadmissible_freshness",
+                severity="block",
+                summary=(
+                    f"This plan declares it will accept {requirement} data as evidence. "
+                    "An informational surface may render a stale or degraded value; a "
+                    "result may not rest on one."
+                ),
+                remedy=(
+                    "Require FRESH or REFRESHING, or state the claim as an "
+                    "observation rather than as evidence."
+                ),
+            )
+        )
+
+    # 5. Has this exact plan already been settled?
     if plan.fingerprint() in exhausted_fingerprints:
         findings.append(
             PlanFinding(
@@ -359,7 +394,7 @@ def review(
             )
         )
 
-    # 5. Consequential, not wrong.
+    # 6. Consequential, not wrong.
     if plan.scope.coverage > 0.95 and plan.pilot is None:
         findings.append(
             PlanFinding(
@@ -394,7 +429,7 @@ def review(
                 )
             )
 
-    # 6. Worth saying, not worth stopping for.
+    # 7. Worth saying, not worth stopping for.
     if not plan.transaction_costs:
         findings.append(
             PlanFinding(

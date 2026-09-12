@@ -1544,7 +1544,6 @@ class ResearchDirector:
             concentration=outcome.concentration,
             trades=outcome.trades,
             net_pnl=outcome.net_pnl,
-            was_profitable=outcome.net_pnl > 0,
         )
         followups = derive(observation)
         if not followups:

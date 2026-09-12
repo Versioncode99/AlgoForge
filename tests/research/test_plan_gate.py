@@ -307,3 +307,38 @@ def test_a_pilot_may_not_search() -> None:
     """A pilot that searches is a cheap experiment with an inflated trial count."""
     with pytest.raises(ValidationError):
         PilotDesign(scope=_scope(2), promote_if="anything at all", max_configurations=50)
+
+
+# ── freshness ────────────────────────────────────────────────────────────────
+
+
+def test_the_default_freshness_requirement_is_accepted() -> None:
+    assert review(_plan()).accepted
+
+
+def test_a_plan_accepting_stale_data_as_evidence_is_refused() -> None:
+    """§12: an informational surface may render a stale value; a result may not."""
+    verdict = review(_plan(freshness_requirement="STALE"))
+    assert verdict.status is PlanStatus.REJECTED
+    assert any("may not rest on one" in r for r in verdict.reasons("block"))
+
+
+def test_a_plan_accepting_degraded_data_as_evidence_is_refused() -> None:
+    """DEGRADED means a lower tier answered. Blocked, not warned."""
+    assert review(_plan(freshness_requirement="DEGRADED")).status is PlanStatus.REJECTED
+
+
+def test_refreshing_is_admissible() -> None:
+    """Past its TTL with a refresh under way is still the last good value."""
+    assert review(_plan(freshness_requirement="REFRESHING")).accepted
+
+
+def test_an_unknown_freshness_state_is_refused_and_lists_the_real_ones() -> None:
+    verdict = review(_plan(freshness_requirement="PROBABLY_FINE"))
+    assert verdict.status is PlanStatus.REJECTED
+    assert any("FRESH" in r for r in verdict.reasons("block"))
+
+
+def test_the_requirement_is_read_case_insensitively() -> None:
+    """A field the gate ignored for a capitalisation is a field the gate ignores."""
+    assert review(_plan(freshness_requirement="fresh")).accepted
