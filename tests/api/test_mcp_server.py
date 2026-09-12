@@ -20,6 +20,7 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
         "campaign_frontier",
         "campaign_skips",
         "current_mode",
+        "data_health",
         "describe_campaign",
         "describe_context",
         "describe_sidebar",

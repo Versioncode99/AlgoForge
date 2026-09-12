@@ -47,3 +47,22 @@ def resolve_credential(name: str) -> CredentialMaterial:
         except (OSError, UnicodeError):
             pass
     return CredentialMaterial("", "none")
+
+
+#: Which environment variable each data source's credential lives in. Used only
+#: to answer "is one configured", never to read one out.
+DATA_CREDENTIALS: dict[str, str] = {
+    "databento": "DATABENTO_API_KEY",
+    "fred": "FRED_API_KEY",
+}
+
+
+def credential_present(provider_id: str) -> bool:
+    """Whether a credential exists for this source. Never returns the secret.
+
+    A health surface has to distinguish "the source is down" from "you have not
+    given it a key", because the remedies are completely different. Answering
+    that question needs one bit, and one bit is all that leaves this function.
+    """
+    name = DATA_CREDENTIALS.get(provider_id)
+    return resolve_credential(name).present if name else False

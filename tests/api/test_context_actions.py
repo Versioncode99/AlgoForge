@@ -126,3 +126,48 @@ def test_context_verbs_are_registered_and_none_is_protected(actions) -> None:
     ):
         assert name in schemas, f"{name} is not registered"
         assert schemas[name]["protected"] is False
+
+
+# ── data health ──────────────────────────────────────────────────────────────
+
+
+def test_data_health_reports_services_as_well_as_archives(actions) -> None:
+    """The gap this closes: an operator could see a hole in the 2019 archive and
+    could not find out that Databento had been refusing since lunchtime."""
+    health = actions.call("data_health", {})
+    assert set(health) == {"datasets", "services", "calendars", "absent", "tiers"}
+    assert health["services"], "no service rows at all"
+
+
+def test_a_source_nobody_has_called_is_listed_and_is_not_healthy(actions) -> None:
+    health = actions.call("data_health", {})
+    states = {row["name"]: row["state"] for row in health["services"]}
+    # Declared up front, so a panel can show that the source you are waiting on
+    # has never been tried rather than omitting it.
+    assert "crypto-public" in states
+    assert states["crypto-public"] in {"NOT_OBSERVED", "UNCONFIGURED"}
+    assert "HEALTHY" not in {states["crypto-public"]}
+
+
+def test_every_service_row_carries_a_remedy(actions) -> None:
+    for row in actions.call("data_health", {})["services"]:
+        assert set(row["explain"]) == {"what", "why", "impact", "remedy"}
+
+
+def test_the_missing_news_feed_is_stated_rather_than_omitted(actions) -> None:
+    """A reader finding no news section concludes the feed is healthy and quiet."""
+    absent = {row["capability"]: row for row in actions.call("data_health", {})["absent"]}
+    assert "Headline news" in absent
+    assert "no headline news feed" in absent["Headline news"]["what"].lower()
+
+
+def test_data_health_is_read_only_and_unprotected(actions) -> None:
+    schema = {s["name"]: s for s in actions.schemas()}["data_health"]
+    assert schema["mutating"] is False
+    assert schema["protected"] is False
+
+
+def test_the_tier_ladder_is_published_with_what_each_tier_means(actions) -> None:
+    tiers = actions.call("data_health", {})["tiers"]
+    assert next(row["tier"] for row in tiers) == "EXECUTION_GRADE"
+    assert all(row["means"] for row in tiers)

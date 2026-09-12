@@ -34,6 +34,15 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import HTTPException
+from forge.data.freshness import RANK, TIER_MEANING, Tier
+from forge.data.providers import (
+    CRYPTO_PUBLIC,
+    DATABENTO,
+    FRED,
+    LOCAL_FIXTURE,
+    PROVIDER_TIERS,
+)
+from forge.data.services import ABSENT_CAPABILITIES, ServiceRegistry
 from forge.execution.oms import OrderRefused
 from forge.hedgefund.approvals import ApprovalQueue, ApprovalRequest
 from forge.hedgefund.audit import AuditLog, Outcome
@@ -53,6 +62,7 @@ from forge.modes.store import ModeStore
 from forge.prop.account import AccountRules, AccountState, ClosedTrade, state_from_trades
 from forge.prop.account import assess as prop_assess
 from forge.propdesk.instruments import MappingError, default_catalogue
+from forge.propdesk.news import CalendarRegistry
 from forge.research import chronological_split
 from forge.research.agents import MAX_AGENTS, AgentRole
 from forge.research.campaign import CampaignError
@@ -99,6 +109,7 @@ from forge.workstation.sidebar import known as sidebar_known
 from pydantic import ValidationError
 
 from forge_api.campaigns import StartCampaignRequest
+from forge_api.credentials import credential_present
 from forge_api.fund import FundError
 from forge_api.jobs import REGISTRY, JobHandle
 
@@ -725,6 +736,7 @@ class Actions:
         self._register_fund()
         self._register_campaigns()
         self._register_context()
+        self._register_data_health()
 
     def _register_ir(self) -> None:
         """The Strategy IR verbs.
@@ -4761,6 +4773,95 @@ class Actions:
             },
             self.clear_context,
             mutating=True,
+        )
+
+    # ── data health ──────────────────────────────────────────────────────────
+    # `data_health` measured datasets on disk and nothing else. An operator
+    # could see that the NQ archive had a four-hour hole in 2019 and could not
+    # find out that Databento had been refusing since lunchtime.
+    #
+    # This composes the two: the measured archives, and the *services* that
+    # feed them and the rest of the workstation. Sources that do not exist say
+    # so by name rather than being omitted -- an absent row reads as "fine",
+    # and "AlgoForge has no headline news feed" is a fact an operator needs.
+
+    def _service_registry(self) -> Any:
+        registry: Any = getattr(self, "_services", None)
+        if registry is None:
+            registry = ServiceRegistry()
+            self._services = registry
+            self._declare_services(registry)
+        return registry
+
+    def _declare_services(self, registry: Any) -> None:
+        """Register every source, so one nobody has called still has a row.
+
+        A health panel that lists only services somebody happened to use cannot
+        show that the one you are waiting on has never been tried.
+        """
+        for descriptor in (DATABENTO, FRED, CRYPTO_PUBLIC, LOCAL_FIXTURE):
+            tier = Tier(PROVIDER_TIERS.get(descriptor.provider_id, str(Tier.INDICATIVE)))
+            unconfigured = ""
+            if descriptor.requires_credentials and not credential_present(descriptor.provider_id):
+                unconfigured = (
+                    f"{descriptor.provider_id} needs a credential and none is configured "
+                    "in this installation."
+                )
+            registry.declare(descriptor.provider_id, tier, unconfigured=unconfigured)
+
+    def data_health(self) -> dict[str, Any]:
+        """What can be relied on right now, and what cannot -- with the remedy.
+
+        Four sections, because they fail differently and are fixed differently:
+        the archives on disk, the services that answer over a network, the
+        capabilities this build genuinely does not have, and the tier ladder
+        that decides what any of it may be evidence for.
+        """
+        registry = self._service_registry()
+        datasets = self.market.health_matrix() if self.market is not None else []
+        worst = "ok"
+        order = {"ok": 0, "note": 1, "warn": 2, "fail": 3}
+        for row in datasets:
+            status = str(row.get("status") or ("fail" if not row.get("measurable", True) else "ok"))
+            if order.get(status, 0) > order[worst]:
+                worst = status
+
+        calendars: list[dict[str, Any]] = []
+        for availability in CalendarRegistry().availability():
+            payload = availability.as_dict()
+            payload["state"] = "HEALTHY" if availability.available else "UNCONFIGURED"
+            calendars.append(payload)
+
+        return {
+            "datasets": {
+                "rows": datasets,
+                "count": len(datasets),
+                "worst": worst,
+                "note": (
+                    "Measured from the archive on disk. A dataset is never called "
+                    "healthy because it was paid for or because it is named after a range."
+                ),
+            },
+            "services": registry.snapshot(),
+            "calendars": calendars,
+            # Stated rather than omitted. An absent row reads as "fine".
+            "absent": ABSENT_CAPABILITIES,
+            "tiers": [
+                {"tier": str(tier), "rank": rank, "means": TIER_MEANING[tier]}
+                for tier, rank in sorted(RANK.items(), key=lambda item: -item[1])
+            ],
+        }
+
+    def _register_data_health(self) -> None:
+        self._add(
+            "data_health",
+            "What can be relied on right now: every dataset measured from the archive "
+            "on disk, every service that answers over a network with whether it has "
+            "actually been called, the calendar sources and what each needs, and the "
+            "capabilities this build does not have. Each unhealthy row carries what is "
+            "wrong, why, what it stops, and the remedy.",
+            {},
+            self.data_health,
         )
 
 

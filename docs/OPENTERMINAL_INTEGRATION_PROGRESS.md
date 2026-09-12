@@ -18,9 +18,9 @@ no merge to main; logical commits.
 | Phase | State | Notes |
 |---|---|---|
 | 0 — Audit | **done** | `docs/OPENTERMINAL_PATTERN_AUDIT.md` |
-| 1 — Architecture | not started | |
-| 2 — Workstation UX | not started | |
-| 3 — Data / market | not started | |
+| 1 — Architecture | **done** | workstation context; campaign verbs in the registry |
+| 2 — Workstation UX | **partly done** | palette runs commands; instrument search; context bar pending |
+| 3 — Data / market | **partly done** | freshness, tiers, service health, Data Health; news and calendar surfacing pending |
 | 4 — Research | not started | |
 | 5 — Prop Desk | not started | |
 | 6 — AI | not started | |
@@ -31,7 +31,9 @@ no merge to main; logical commits.
 ## Baselines measured before any change
 
 - Frontend: **86 tests pass**, 11 files (`npx vitest run`, 11.6 s).
-- Python: recorded below once the full run completes.
+- Python: **2,498 tests, no failures** (`pytest -q`, ~25 min). The summary line
+  was cut by a process teardown; every result character in the output is a dot,
+  and the run is repeated at verification time.
 - Working tree clean at branch creation.
 
 ---
@@ -96,3 +98,77 @@ execution layer to contribute).
   Cmd+Shift+P both collide on some platforms).
 - Whether a live market-context panel is supportable at all on the data
   AlgoForge has, or whether it must ship as UNAVAILABLE.
+
+
+---
+
+## Phase 1 — Architecture (done)
+
+**Campaign verbs in the action registry.** The lifecycle moved out of the route
+closures onto `CampaignService`; `build_campaign_router` now attaches the engine
+hooks to the service, the routes became four-line exception translations, and
+fifteen actions call the same methods. `UnknownCampaign` subclasses
+`CampaignError` so existing handlers keep working while a 404 can still be told
+from a 409.
+
+Registry went **129 → 149 actions**. None of the campaign verbs is `protected`;
+`archive_campaign` is `CONFIRM`. Asserted as a property in
+`tests/api/test_campaign_actions.py`.
+
+**Workstation context** — `packages/forge/workstation/context.py`. Instrument,
+timeframe, dataset, campaign, strategy and account, held per link group on the
+workspace and resolved at render time. `resolve` is pure and writes nothing.
+
+This is what makes `link_group`'s badge true. The peer-group alternative — write
+the new symbol across the group — destroys a pinned symbol and cannot be undone.
+
+Storage: a `contexts` column via the existing `_ADDED` ALTER TABLE migration,
+default `'{}'`. Mutations rebuild the model rather than `model_copy`, so the
+group ceiling runs on every change.
+
+## Phase 2 — Workstation UX (partly done)
+
+**The palette runs commands.** Groups are now Commands, Instruments, Views,
+Campaigns, Strategies, Experiments, Runs, Constraints, Datasets. Commands go
+through `POST /actions/<name>`.
+
+Only verbs that will actually run are offered. The HTTP action endpoint cannot
+pass the operator's confirmation — `ActionRequest` carries `arguments` and
+nothing else — so a `CONFIRM` verb in the palette would be a control drawn as
+working that always refuses. **This boundary was deliberately not widened.**
+
+Lifecycle rows are offered by status: running → pause/stop, paused → resume,
+created/stopped → start, archived → nothing.
+
+**Instrument search** over the real `InstrumentCatalogue`. Unverified
+specifications say so in the row, because the multiplier is the number a
+position would be sized from and four of the twelve are unverified.
+
+### Still to do in Phase 2
+- Context bar facets (instrument / campaign / strategy / account) in `App.tsx`.
+- The documented keyboard map (§5), after a real conflict check.
+
+## Phase 3 — Data (partly done)
+
+`packages/forge/data/freshness.py` — `Tier` (EXECUTION_GRADE → UNAVAILABLE,
+ranked), `Freshness` (FRESH / REFRESHING / STALE / DEGRADED / UNAVAILABLE), and
+`Served`, an envelope carrying the provider, the tier, the freshness and both
+timestamps. `Served.admissible(required)` returns the answer **and the reason**.
+
+`packages/forge/data/services.py` — `ServiceRegistry` with observed counters, a
+`chain` that reports which link served and marks a cross-tier descent
+`DEGRADED`, and `ABSENT_CAPABILITIES` naming what this build does not have.
+
+Wired: `data_health` action composing the measured dataset matrix, the service
+registry, calendar availability, the absent capabilities and the tier ladder.
+`ServiceHealth.tsx` renders it beside the existing `HealthMatrix`.
+
+Real output on a machine with no keys: databento and fred `UNCONFIGURED`,
+crypto-public `NOT_OBSERVED`, three absent capabilities named.
+
+### Still to do in Phase 3
+- Nothing yet *consumes* `Served` on the market-data read path. The envelope,
+  the chain and the tier ladder exist and are tested; `MarketService` still
+  returns bare frames. **This is scaffolding until that lands** and is reported
+  as such.
+- Calendar and news surfacing out of Prop Desk (§3.3 of the audit).

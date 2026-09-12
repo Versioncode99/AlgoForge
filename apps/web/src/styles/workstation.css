@@ -873,3 +873,46 @@
   text-transform: lowercase;
   white-space: nowrap;
 }
+
+/* ── source health ─────────────────────────────────────────────────────────*/
+/* Rows collapse to a status line and open to WHAT / WHY / IMPACT / REMEDY.
+   Progressive disclosure rather than four paragraphs per source: an operator
+   scanning for the red one should not have to read the healthy ones. */
+.service-health section { margin-bottom: 22px; }
+.service-health h4 {
+  margin: 0 0 8px; font-size: var(--fs-nano); letter-spacing: .08em;
+  text-transform: uppercase; color: var(--fg-2);
+}
+.service-row { border-bottom: 1px solid var(--line); }
+.service-row summary {
+  display: grid; align-items: center; gap: 10px; padding: 9px 2px; cursor: pointer;
+  grid-template-columns: auto minmax(0, max-content) auto minmax(0, 1fr);
+}
+.service-row summary::-webkit-details-marker { display: none; }
+.service-row summary strong { font-size: var(--fs-xs); }
+.service-row summary small { color: var(--fg-3); font-size: var(--fs-nano); }
+.service-tier { color: var(--fg-3); font-size: var(--fs-nano); letter-spacing: .04em; }
+.service-explain {
+  display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 4px 14px;
+  margin: 0 0 12px; padding: 10px 12px; border-left: 2px solid var(--line-strong);
+  background: color-mix(in srgb, var(--bg-0) 40%, transparent);
+}
+.service-explain dt {
+  font-size: var(--fs-nano); letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3);
+}
+.service-explain dd { margin: 0; font-size: var(--fs-xs); color: var(--fg-1); }
+.tier-ladder dl { display: grid; gap: 6px; margin: 0 0 10px; }
+.tier-ladder dl > div { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 12px; }
+.tier-ladder dt { color: var(--fg-2); font-size: var(--fs-nano); }
+.tier-ladder dd { margin: 0; color: var(--fg-1); font-size: var(--fs-xs); }
+.tier-ladder p { color: var(--fg-2); font-size: var(--fs-nano); margin: 0; max-width: 62ch; }
+.status-badge.is-unknown { color: var(--fg-3); border-color: var(--line-strong); }
+
+/* Phone. The status line stacks rather than squeezing four columns into 340px. */
+@media (max-width: 640px) {
+  .service-row summary { grid-template-columns: auto minmax(0, 1fr); }
+  .service-row summary small { grid-column: 1 / -1; }
+  .service-explain { grid-template-columns: minmax(0, 1fr); }
+  .service-explain dt { margin-top: 6px; }
+  .tier-ladder dl > div { grid-template-columns: minmax(0, 1fr); }
+}

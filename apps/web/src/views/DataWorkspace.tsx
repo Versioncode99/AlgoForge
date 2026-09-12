@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { Database, ShieldAlert } from 'lucide-react'
+import { Database, Radio, ShieldAlert } from 'lucide-react'
 import { getJson } from '../api'
 import { PanelHead, Stat } from '../components/ui'
 import { HealthMatrix } from '../components/HealthMatrix'
+import { ServiceHealth } from '../components/ServiceHealth'
 import type { DatasetInfo } from '../types'
 
 export function DataWorkspaceView() {
@@ -21,6 +22,12 @@ export function DataWorkspaceView() {
     </div>
     <div className="panel"><PanelHead title="Integrity, measured" meta="computed from the archive on disk, not from the dataset's name"><ShieldAlert /></PanelHead>
       <div className="panel-body"><HealthMatrix /></div>
+    </div>
+    {/* An archive can be sound while the source that feeds it is refusing, and
+      * the two were never shown together. Each row opens to what is wrong, why,
+      * what it stops, and the remedy. */}
+    <div className="panel"><PanelHead title="Sources" meta="whether each one answered, and what this build does not have at all"><Radio /></PanelHead>
+      <div className="panel-body"><ServiceHealth /></div>
     </div>
   </section>
 }
