@@ -22,7 +22,8 @@ from forge.strategy import TEMPLATES
 from forge_api import jsonish
 from forge_api.activity import ActivityLog
 from forge_api.jobs import REGISTRY, JobHandle
-from forge_api.providers import client_for, credential_for, model_for
+from forge_api.model_routing import resolve as resolve_route
+from forge_api.providers import catalog_for, client_for, credential_for, model_for
 from forge_api.settings_store import SettingsStore
 
 # Appended to the second attempt only. Restating the contract on its own line
@@ -234,8 +235,23 @@ class AgentService:
                     for t in TEMPLATES.values()
                 ]
                 current = self.settings.load()
-                model = current.ai.routing.get(role, "")
-                available = current.ai.enabled and model not in {"", "none"}
+                # Routing decides *and explains*. The decision carries which
+                # model was chosen, where the choice came from, and — when the
+                # assigned one could not be served — that a substitution
+                # happened. Recording it is the difference between a settings
+                # screen that reports what ran and one that reports what was
+                # asked for.
+                decision = resolve_route(
+                    role,
+                    current.ai.model_routing,
+                    provider=current.ai.provider,
+                    catalogue=catalog_for(current.ai.provider),
+                )
+                model = decision.model
+                result["routing"] = decision.as_dict()
+                if decision.substituted:
+                    self.log.record("AGENT", f"{skill['label']}: {decision.reason}", "warn")
+                available = current.ai.enabled and decision.available
                 available = available and credential_for(current.ai.provider).present
                 parsed, response = (None, None)
                 if available and self._reserve_call():

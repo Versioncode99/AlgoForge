@@ -460,9 +460,62 @@ def _apply_transform(kind, v, n):
     return NAN
 
 
-def _transform(kind, fn, w, p, shift, n):
+# A transformation reads its source once per offset its window spans, and a
+# window spans up to a few hundred. Recomputing the source each time makes the
+# run quadratic in the window: measured at seven million calls to one session
+# lookup in a single campaign.
+#
+# So a source value is computed once per *bar it belongs to* and kept. That is
+# sound for the same reason the compiled definition's own cache is: a source
+# function bounded at bar `at` is a function of `at` and the arrays, and its
+# value does not change when later bars arrive. A value that did change would
+# be one that had seen them.
+#
+# The cache is discarded whenever the underlying arrays or the parameters
+# change. The array check is an identity comparison against the base array the
+# window is a view of, and the cache holds a reference to it — so the object
+# cannot be collected and its identity cannot be reused by a different array
+# while entries keyed against it survive.
+
+_MISS = object()
+_HOT = {}
+_COLD = {}
+_STATE = {"base": None, "params": None}
+_CACHE_LIMIT = 2048
+
+
+def _reset_if_new(w, p):
+    base = w.closes.base if w.closes.base is not None else w.closes
+    key = tuple(sorted((k, float(v)) for k, v in p.items()))
+    if _STATE["base"] is not base or _STATE["params"] != key:
+        _HOT.clear()
+        _COLD.clear()
+        _STATE["base"] = base
+        _STATE["params"] = key
+
+
+def _cached(name, fn, w, p, shift):
+    at = w.index - shift
+    key = (name, at)
+    value = _HOT.get(key, _MISS)
+    if value is _MISS:
+        value = _COLD.get(key, _MISS)
+        if value is _MISS:
+            value = fn(w, p, shift)
+        _HOT[key] = value
+        if len(_HOT) > _CACHE_LIMIT:
+            _COLD.clear()
+            _COLD.update(_HOT)
+            _HOT.clear()
+    return value
+
+
+def _transform(kind, name, fn, w, p, shift, n):
+    _reset_if_new(w, p)
     need = _t_window(kind, n)
-    values = _np.asarray([fn(w, p, shift + k) for k in range(need - 1, -1, -1)], dtype=float)
+    values = _np.asarray(
+        [_cached(name, fn, w, p, shift + k) for k in range(need - 1, -1, -1)], dtype=float
+    )
     return _apply_transform(kind, values, n)
 
 
@@ -539,8 +592,8 @@ def _py_feature_body(emitter: _Emitter, item: Any) -> list[str]:
         length = _py_operand(emitter, item.args[0], "s") if item.args else "1.0"
         return [
             f"def _f_{item.name}(w, p, s=0):",
-            f'    return _transform("{item.kind}", _f_{item.source}, w, p, {shift}, '
-            f"int({length}))",
+            f'    return _transform("{item.kind}", "{item.source}", _f_{item.source}, '
+            f"w, p, {shift}, int({length}))",
         ]
     template = _PY_FEATURE[item.kind]
     args: dict[str, str] = {"shift": shift}

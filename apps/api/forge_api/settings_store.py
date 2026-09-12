@@ -14,6 +14,15 @@ from pathlib import Path
 from typing import Any
 
 from forge_api.deepseek import resolve_deepseek_credential
+from forge_api.model_routing import (
+    ROLE_KEYS,
+    ROLES_BY_KEY,
+    RoleRouting,
+    RoutingSettings,
+)
+from forge_api.model_routing import (
+    normalise as normalise_routing,
+)
 from forge_api.opencode import resolve_opencode_credential, resolve_opencode_standby
 from forge_api.providers import PROVIDERS, base_url_for, catalog_for, known
 
@@ -71,16 +80,113 @@ ROLES: list[dict[str, str]] = [
 
 @dataclass
 class BudgetSettings:
+    """What a campaign may spend, and whether that ceiling is enforced at all.
+
+    The switch is the point. Budget ceilings are a useful safety mechanism and
+    deleting them would be a regression, but an operator running an overnight
+    campaign on a flat-rate subscription is not protected by a dollar figure
+    that means nothing on their plan — they are interrupted by it.
+
+    So enforcement is explicit. With ``enforced`` off, no research ceiling stops
+    a campaign and the interface says so plainly; the accounting keeps running,
+    because knowing what was spent is useful whether or not anything stops.
+
+    **System safety limits are not budget** and do not live here. Concurrency
+    caps, per-response token limits, request timeouts, the provider restriction
+    and the agent ceiling are in force regardless of this switch, because they
+    are about what this process can survive rather than what the research is
+    worth. `SAFETY_LIMITS` states them so the distinction is visible rather
+    than asserted.
+    """
+
+    #: Master switch. Off means no research ceiling is applied.
+    enforced: bool = True
     daily_usd_hard: float = 12.0
     daily_usd_soft: float = 9.0
     monthly_usd_hard: float = 300.0
     per_session_usd: float = 1.50
     halt_on_breach: bool = True
+    #: Research ceilings, applied only while `enforced` is true. Zero means "no
+    #: ceiling on this dimension" even when enforcement is on, so an operator
+    #: can cap model calls without capping experiments.
+    campaign_experiments: int = 0
+    model_calls_per_day: int = 0
+    wall_clock_minutes: int = 0
+    backtests_per_campaign: int = 0
+    external_research_per_day: int = 0
+
+    def limit(self, name: str) -> int:
+        """The ceiling on one dimension, or 0 for none.
+
+        Returns 0 for everything when enforcement is off, which is the whole
+        behavioural difference and is asserted by a test rather than left to
+        each caller to remember.
+        """
+        if not self.enforced:
+            return 0
+        return max(0, int(getattr(self, name, 0) or 0))
+
+
+#: Limits that hold whatever the budget switch says, and why each one exists.
+#:
+#: Stated as data so the settings screen can show the operator exactly what
+#: turning enforcement off does *not* turn off. A list of promises in prose
+#: would drift; this is read by the endpoint that renders it.
+SAFETY_LIMITS: list[dict[str, Any]] = [
+    {
+        "key": "model_concurrency",
+        "label": "Concurrent model requests",
+        "value": "2",
+        "why": "More in flight than the provider accepts returns errors, not answers.",
+    },
+    {
+        "key": "response_tokens",
+        "label": "Response token ceiling",
+        "value": "1,600",
+        "why": "A model that never stops talking holds a worker until it times out.",
+    },
+    {
+        "key": "request_timeout",
+        "label": "Request timeout",
+        "value": "180s",
+        "why": "An unbounded wait is a worker that never comes back.",
+    },
+    {
+        "key": "retrieval_timeout",
+        "label": "External retrieval timeout and size cap",
+        "value": "20s / 2 MB",
+        "why": "A slow or enormous response is a hung research worker.",
+    },
+    {
+        "key": "agent_ceiling",
+        "label": "Maximum research agents",
+        "value": "64",
+        "why": "Past this the scheduling costs more than the research.",
+    },
+    {
+        "key": "provider_restriction",
+        "label": "Provider restriction",
+        "value": "the one you selected",
+        "why": "No call is ever routed to a provider you did not choose.",
+    },
+    {
+        "key": "permissions",
+        "label": "Action permissions",
+        "value": "unchanged",
+        "why": (
+            "What an assistant may do is a pure function of who is asking, the mode, "
+            "the stance and the action. No budget setting is an input to it."
+        ),
+    },
+]
 
 
 # Roles mapped onto real models by cost profile and monthly allowance, which is
 # the whole point of routing. The reasoning jobs are rare enough to afford a
 # frontier model; the constant ones go to the cheapest thing with headroom.
+#
+# The research agent roles get their defaults from `DEFAULT_AGENT_ROUTING`
+# below, by the demand each one carries, rather than being listed twice.
 DEFAULT_ROUTING: dict[str, str] = {
     # Planning needs instruction-following, not reasoning depth. Measured on the
     # real planner prompt: deepseek-v4-pro, glm-5.3, glm-5.3-flash and qwen3.8-max
@@ -105,16 +211,75 @@ class AISettings:
     enabled: bool = True
     provider: str = "opencode_go"
     base_url: str = "https://opencode.ai/zen/go/v1"
+    #: The flat role-to-model mapping, kept because it is what the existing
+    #: callers read. `model_routing` is the richer form on top of it, and
+    #: `_sync_routing` keeps the two from disagreeing.
     routing: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ROUTING))
+    #: Mode, defaults, fallbacks, per-role critics, and the research agent roles
+    #: the flat mapping never covered.
+    model_routing: RoutingSettings = field(default_factory=lambda: default_routing())
     budget: BudgetSettings = field(default_factory=BudgetSettings)
+
+
+#: Source categories external research may draw on, and what each one is.
+#: A closed list: the retrieval layer reaches fixed, credential-free indexes,
+#: and an operator choosing a category is choosing among those rather than
+#: naming a site for something to go and fetch.
+SOURCE_CATEGORIES: list[dict[str, str]] = [
+    {
+        "key": "preprints",
+        "label": "Preprints (arXiv q-fin)",
+        "detail": "Quantitative finance preprints. Where most of this work appears first.",
+    },
+    {
+        "key": "journals",
+        "label": "Journals and DOI metadata (Crossref)",
+        "detail": "Published articles across publishers, reached through their DOIs.",
+    },
+]
+
+FRESHNESS: list[dict[str, str]] = [
+    {"key": "any", "label": "Any", "detail": "Age is not weighed. Foundational work ranks too."},
+    {
+        "key": "recent",
+        "label": "Prefer recent",
+        "detail": "Newer work ranks higher, without excluding older work.",
+    },
+    {
+        "key": "current",
+        "label": "Current only",
+        "detail": "Published in the last five years. Narrow, and it will find less.",
+    },
+]
+
+DEPTHS: list[dict[str, str]] = [
+    {"key": "shallow", "label": "Shallow", "detail": "Three results per topic. Fastest."},
+    {"key": "standard", "label": "Standard", "detail": "Six results per topic."},
+    {"key": "deep", "label": "Deep", "detail": "Ten results per topic. Slowest, and the cap."},
+]
+
+#: Results kept per topic at each depth.
+DEPTH_RESULTS: dict[str, int] = {"shallow": 3, "standard": 6, "deep": 10}
 
 
 @dataclass
 class ResearchLoopSettings:
-    """Cadence for evidence intake while the desktop API is running."""
+    """Cadence and reach for evidence intake while the desktop API is running.
+
+    External research is **on by default**. The retrieval layer has no credential
+    and no arbitrary-URL fetch: it searches two fixed public indexes and stores
+    what they return, with the provenance a citation needs. A failed retrieval is
+    recorded as a failure — there is no path in this application that invents a
+    paper — so defaulting it on costs an operator a network call and buys the
+    research engine an input it otherwise has to do without.
+    """
 
     enabled: bool = True
     interval_minutes: int = 60
+    #: Which indexes may be searched. Empty is treated as every category.
+    categories: list[str] = field(default_factory=lambda: ["preprints", "journals"])
+    freshness: str = "recent"
+    depth: str = "standard"
     topics: list[str] = field(
         default_factory=lambda: [
             "intraday futures momentum transaction costs",
@@ -193,6 +358,36 @@ class AppearanceSettings:
     sound_volume: float = 0.35
 
 
+#: The model each demand band gets when nothing is assigned. Three ids, and a
+#: research role picks the one its own demand names — so adding a role does not
+#: mean adding a line to a table somebody has to remember to update.
+DEFAULT_BY_DEMAND: dict[str, str] = {
+    "reasoning": "deepseek-v4-pro",
+    "balanced": "deepseek-v4-flash",
+    "bulk": "mimo-v2.5",
+}
+
+
+def default_routing() -> RoutingSettings:
+    """Every role assigned, by what its job needs.
+
+    Built rather than written out, so a role added to `model_routing.ROLES`
+    arrives configured instead of silently unassigned — which would fall through
+    to the default and look, on the settings screen, like a deliberate choice.
+    """
+    roles: dict[str, RoleRouting] = {}
+    for key in ROLE_KEYS:
+        role = ROLES_BY_KEY[key]
+        chosen = DEFAULT_ROUTING.get(key) or DEFAULT_BY_DEMAND.get(role.demand.value, "")
+        roles[key] = RoleRouting(model=chosen, fallback=DEFAULT_BY_DEMAND["balanced"])
+    return RoutingSettings(
+        mode="hybrid",
+        default_model=DEFAULT_BY_DEMAND["balanced"],
+        fallback_model=DEFAULT_BY_DEMAND["balanced"],
+        roles=roles,
+    )
+
+
 @dataclass
 class Settings:
     ai: AISettings = field(default_factory=AISettings)
@@ -220,6 +415,49 @@ def _one_of(value: Any, options: list[dict[str, str]], fallback: str) -> str:
     keys = {item["key"] for item in options}
     text = str(value or "")
     return text if text in keys else fallback
+
+
+def _categories(raw: Any, fallback: list[str]) -> list[str]:
+    """Source categories, dropping any the retrieval layer does not have.
+
+    An unknown category is not an error and must not fail the load, but it must
+    not survive either: a category nothing searches would show as enabled on the
+    settings screen while contributing nothing.
+    """
+    known = {item["key"] for item in SOURCE_CATEGORIES}
+    if not isinstance(raw, list):
+        return list(fallback)
+    kept = [str(item) for item in raw if str(item) in known]
+    return kept or list(fallback)
+
+
+def _merge_routing(routing: RoutingSettings, flat: dict[str, str]) -> RoutingSettings:
+    """Fill the rich routing from the flat mapping, and from the defaults.
+
+    The flat `routing` mapping is what the existing callers read and what older
+    settings files carry. Treating it as the source for the roles it covers means
+    an operator's existing choices survive this change; everything it never
+    covered — every research agent role — arrives at its default rather than
+    unset, which on the settings screen would look like a deliberate blank.
+    """
+    base = default_routing()
+    merged: dict[str, RoleRouting] = {}
+    for key in ROLE_KEYS:
+        stored = routing.roles.get(key, RoleRouting())
+        fallback_entry = base.roles[key]
+        merged[key] = RoleRouting(
+            model=stored.model or flat.get(key, "") or fallback_entry.model,
+            fallback=stored.fallback or fallback_entry.fallback,
+            critic=stored.critic,
+            enabled=stored.enabled,
+        )
+    return RoutingSettings(
+        mode=routing.mode,
+        default_model=routing.default_model or base.default_model,
+        fallback_model=routing.fallback_model or base.fallback_model,
+        allowed=list(routing.allowed),
+        roles=merged,
+    )
 
 
 def _appearance(raw: Any) -> AppearanceSettings:
@@ -253,7 +491,18 @@ class SettingsStore:
         except Exception:
             return Settings()
         ai_raw = raw.get("ai", {})
-        budget = BudgetSettings(**{**asdict(BudgetSettings()), **ai_raw.get("budget", {})})
+        stored_budget = ai_raw.get("budget", {})
+        stored_budget = stored_budget if isinstance(stored_budget, dict) else {}
+        known_budget = set(asdict(BudgetSettings()))
+        budget = BudgetSettings(
+            **{
+                **asdict(BudgetSettings()),
+                # A settings file written before a field existed carries fewer
+                # keys; one written after a field was removed carries more, and
+                # passing an unknown key raises. Neither should stop the load.
+                **{k: v for k, v in stored_budget.items() if k in known_budget},
+            }
+        )
         routing = {**AISettings().routing, **ai_raw.get("routing", {})}
         routing = {role: MODEL_MIGRATIONS.get(model, model) for role, model in routing.items()}
         # Settings written before the provider collapse still carry OmniRoute's
@@ -270,11 +519,16 @@ class SettingsStore:
         # than failing the load; the endpoint is derived from the id, never read
         # from the file, so a stale base_url cannot survive a rename.
         provider = known(str(ai_raw.get("provider", "opencode_go")))
+        model_routing = normalise_routing(
+            ai_raw.get("model_routing"), known_models={m["id"] for m in KNOWN_MODELS}
+        )
+        model_routing = _merge_routing(model_routing, routing)
         ai = AISettings(
             enabled=bool(ai_raw.get("enabled", True)),
             provider=provider,
             base_url=base_url_for(provider),
             routing=routing,
+            model_routing=model_routing,
             budget=budget,
         )
         loop_raw = raw.get("research_loop", {})
@@ -291,6 +545,9 @@ class SettingsStore:
                     5,
                     min(1440, int(loop_raw.get("interval_minutes", defaults.interval_minutes))),
                 ),
+                categories=_categories(loop_raw.get("categories"), defaults.categories),
+                freshness=_one_of(loop_raw.get("freshness"), FRESHNESS, defaults.freshness),
+                depth=_one_of(loop_raw.get("depth"), DEPTHS, defaults.depth),
                 topics=[str(topic).strip()[:240] for topic in topics if str(topic).strip()][:12]
                 or defaults.topics,
             ),

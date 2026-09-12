@@ -77,6 +77,8 @@ class AgentRole(StrEnum):
     DISCOVERY = "DISCOVERY"
     #: Retrieve academic and industry evidence, with citations kept.
     LITERATURE = "LITERATURE"
+    #: Turn retrieved claims into mechanisms and research questions.
+    SYNTHESIS = "SYNTHESIS"
     #: Investigate feature and signal constructions.
     FEATURE = "FEATURE"
     #: Generate falsifiable hypotheses.
@@ -115,6 +117,10 @@ ELIGIBLE = frozenset({AgentState.STARTING, AgentState.RUNNING, AgentState.IDLE, 
 ROLE_PURPOSE: dict[AgentRole, str] = {
     AgentRole.DISCOVERY: "Proposes mechanisms nothing on record already claims.",
     AgentRole.LITERATURE: "Retrieves published evidence and keeps its provenance.",
+    AgentRole.SYNTHESIS: (
+        "Reads what was retrieved and turns a claim into a research question this "
+        "engine can construct."
+    ),
     AgentRole.FEATURE: "Investigates how a signal is constructed, not how it is tuned.",
     AgentRole.HYPOTHESIS: "Turns a mechanism into a claim that can be shown false.",
     AgentRole.FALSIFICATION: "Attacks the candidates that look best.",
@@ -130,6 +136,10 @@ ROLE_PURPOSE: dict[AgentRole, str] = {
 ROLE_BUCKETS: dict[AgentRole, tuple[str, ...]] = {
     AgentRole.DISCOVERY: ("DISCOVER_FAMILY", "EXPLORE_HYPOTHESIS"),
     AgentRole.LITERATURE: ("DISCOVER_FAMILY",),
+    # Synthesis is where a retrieved claim becomes an open question, so it draws
+    # from the bucket that admits new questions rather than the one that
+    # proposes new families: a paper is a reason to ask, not a family.
+    AgentRole.SYNTHESIS: ("EXPLORE_HYPOTHESIS", "DISCOVER_FAMILY"),
     # Composing a construction, and changing the *structure* of one that
     # exists. `BUCKET_KIND` makes this exact: DISCOVER_FAMILY produces
     # SearchKind.FAMILY and ADVANCE_PROMISING produces SearchKind.STRUCTURAL,
@@ -166,6 +176,7 @@ def default_roles(count: int) -> tuple[AgentRole, ...]:
         AgentRole.VALIDATION,
         AgentRole.LITERATURE,
         AgentRole.REVIEWER,
+        AgentRole.SYNTHESIS,
     )
     if count <= 0:
         return ()

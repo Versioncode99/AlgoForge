@@ -38,7 +38,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from forge.research.grammar import OBSERVABLES, ConstructionSpec, build
+from forge.research.grammar import (
+    OBSERVABLES,
+    SIGNATURE_PREFIX,
+    ConstructionSpec,
+    build,
+)
 from forge.strategy.ir import (
     Arithmetic,
     Combine,
@@ -57,6 +62,7 @@ from forge.strategy.ir import (
     StrategyDefinition,
 )
 from forge.strategy.models import ParameterSpec
+from forge.strategy.primitives import primitive
 
 #: The reference instant stamped on generated definitions' provenance. Fixed so
 #: that the same composition hashes identically across processes — a discovery
@@ -123,6 +129,13 @@ class Archetype:
     #: True when the effect is claimed to persist rather than revert, which
     #: decides whether a trailing exit or a fixed target is coherent with it.
     continuation: bool = True
+    #: Set when this archetype was *assembled* by `forge.research.grammar`
+    #: rather than written out below. Carries the grammar's structural
+    #: signature, so an assembled construction has an identity the novelty gate
+    #: can compare without anybody re-deriving it from the rendered condition.
+    construction: dict[str, Any] | None = None
+    #: The mechanism key, when one was chosen from the mechanism vocabulary.
+    mechanism_key: str = ""
 
     def feature_names(self) -> frozenset[str]:
         return frozenset(f.kind for f in self.features)
@@ -991,6 +1004,8 @@ def compose(
         exit_style=exit_style,
         seed=seed,
         features=frozenset(f.kind for f in arch.features),
+        construction=arch.construction,
+        mechanism=arch.mechanism_key,
     )
 
 
@@ -1039,6 +1054,49 @@ def required_data(archetypes: Sequence[Archetype | str]) -> tuple[str, ...]:
 # for it to take.
 
 
+def archetype_from_spec(spec: ConstructionSpec, *, key: str = "") -> Archetype:
+    """An assembled construction, wearing the archetype shape the pipeline uses.
+
+    This is the join between the two halves of the vocabulary, and it is
+    deliberately a *conversion* rather than a second route. An assembled
+    construction becomes a real :class:`Archetype`, so everything downstream —
+    ``compose``, the template store, the novelty gate, the frontier, the
+    campaign record — runs exactly the code it already ran. There is no parallel
+    pipeline for an assembled strategy to take, and therefore no second set of
+    protections to keep in step.
+
+    Risk is sized in ATR whatever the signal reads, so a construction that
+    observes no volatility still has a stop in a unit that means something. The
+    feature is added here under the name the exits already expect.
+    """
+    built = build(spec)
+    mechanism = built.mechanism
+    features = built.features
+    if not any(item.name == "atr" for item in features):
+        features = (*features, Feature(name="atr", kind="atr", args=(Constant(value=14),)))
+    claim = (
+        f"When {built.description}, {{direction}} follow-through is expected because "
+        f"{mechanism.claim[0].lower()}{mechanism.claim[1:]}"
+    )
+    return Archetype(
+        key=key or f"grammar_{spec.shape}_{spec.signature[:SIGNATURE_PREFIX]}",
+        label=spec.label[:110],
+        family=_family_for(built),
+        mechanism=mechanism.claim,
+        claim=claim,
+        prediction=mechanism.describe(OBSERVABLES[spec.observable].label.lower()),
+        features=features,
+        parameters=built.parameters,
+        long_condition=built.long,
+        short_condition=built.short,
+        required_data=tuple(sorted({primitive(f.kind).data_requirement for f in features})),
+        risk_feature="atr",
+        continuation=mechanism.stance == "continuation",
+        construction={**spec.as_dict(), "signature": spec.signature, "label": spec.label},
+        mechanism_key=mechanism.key,
+    )
+
+
 def compose_construction(
     spec: ConstructionSpec,
     *,
@@ -1052,110 +1110,51 @@ def compose_construction(
     derived_from: str = "grammar",
     note: str = "",
 ) -> Composition:
-    """Turn an assembled construction into an executable definition.
+    """Compose an executable definition from an assembled construction.
 
-    The exit is chosen to be *coherent with the mechanism's stance* rather than
-    drawn freely: a continuation claim gets a trail or a time stop, because a
-    fixed target caps exactly the outcome it predicts, and a reversion claim
-    gets a target at the level it says price returns to. An exit that
-    contradicts the claim makes the result a measurement of the exit.
+    A thin wrapper on :func:`compose`, and that is the point: the exit choice,
+    the session gate, the parameter merge and the provenance are the same code
+    whether the signal was selected or assembled.
     """
-    built = build(spec)
-    rng = random.Random(seed)
-
-    direction = direction or rng.choice(("both", "long", "short"))
-    if direction not in {"both", "long", "short"}:
-        raise SynthesisError(f"Unknown direction '{direction}'.")
-    session = session if session is not None else rng.choice(("", "", *SESSIONS))
-    if session and session not in SESSIONS:
-        raise SynthesisError(f"Unknown session '{session}'. Known: {', '.join(SESSIONS)}.")
-    continuation = built.mechanism.stance == "continuation"
-    exit_style = exit_style or (
-        rng.choice(("trailing", "time_stop", "session_flat"))
-        if continuation
-        else rng.choice(("atr_bracket", "time_stop"))
-    )
-    if exit_style not in EXIT_STYLES:
-        raise SynthesisError(f"Unknown exit style '{exit_style}'.")
-
-    # Risk is sized in ATR whatever the signal reads, so a construction that
-    # observes no volatility still has a stop in a unit that means something.
-    # Declared under a reserved name the grammar never uses.
-    features = (*built.features, Feature(name="risk_atr", kind="atr", args=(Constant(value=14),)))
-
-    exit_rules, exit_params = _exit_rules_for(exit_style, "risk_atr")
-
-    window = None
-    if session:
-        start, end, label = SESSIONS[session]
-        window = SessionWindow(start_minute=start, end_minute=end, label=label)
-
-    entry = EntryRules(
-        long=built.long if direction in {"both", "long"} else None,
-        short=built.short if direction in {"both", "short"} else None,
-        session=window,
-    )
-
-    stated = {"both": "directional", "long": "upward", "short": "downward"}[direction]
-    claim = (
-        f"When {built.description}, {stated} follow-through is expected because "
-        f"{built.mechanism.claim[0].lower()}{built.mechanism.claim[1:]}"
-    )
-    if session:
-        claim += f" Tested only inside the {SESSIONS[session][2]} window."
-
-    by_name: dict[str, ParameterSpec] = {p.name: p for p in exit_params}
-    by_name.update({p.name: p for p in built.parameters})
-
-    definition = StrategyDefinition(
-        name=f"{spec.label[:100]} · {symbol}",
-        family=family or _family_for(built),
+    return compose(
+        archetype=archetype_from_spec(spec),
+        family=family,
         symbol=symbol,
         timeframe=timeframe,
-        hypothesis=claim,
-        falsifiable_prediction=built.mechanism.describe(
-            OBSERVABLES[spec.observable].label.lower()
-        ),
-        features=features,
-        entry=entry,
-        exit=exit_rules,
-        parameters=tuple(by_name.values()),
-        execution=ExecutionAssumptions(),
-        provenance=DefinitionProvenance(
-            author="algoforge-research",
-            created_at=SYNTHESIS_EPOCH,
-            derived_from=derived_from,
-            note=note or built.mechanism.claim[:400],
-        ),
-    )
-    return Composition(
-        definition=definition,
-        archetype=f"grammar:{spec.shape}",
+        seed=seed,
         direction=direction,
         session=session,
         exit_style=exit_style,
-        seed=seed,
-        features=frozenset(f.kind for f in features),
-        construction={**spec.as_dict(), "signature": spec.signature, "label": spec.label},
-        mechanism=built.mechanism.key,
+        derived_from=derived_from,
+        note=note,
     )
 
 
-#: Mechanism categories mapped onto the family vocabulary the rest of the system
+#: Feature categories mapped onto the family vocabulary the rest of the system
 #: already uses. A construction reading volatility belongs in the volatility
 #: family whether it was selected or assembled, so the two halves of the
 #: vocabulary land in the same catalogue rather than beside it.
+#:
+#: Every value here is a key in `forge.strategy.families.BUILTIN_FAMILIES`, and
+#: a test asserts it. A family the registry has never heard of does not fail at
+#: composition — it fails later, when the template store refuses the write, and
+#: the campaign records a cycle error for a construction that was fine.
 _FAMILY_BY_CATEGORY: tuple[tuple[str, str], ...] = (
     ("session", "session_structure"),
     ("volatility", "volatility"),
     ("momentum", "momentum"),
-    ("trend", "trend_following"),
+    ("trend", "momentum"),
     ("volume", "liquidity"),
-    ("microstructure", "liquidity"),
+    ("microstructure", "microstructure"),
     ("oscillator", "mean_reversion"),
     ("range", "breakout"),
-    ("price", "price_action"),
+    ("price", "breakout"),
 )
+
+#: Where a construction lands when nothing else matches. Breakout rather than a
+#: new name, because inventing a family here would put a key in the catalogue
+#: that the registry refuses.
+_DEFAULT_FAMILY = "breakout"
 
 
 def _family_for(built: Any) -> str:
@@ -1164,45 +1163,32 @@ def _family_for(built: Any) -> str:
     for category, family in _FAMILY_BY_CATEGORY:
         if category in built.categories:
             return family
-    return "price_action"
+    return _DEFAULT_FAMILY
 
 
-def _exit_rules_for(style: str, risk_feature: str) -> tuple[ExitRules, tuple[ParameterSpec, ...]]:
-    """The same four exits the archetypes use, sized off a named risk feature."""
-    stop = Level(kind="feature", multiple=ParamRef(name="stop_atr"), feature=risk_feature)
-    extra: list[ParameterSpec] = [
-        _p("stop_atr", 2.0, 0.5, 6.0, 0.25, "Stop distance in ATR."),
-        _p("max_bars", 30, 5, 240, 5, "Hard time stop, in bars."),
-    ]
-    if style == "trailing":
-        extra.append(_p("trail_atr", 2.0, 0.5, 6.0, 0.25, "Trailing distance in ATR."))
-        return (
-            ExitRules(
-                stop=stop,
-                trailing=Level(
-                    kind="feature", multiple=ParamRef(name="trail_atr"), feature=risk_feature
-                ),
-                max_bars=ParamRef(name="max_bars"),
-            ),
-            tuple(extra),
-        )
-    if style == "time_stop":
-        return ExitRules(stop=stop, max_bars=ParamRef(name="max_bars")), tuple(extra)
-    if style == "session_flat":
-        return (
-            ExitRules(
-                stop=stop, max_bars=ParamRef(name="max_bars"), flat_by_minute=NEW_YORK_FLAT
-            ),
-            tuple(extra),
-        )
-    extra.append(_p("target_atr", 3.0, 0.5, 10.0, 0.25, "Target distance in ATR."))
-    return (
-        ExitRules(
-            stop=stop,
-            target=Level(
-                kind="feature", multiple=ParamRef(name="target_atr"), feature=risk_feature
-            ),
-            max_bars=ParamRef(name="max_bars"),
-        ),
-        tuple(extra),
-    )
+#: Where an assembled archetype's key starts. Used to recover the structural
+#: signature from a generated template's key after a restart, so a campaign
+#: resumed later does not re-propose constructions it already built.
+GRAMMAR_KEY_PREFIX = "grammar_"
+
+
+def signature_from_key(key: str) -> str:
+    """The structural signature prefix inside an assembled archetype's key, if any.
+
+    A generated template is named for the archetype it came from, and an
+    assembled archetype is named for its own signature. That makes the template
+    catalogue on disk a durable record of which constructions a campaign has
+    already built — which is the only record that survives a restart, and
+    therefore the only one that can stop a resumed campaign proposing its own
+    earlier work and being refused for it.
+    """
+    marker = key.find(GRAMMAR_KEY_PREFIX)
+    if marker < 0:
+        return ""
+    parts = key[marker + len(GRAMMAR_KEY_PREFIX) :].split("_")
+    # shape names contain underscores, so the signature is the last part that
+    # looks like one: hex, and exactly the prefix length.
+    for part in reversed(parts):
+        if len(part) == SIGNATURE_PREFIX and all(c in "0123456789abcdef" for c in part):
+            return part
+    return ""

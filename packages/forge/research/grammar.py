@@ -46,6 +46,7 @@ from __future__ import annotations
 import random
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from functools import cache
 from typing import Any, Literal
 
 from forge.contracts.hashing import content_hash
@@ -66,6 +67,12 @@ from forge.strategy.primitives import SERIES_KINDS, primitive
 
 class GrammarError(ValueError):
     """A construction could not be assembled. The message says which slot failed."""
+
+
+#: How much of a structural signature is carried in a generated template's key.
+#: Long enough that a collision is not a practical concern, short enough that
+#: the key stays inside the store's length limit.
+SIGNATURE_PREFIX = 10
 
 
 # ── units ────────────────────────────────────────────────────────────────────
@@ -206,7 +213,7 @@ OBSERVABLES: dict[str, Observable] = {
         _o("upside_vol", "upside_vol", "return", "volatility", (30, 10, 180, 5)),
         _o("downside_vol", "downside_vol", "return", "volatility", (30, 10, 180, 5)),
         _o("volume", "volume", "volume", "volume"),
-        _o("avg_volume", "volume_sma", "volume", "volume", (30, 10, 240, 10)),
+        _o("avg_volume", "volume_sma", "volume", "volume", (30, 10, 180, 10)),
         _o(
             "signed_volume", "signed_volume", "volume", "microstructure", signed=True,
             directional=True,
@@ -215,13 +222,13 @@ OBSERVABLES: dict[str, Observable] = {
             "clv", "clv", "ratio", "microstructure", signed=True, directional=True,
             level_range=(0.3, -0.8, 0.8, 0.1),
         ),
-        _o("roc", "roc", "return", "momentum", (20, 3, 240, 1), signed=True, directional=True),
+        _o("roc", "roc", "return", "momentum", (20, 3, 180, 1), signed=True, directional=True),
         _o(
             "variance_ratio", "variance_ratio", "ratio", "momentum", (5, 2, 30, 1),
             level_range=(1.2, 0.4, 2.5, 0.1),
         ),
         _o(
-            "autocorr", "return_autocorr", "ratio", "momentum", (40, 10, 240, 5), signed=True,
+            "autocorr", "return_autocorr", "ratio", "momentum", (40, 10, 180, 5), signed=True,
             level_range=(0.1, -0.5, 0.5, 0.05),
         ),
         _o(
@@ -230,10 +237,10 @@ OBSERVABLES: dict[str, Observable] = {
         ),
         _o("adx", "adx", "index", "trend", (14, 7, 40, 1)),
         _o("rsi", "rsi", "index", "oscillator", (14, 5, 40, 1)),
-        _o("sma", "sma", "price", "trend", (20, 5, 300, 5)),
-        _o("ema", "ema", "price", "trend", (20, 5, 200, 5)),
-        _o("rolling_high", "highest", "price", "range", (20, 5, 240, 5)),
-        _o("rolling_low", "lowest", "price", "range", (20, 5, 240, 5)),
+        _o("sma", "sma", "price", "trend", (20, 5, 200, 5)),
+        _o("ema", "ema", "price", "trend", (20, 5, 90, 5)),
+        _o("rolling_high", "highest", "price", "range", (20, 5, 180, 5)),
+        _o("rolling_low", "lowest", "price", "range", (20, 5, 180, 5)),
         _o("session_vwap", "session_vwap", "price", "session"),
         _o("session_vwap_sd", "session_vwap_sd", "price_distance", "session"),
         _o("session_high", "session_high", "price", "session"),
@@ -280,7 +287,13 @@ _SPREAD_UNIT: dict[str, str] = {"price": "price_distance"}
 #: Windows a transformation is offered at: (default, low, high, step). Longer
 #: than the observation underneath it on purpose — a z-score over twenty values
 #: is noise, and the point of the transformation is a *distribution*.
-TRANSFORM_WINDOW: tuple[int, int, int, int] = (100, 20, 400, 10)
+#:
+#: The upper bound is the one that costs something. Warmup is derived from a
+#: parameter's declared *maximum*, because the first candidate of a sweep must
+#: not run against undefined features, and warmup is subtracted from every
+#: partition a campaign can test on. A window nobody would sweep to is therefore
+#: bars nobody gets to use.
+TRANSFORM_WINDOW: tuple[int, int, int, int] = (100, 20, 240, 10)
 
 #: Transformations whose result only means something over a signed source.
 #: `persistence` counts the share above zero, so over an always-positive source
@@ -1037,7 +1050,9 @@ def _build_divergence(
     parameters.append(
         _length_param(
             "long_length",
-            (max(bounds[0] * 4, bounds[1] + 1), bounds[1] + 1, bounds[2] * 4, bounds[3]),
+            # Three times, not four. The long horizon's *maximum* is what sizes
+            # the warmup, and warmup is bars nobody gets to test on.
+            (max(bounds[0] * 3, bounds[1] + 1), bounds[1] + 1, min(bounds[2] * 3, 400), bounds[3]),
             f"Long horizon of {observable.label}.",
         )
     )
@@ -1248,6 +1263,7 @@ def _gate_candidates() -> tuple[GateOption, ...]:
 GATE_CANDIDATES: tuple[GateOption, ...] = _gate_candidates()
 
 
+@cache
 def candidates_for(shape: str) -> tuple[ConstructionSpec, ...]:
     """Every structurally distinct trigger this shape can carry, gate aside.
 
@@ -1255,6 +1271,11 @@ def candidates_for(shape: str) -> tuple[ConstructionSpec, ...]:
     full product with gates and stances is large enough that materialising it
     would be the compute bill Part 6 warns about. This is the slice a sampler
     draws from.
+
+    Cached because the answer is a pure function of the vocabulary and building
+    it assembles about a thousand constructions. A sampler calls this once per
+    attempt and may make dozens of attempts per cycle, so recomputing it turned
+    a draw into a tenth of a second of work that produced nothing new.
     """
     form = SHAPES[shape]
     out: list[ConstructionSpec] = []
@@ -1317,6 +1338,13 @@ class DrawConstraints:
     """
 
     #: Structural signatures already tried. Drawn against, not merely recorded.
+    #:
+    #: A full signature or a :data:`SIGNATURE_PREFIX`-length prefix of one both
+    #: work. The prefix form exists because a generated template's key carries
+    #: the prefix and survives a restart, while an in-memory record of what a
+    #: campaign has proposed does not: a campaign resumed after a restart that
+    #: could not see its own prior constructions would propose them again and
+    #: be refused, which is the "activity without progress" failure one level up.
     exclude_signatures: frozenset[str] = frozenset()
     #: Shapes the campaign is interested in. Empty means all of them.
     shapes: tuple[str, ...] = ()
@@ -1372,7 +1400,10 @@ def draw(
         except (GrammarError, KeyError):
             continue
         spec = built.spec
-        if spec.signature in limits.exclude_signatures:
+        if (
+            spec.signature in limits.exclude_signatures
+            or spec.signature[:SIGNATURE_PREFIX] in limits.exclude_signatures
+        ):
             continue
         if limits.mechanisms and built.mechanism.key not in limits.mechanisms:
             continue

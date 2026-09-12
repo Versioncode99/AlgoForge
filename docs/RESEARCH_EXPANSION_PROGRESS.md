@@ -90,9 +90,12 @@ from another declared feature's own history).
 
 | | Before | After |
 | --- | --- | --- |
-| IR feature kinds | 21 | **48** |
-| — observations | 21 | 36 |
+| IR feature kinds | 21 | **47** |
+| — observations | 21 | 35 |
 | — transformations | 0 | 12 |
+
+*(The commit message for this phase says 48. The measured figure is 47 — 35
+observations and 12 transformations. `scripts/measure_vocabulary.py` prints it.)*
 
 New observations: `typical_price`, `bar_range`, `true_range`, `gap`, `clv`,
 `signed_volume`, `upside_vol`, `downside_vol`, `efficiency_ratio`,
@@ -162,9 +165,156 @@ the session start is resolved lazily and only when a session feature asks.
 
 ---
 
+---
+
+## Phase 2 — mechanism vocabulary (complete)
+
+New module `packages/forge/research/mechanisms.py`: **12 mechanisms**, each
+carrying a claim, a falsifiable prediction written against the observation the
+construction actually made, the feature categories a signal must read to be
+testing it, what a failure rules out and what it leaves open, a **stance**
+(continuation or reversion) and a **reading** (which end of its own distribution
+the claim is about).
+
+The last two are not labels. Stance decides whether a trailing exit or a fixed
+target is coherent with the claim — a fixed target caps exactly what a
+continuation claim predicts, and then the result measures the exit. Reading is
+what stops "quiet stretches cluster" being attached to a signal that only fires
+when volatility is loud: the prediction would ask for a comparison across a
+split the sample never straddles.
+
+## Phase 3 — the composition grammar (complete)
+
+New module `packages/forge/research/grammar.py`. A construction is assembled
+rather than selected:
+
+    OBSERVABLE -> TRANSFORMATION -> SHAPE -> STANCE -> REGIME GATE -> SIGNAL
+
+| Measured | Before | After |
+| --- | --- | --- |
+| Distinct entry signatures | 10 | — |
+| Distinct triggers | — | **1,113** |
+| Gate candidates | 0 | 183 |
+| Reachable structural signatures | 10 | **408,471** |
+| Observables | — | 31 |
+| Shapes | — | 5 |
+
+Size alone would be worthless, so most of the module is refusals:
+
+* **Units must agree.** A shape states the unit each slot needs. A scale-
+  dependent reading cannot meet a scalar threshold, so "ATR above 3" is not
+  expressible and "ATR in the top decile of its own last two hundred" is. A
+  standard deviation of price is measured in price and is still not a price that
+  can be crossed, so it carries its own unit.
+* **A trigger must be directional.** "Long when the ATR percentile is high,
+  short when it is low" has a signal on every bar and makes no claim about
+  direction. Magnitude readings can gate a signal; they cannot be one. A
+  threshold's short leg is stated against the unit's *neutral point* rather than
+  by flipping the long leg's comparison, because the flip gives a short that is
+  true almost always.
+* **A signal must be able to see its own mechanism**, in both category and
+  reading.
+
+### Not a parallel pipeline
+
+`synthesis.archetype_from_spec` converts an assembled construction into a real
+`Archetype`, so `compose`, the template store, the static guard, the smoke test,
+the novelty gate, the frontier and the campaign record all run the code they
+already ran. There is no second route for an assembled strategy to take and
+therefore no second set of protections to keep in step.
+
+### Wired into the director
+
+`ResearchDirector._pick_archetype` and `_archetype_for_item` now draw from both
+halves. The ten written archetypes are the curated seeds and are tried first;
+past them, `ASSEMBLED_SHARE = 0.75` of draws are assembled. Signatures already
+built are excluded, recovered from two places: the in-memory attribution record,
+and **the generated template's own key**, which carries the signature prefix and
+survives a restart. Without the second, a resumed campaign re-proposes its own
+earlier work and the gate refuses it — activity with no progress.
+
+### Defects found by the integration
+
+5. **Assembled constructions were given family names the registry refuses.**
+   `_family_for` returned `trend_following` and `price_action`; the registry
+   ships `breakout, carry, cross_asset, event_driven, liquidity, mean_reversion,
+   microstructure, momentum, seasonality, session_structure, statistical,
+   volatility`. The template write failed and the cycle recorded an ERROR for a
+   construction that was fine. Status: **fixed**, with every value in the
+   mapping now a shipped family key.
+6. **A campaign lookup returned a context manager.** `_serving` is a
+   `contextmanager`; using it as a getter produced
+   `AttributeError: '_GeneratorContextManager' object has no attribute 'serves'`
+   and killed a cycle. Status: **fixed** (`campaigns.get`).
+7. **Draws with unusable warm-ups burned cycles.** Warmup is derived from each
+   parameter's declared *maximum*, so a construction sweeping a long window
+   needed 1,400+ bars before computing anything and came back `BLOCKED` — true,
+   and a cycle spent learning nothing. Status: **fixed**: parameter ranges
+   narrowed, and `MAX_ASSEMBLED_WARMUP = 800` enforced at draw time where it
+   costs one composition instead of a backtest. Measured warm-up p50 fell from
+   397 to 367 bars and p100 from 4,007 to 1,657, with over-budget draws refused
+   rather than run.
+8. **Gate levels could not fire.** A "ratio" gate level defaulting to 1.5
+   applied to a quantity centred on zero (an acceleration of a bounded ratio)
+   fires essentially never. `ratio` is no longer a gate unit at all: a gate is
+   compared against a number, so only units with a known range qualify, and a
+   ratio observable declares its own. Status: **fixed**; gate candidates fell
+   from 227 proposed to 183 usable, checked once at import rather than once per
+   wasted draw.
+
+### Measured, 200 draws over 9,000 bars
+
+`uv run python scripts/measure_vocabulary.py --cycles 200`
+
+| | |
+| --- | --- |
+| Unique structural signatures | 200 of 200 |
+| Collisions | **0** |
+| Composed and compiled | 200 / 200 |
+| Static-guard failures | 0 |
+| Backtested (rest over warm-up budget) | 191 |
+| Took trades | 138 |
+| Silent (no trades on 9k bars) | 53 |
+| Distinct mechanisms exercised | 9 of 12 |
+| Distinct feature kinds exercised | 38 of 47 |
+| Distinct families | 7 |
+| Wall clock | 30.1 s |
+
+## Phase 4 — the measured backtest bottleneck (complete)
+
+`forge.data.validation.validate_bars` was 33% of a backtest and ran on every
+one. Two changes, both verified byte-identical against a re-implementation of
+the original bar-by-bar pass (`tests/data/test_validation_identity.py`):
+
+* the six structural checks are computed over arrays, with the findings ordered
+  by the first bar that fails each one so the receipt is unchanged — the order
+  is part of the receipt and the receipt is stored;
+* the expensive half, a content hash over every bar's canonical form, is cached
+  against a **fingerprint of the bars themselves**. The digest is data identity:
+  it keys `BacktestResult.make_id` and is written into split receipts and
+  preregistrations, so a faster digest would be a different digest and every
+  result recorded before it would stop comparing. It is therefore computed once
+  per distinct dataset rather than once per backtest.
+
+The fingerprint covers every field that reaches the canonical form, and a
+parametrised test asserts that changing any one of them changes it — a
+fingerprint that skipped a field would let one dataset answer from another's
+receipt.
+
+| 200,000 bars | Time |
+| --- | --- |
+| Before | 1.383 s |
+| After, first call | 1.487 s (+7%) |
+| After, repeat | **0.246 s (5.6x)** |
+
+A campaign runs hundreds of backtests over one dataset, so the trade is
+strongly positive; the 7% is the fingerprint, paid once.
+
+---
+
 ## Open work
 
-Phases 2 onward: the composition grammar, mechanism vocabulary, external
-research defaults, agent roles and per-role model configuration, budget
-enforcement switch, the `validate_bars` fix, campaign measurement, and the
+External research defaults and pipeline, agent roles and per-role model
+configuration, the budget enforcement switch, settings and frontier UX, the
+bounded campaign comparison, adversarial testing, security regression, and the
 reports.
