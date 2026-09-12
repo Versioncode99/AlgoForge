@@ -36,6 +36,7 @@ from forge.strategy.ir import (
     StrategyDefinition,
     validate_definition,
 )
+from forge.strategy.primitives import SERIES_KINDS
 
 #: Targets whose generated code AlgoForge can execute and compare against the
 #: compiled IR. Only these are offered as a download.
@@ -79,16 +80,29 @@ class _Emitter:
     defn: StrategyDefinition
     unsupported: list[str] = field(default_factory=list)
     approximations: list[str] = field(default_factory=list)
+    #: Features something actually referenced. A declared feature nothing reads
+    #: still gets a function, because `entry_context` records every one of them.
+    used: set[str] = field(default_factory=set)
 
 
 # ── Python ───────────────────────────────────────────────────────────────────
 
+#: How each observation is computed, as a Python expression over the window.
+#: ``{shift}`` is substituted with an *expression*, not a literal, because a
+#: feature is emitted as a function of its shift so that a transformation can
+#: call it at each of the offsets its own window spans.
 _PY_FEATURE: dict[str, str] = {
     "close": "_at(w.closes, {shift})",
     "open": "_at(w.opens, {shift})",
     "high": "_at(w.highs, {shift})",
     "low": "_at(w.lows, {shift})",
     "volume": "_at(w.volumes, {shift})",
+    "typical_price": "_typical(w, {shift})",
+    "bar_range": "_bar_range(w, {shift})",
+    "true_range": "_true_range(w, {shift})",
+    "gap": "_gap(w, {shift})",
+    "clv": "_clv(w, {shift})",
+    "signed_volume": "_signed_volume(w, {shift})",
     "sma": "_mean(w.closes, {shift}, {a0})",
     "volume_sma": "_mean(w.volumes, {shift}, {a0})",
     "ema": "_ema(w.closes, {shift}, {a0})",
@@ -98,9 +112,17 @@ _PY_FEATURE: dict[str, str] = {
     "highest": "_max(w.highs, {shift}, {a0})",
     "lowest": "_min(w.lows, {shift}, {a0})",
     "realised_vol": "_rvol(w.closes, {shift}, {a0})",
+    "upside_vol": "_sided_vol(w.closes, {shift}, {a0}, 1)",
+    "downside_vol": "_sided_vol(w.closes, {shift}, {a0}, -1)",
     "roc": "_roc(w.closes, {shift}, {a0})",
+    "efficiency_ratio": "_efficiency(w.closes, {shift}, {a0})",
+    "variance_ratio": "_variance_ratio(w.closes, {shift}, {a0})",
+    "return_autocorr": "_autocorr(w.closes, {shift}, {a0})",
     "session_vwap": "_vwap(w, {shift})[0]",
     "session_vwap_sd": "_vwap(w, {shift})[1]",
+    "session_high": "_session_range(w, {shift})[0]",
+    "session_low": "_session_range(w, {shift})[1]",
+    "session_range_position": "_session_position(w, {shift})",
     "opening_range_high": "_range(w, {shift}, {a0})[0]",
     "opening_range_low": "_range(w, {shift}, {a0})[1]",
     "bars_since_session_open": "_since_open(w, {shift})",
@@ -212,7 +234,7 @@ def _adx(w, shift, n):
 
 
 def _vwap(w, shift):
-    start = w.session_start_index(); stop = w.closes.size - shift
+    start = w.session_start_index(w.index - shift); stop = w.closes.size - shift
     if stop <= start:
         return NAN, NAN
     high, low, close = w.highs[start:stop], w.lows[start:stop], w.closes[start:stop]
@@ -227,7 +249,7 @@ def _vwap(w, shift):
 
 
 def _range(w, shift, n):
-    start = w.session_start_index()
+    start = w.session_start_index(w.index - shift)
     stop = min(start + max(1, int(n)), w.closes.size - shift)
     if stop <= start:
         return NAN, NAN
@@ -235,7 +257,8 @@ def _range(w, shift, n):
 
 
 def _since_open(w, shift):
-    return float(max(0, w.index - shift - w.session_start_index()))
+    at = w.index - shift
+    return float(max(0, at - w.session_start_index(at)))
 
 
 def _minute(w, shift):
@@ -251,6 +274,196 @@ def _in_session(w, shift, start_min, end_min):
     if start_min <= end_min:
         return start_min <= m < end_min
     return m >= start_min or m < end_min
+
+
+def _typical(w, shift):
+    i = w.closes.size - 1 - shift
+    return float((w.highs[i] + w.lows[i] + w.closes[i]) / 3.0) if i >= 0 else NAN
+
+
+def _bar_range(w, shift):
+    i = w.closes.size - 1 - shift
+    return float(w.highs[i] - w.lows[i]) if i >= 0 else NAN
+
+
+def _true_range(w, shift):
+    i = w.closes.size - 1 - shift
+    if i < 1:
+        return NAN
+    prev = float(w.closes[i - 1]); hi = float(w.highs[i]); lo = float(w.lows[i])
+    return float(max(hi - lo, abs(hi - prev), abs(lo - prev)))
+
+
+def _gap(w, shift):
+    i = w.closes.size - 1 - shift
+    return float(w.opens[i] - w.closes[i - 1]) if i >= 1 else NAN
+
+
+def _clv(w, shift):
+    i = w.closes.size - 1 - shift
+    if i < 0:
+        return NAN
+    hi = float(w.highs[i]); lo = float(w.lows[i]); c = float(w.closes[i])
+    span = hi - lo
+    return ((c - lo) - (hi - c)) / span if span > 0 else NAN
+
+
+def _signed_volume(w, shift):
+    i = w.closes.size - 1 - shift
+    if i < 0:
+        return NAN
+    loc = _clv(w, shift)
+    return loc * float(w.volumes[i]) if loc == loc else NAN
+
+
+def _sided_vol(a, shift, n, sign):
+    n = max(1, int(n)); v = _tail(a, shift, n + 1)
+    if v.size != n + 1 or bool((v <= 0).any()):
+        return NAN
+    r = _np.diff(_np.log(v))
+    side = r[r > 0] if sign > 0 else r[r < 0]
+    return float(side.std(ddof=1)) if side.size >= 2 else NAN
+
+
+def _efficiency(a, shift, n):
+    n = max(1, int(n)); v = _tail(a, shift, n + 1)
+    if v.size != n + 1:
+        return NAN
+    path = float(_np.abs(_np.diff(v)).sum())
+    return float(abs(v[-1] - v[0]) / path) if path > 0 else NAN
+
+
+def _variance_ratio(a, shift, n):
+    n = max(1, int(n)); depth = n * 5
+    v = _tail(a, shift, depth + 1)
+    if v.size != depth + 1 or bool((v <= 0).any()) or n < 2:
+        return NAN
+    logs = _np.log(v)
+    single = _np.diff(logs)
+    multi = logs[n:] - logs[:-n]
+    if single.size < 2 or multi.size < 2:
+        return NAN
+    base = float(single.var(ddof=1))
+    if base <= 0:
+        return NAN
+    return float(multi.var(ddof=1) / (n * base))
+
+
+def _autocorr(a, shift, n):
+    n = max(1, int(n)); v = _tail(a, shift, n + 2)
+    if v.size != n + 2 or bool((v <= 0).any()) or n < 3:
+        return NAN
+    r = _np.diff(_np.log(v))
+    first, second = r[:-1], r[1:]
+    spread = float(first.std(ddof=1)) * float(second.std(ddof=1))
+    if spread <= 0:
+        return NAN
+    cov = float(((first - first.mean()) * (second - second.mean())).sum())
+    return float(cov / ((first.size - 1) * spread))
+
+
+def _session_range(w, shift):
+    start = w.session_start_index(w.index - shift)
+    stop = w.closes.size - shift
+    if stop <= start:
+        return NAN, NAN
+    return float(w.highs[start:stop].max()), float(w.lows[start:stop].min())
+
+
+def _session_position(w, shift):
+    hi, lo = _session_range(w, shift)
+    if hi != hi or lo != lo or hi <= lo:
+        return NAN
+    i = w.closes.size - 1 - shift
+    return float((w.closes[i] - lo) / (hi - lo))
+
+
+# ── transformations ──────────────────────────────────────────────────────────
+# A transformation reads the source's own history, so it calls the source's
+# function once per offset its window spans. That is slower than the compiled
+# definition's cache and produces exactly the same numbers, which is the point:
+# `verify_python` compares the two ledgers bar for bar.
+
+
+def _t_window(kind, n):
+    n = max(1, int(n))
+    if kind in ("change", "pct_change"):
+        return n + 1
+    if kind == "accel":
+        return 2 * n + 1
+    if kind == "ewm":
+        return 5 * n
+    return n
+
+
+def _finite(v, need):
+    return v.size >= need and bool(_np.isfinite(v[-need:]).all())
+
+
+def _apply_transform(kind, v, n):
+    n = max(1, int(n))
+    if kind == "mean":
+        return float(v[-n:].mean()) if _finite(v, n) else NAN
+    if kind == "stdev":
+        return float(v[-n:].std(ddof=1)) if n >= 2 and _finite(v, n) else NAN
+    if kind == "zscore":
+        if n < 2 or not _finite(v, n):
+            return NAN
+        tail = v[-n:]; sd = float(tail.std(ddof=1))
+        return float((tail[-1] - tail.mean()) / sd) if sd > 0 else NAN
+    if kind == "percentile_rank":
+        if not _finite(v, n):
+            return NAN
+        tail = v[-n:]
+        return float((tail <= tail[-1]).sum()) / float(tail.size)
+    if kind == "slope":
+        if n < 2 or not _finite(v, n):
+            return NAN
+        tail = v[-n:]
+        x = _np.arange(tail.size, dtype=float); xc = x - x.mean()
+        den = float((xc * xc).sum())
+        return float((xc * (tail - tail.mean())).sum() / den) if den > 0 else NAN
+    if kind == "accel":
+        need = 2 * n + 1
+        if not _finite(v, need):
+            return NAN
+        tail = v[-need:]
+        return float((tail[-1] - tail[-1 - n]) - (tail[-1 - n] - tail[0]))
+    if kind == "change":
+        if not _finite(v, n + 1):
+            return NAN
+        tail = v[-(n + 1):]
+        return float(tail[-1] - tail[0])
+    if kind == "pct_change":
+        if not _finite(v, n + 1):
+            return NAN
+        tail = v[-(n + 1):]
+        base = abs(float(tail[0]))
+        return float((tail[-1] - tail[0]) / base) if base > 0 else NAN
+    if kind == "ewm":
+        depth = 5 * n
+        if not _finite(v, depth):
+            return NAN
+        tail = v[-depth:]
+        alpha = 2.0 / (max(2, n) + 1.0)
+        weights = (1.0 - alpha) ** _np.arange(tail.size - 1, -1, -1)
+        return float((tail * weights).sum() / weights.sum())
+    if kind == "max_of":
+        return float(v[-n:].max()) if _finite(v, n) else NAN
+    if kind == "min_of":
+        return float(v[-n:].min()) if _finite(v, n) else NAN
+    if kind == "persistence":
+        if not _finite(v, n):
+            return NAN
+        tail = v[-n:]
+        return float((tail > 0.0).sum()) / float(tail.size)
+    return NAN
+
+
+def _transform(kind, fn, w, p, shift, n):
+    need = _t_window(kind, n)
+    values = _np.asarray([fn(w, p, shift + k) for k in range(need - 1, -1, -1)], dtype=float)
+    return _apply_transform(kind, values, n)
 
 
 def _cmp(op, left, right):
@@ -274,7 +487,23 @@ def _cross(direction, nl, nr, wl, wr):
 '''
 
 
-def _py_operand(emitter: _Emitter, operand: Any, shift: int) -> str:
+def _shift_expr(base: str, extra: int) -> str:
+    """``base + extra`` as source, folded when both are literals.
+
+    The shift is an expression rather than a number because each feature is
+    emitted as a function of its own shift: a transformation calls its source at
+    every offset its window spans, and those offsets are only known at run time.
+    Folding keeps the common case (`0`, `1`) readable in the exported file.
+    """
+    if extra == 0:
+        return base
+    try:
+        return str(int(base) + extra)
+    except ValueError:
+        return f"({base} + {extra})"
+
+
+def _py_operand(emitter: _Emitter, operand: Any, shift: str) -> str:
     if isinstance(operand, Constant):
         return repr(float(operand.value))
     if isinstance(operand, ParamRef):
@@ -289,18 +518,63 @@ def _py_operand(emitter: _Emitter, operand: Any, shift: int) -> str:
     return f"({left} {symbol} {right})"
 
 
-def _py_feature(emitter: _Emitter, name: str, shift: int) -> str:
+def _py_feature(emitter: _Emitter, name: str, shift: str) -> str:
+    """A call to the feature's own function. One function per declared feature.
+
+    Emitting a function rather than inlining the expression is what makes a
+    transformation expressible at all: `_transform` needs something it can call
+    at each offset, and an inlined expression with a baked-in shift is not that.
+    """
     item = emitter.defn.feature(name)
     if item is None:
         raise KeyError(name)
+    emitter.used.add(name)
+    return f"_f_{name}(w, p, {shift})"
+
+
+def _py_feature_body(emitter: _Emitter, item: Any) -> list[str]:
+    """The body of one feature's function, given its shift parameter ``s``."""
+    shift = _shift_expr("s", item.shift)
+    if item.kind in SERIES_KINDS:
+        length = _py_operand(emitter, item.args[0], "s") if item.args else "1.0"
+        return [
+            f"def _f_{item.name}(w, p, s=0):",
+            f'    return _transform("{item.kind}", _f_{item.source}, w, p, {shift}, '
+            f"int({length}))",
+        ]
     template = _PY_FEATURE[item.kind]
-    args = {"shift": shift + item.shift}
+    args: dict[str, str] = {"shift": shift}
     for index, arg in enumerate(item.args):
-        args[f"a{index}"] = _py_operand(emitter, arg, shift)  # type: ignore[assignment]
-    return template.format(**args)
+        args[f"a{index}"] = _py_operand(emitter, arg, "s")
+    return [f"def _f_{item.name}(w, p, s=0):", f"    return {template.format(**args)}"]
 
 
-def _py_condition(emitter: _Emitter, condition: Any, shift: int) -> str:
+def _py_feature_functions(emitter: _Emitter) -> list[str]:
+    """Every feature's function, sources before the transformations that call them."""
+    by_name = {item.name: item for item in emitter.defn.features}
+    ordered: list[Any] = []
+    seen: set[str] = set()
+
+    def visit(name: str, depth: int = 0) -> None:
+        if name in seen or name not in by_name or depth > 8:
+            return
+        item = by_name[name]
+        if item.kind in SERIES_KINDS and item.source:
+            visit(item.source, depth + 1)
+        seen.add(name)
+        ordered.append(item)
+
+    for item in emitter.defn.features:
+        visit(item.name)
+
+    lines: list[str] = []
+    for item in ordered:
+        lines.extend(_py_feature_body(emitter, item))
+        lines.extend(["", ""])
+    return lines
+
+
+def _py_condition(emitter: _Emitter, condition: Any, shift: str) -> str:
     if isinstance(condition, Always):
         return "True"
     if isinstance(condition, Compare):
@@ -310,8 +584,9 @@ def _py_condition(emitter: _Emitter, condition: Any, shift: int) -> str:
     if isinstance(condition, Cross):
         now_left = _py_operand(emitter, condition.left, shift)
         now_right = _py_operand(emitter, condition.right, shift)
-        was_left = _py_operand(emitter, condition.left, shift + 1)
-        was_right = _py_operand(emitter, condition.right, shift + 1)
+        back = _shift_expr(shift, 1)
+        was_left = _py_operand(emitter, condition.left, back)
+        was_right = _py_operand(emitter, condition.right, back)
         return (
             f'_cross("{condition.direction}", {now_left}, {now_right}, '
             f"{was_left}, {was_right})"
@@ -330,12 +605,12 @@ def _py_condition(emitter: _Emitter, condition: Any, shift: int) -> str:
 
 
 def _py_level(emitter: _Emitter, level: Level, name: str) -> str:
-    multiple = _py_operand(emitter, level.multiple, 0)
+    multiple = _py_operand(emitter, level.multiple, "0")
     if level.kind == "points":
         return f"    {name} = abs({multiple})\n"
     if level.kind == "percent":
         return f"    {name} = abs(entry * ({multiple}))\n"
-    unit = _py_feature(emitter, level.feature, 0)
+    unit = _py_feature(emitter, level.feature, "0")
     return f"    {name} = abs(({unit}) * ({multiple}))\n"
 
 
@@ -385,19 +660,20 @@ def to_python(defn: StrategyDefinition) -> ExportReport:
         "_ENTRY = {}",
         "",
         "",
-        "def entry_signal(w, p):",
     ]
+    lines.extend(_py_feature_functions(emitter))
+    lines.append("def entry_signal(w, p):")
 
     guard = ""
     if defn.entry.session is not None:
-        guard = _py_condition(emitter, defn.entry.session, 0)
+        guard = _py_condition(emitter, defn.entry.session, "0")
         lines.append(f"    if not {guard}:")
         lines.append("        return None")
 
     for direction, condition in (("1", defn.entry.long), ("-1", defn.entry.short)):
         if condition is None:
             continue
-        lines.append(f"    if {_py_condition(emitter, condition, 0)}:")
+        lines.append(f"    if {_py_condition(emitter, condition, '0')}:")
         lines.append("        _CONTEXT.clear()")
         lines.append("        _CONTEXT.update(_snapshot(w, p))")
         lines.append(f"        return {direction}")
@@ -409,7 +685,7 @@ def to_python(defn: StrategyDefinition) -> ExportReport:
     lines.append("def _snapshot(w, p):")
     lines.append("    out = {}")
     for item in defn.features:
-        expression = _py_feature(emitter, item.name, 0)
+        expression = _py_feature(emitter, item.name, "0")
         lines.append(f"    v = {expression}")
         lines.append("    if v == v:")
         lines.append(f'        out["{item.name}"] = round(v, 6)')
@@ -448,14 +724,14 @@ def to_python(defn: StrategyDefinition) -> ExportReport:
     lines.append("        if pos.direction == -1 and low <= target:")
     lines.append('            return "signal"')
     if defn.exit.max_bars is not None:
-        bars = _py_operand(emitter, defn.exit.max_bars, 0)
+        bars = _py_operand(emitter, defn.exit.max_bars, "0")
         lines.append(f"    if w.index - pos.entry_index >= int({bars}):")
         lines.append('        return "max_bars"')
     if defn.exit.flat_by_minute is not None:
         lines.append(f"    if _minute(w, 0) >= {defn.exit.flat_by_minute}:")
         lines.append('        return "signal"')
     if defn.exit.signal is not None:
-        lines.append(f"    if {_py_condition(emitter, defn.exit.signal, 0)}:")
+        lines.append(f"    if {_py_condition(emitter, defn.exit.signal, '0')}:")
         lines.append('        return "signal"')
     lines.append("    return None")
     lines.append("")

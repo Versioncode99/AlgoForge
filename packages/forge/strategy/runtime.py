@@ -114,10 +114,25 @@ class Window:
             return start_min <= now < end_min
         return now >= start_min or now < end_min
 
-    def session_start_index(self) -> int:
-        """Index of the first bar of the current calendar day in this window."""
-        today = self._t[self.index].replace(hour=0, minute=0, second=0, microsecond=0)
-        return bisect_left(self._t, today, 0, self.index + 1)
+    def session_start_index(self, at: int | None = None) -> int:
+        """Index of the first bar of the calendar day containing bar ``at``.
+
+        ``at`` defaults to the current bar. Passing an earlier index answers
+        "which session was bar j in?", which is what a feature evaluated some
+        bars back needs: anchoring an older bar's session VWAP to *today's*
+        open is how a session feature ends up describing a session that had not
+        started. A later index is refused rather than clamped, for the same
+        reason `time_at` refuses a negative offset.
+        """
+        index = self.index if at is None else at
+        if index > self.index:
+            raise LookaheadError(
+                f"session_start_index({index}) would read past the last closed bar "
+                f"({self.index})"
+            )
+        index = max(0, index)
+        today = self._t[index].replace(hour=0, minute=0, second=0, microsecond=0)
+        return bisect_left(self._t, today, 0, index + 1)
 
     def bars_since_session_open(self) -> int:
         return self.index - self.session_start_index()
