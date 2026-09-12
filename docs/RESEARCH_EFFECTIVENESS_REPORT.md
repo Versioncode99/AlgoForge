@@ -141,13 +141,57 @@ number is about the machinery.
 construction are stable enough to report; the 67.5% refusal rate is a property
 of one objective on one dataset and should not be read as a system constant.
 
+## 5a. Correction: the fixes *are* now measured
+
+§5 said the screen-classification fix could not be demonstrated. That was true
+when written and is no longer true, and the way it changed is the finding.
+
+**The real-data arm is reachable after all** — not by faking a dataset, but by
+passing `real_data=True` to `_cycle`, which has always been a parameter. Nothing
+had ever done it.
+
+Driving eight cycles through that arm exposed a second defect immediately and
+let both be measured:
+
+| | before | after |
+|---|---|---|
+| experiments completed | 3 | **7** |
+| follow-ups generated | 1 | **2** |
+| cycles lost to a crash | 5 | **0** |
+
+And the screen fix specifically, by removing it and re-running: **0 follow-ups
+without it, 1 with it**, on identical inputs.
+
+### The second defect
+
+The split's purge gap was sized from the largest warm-up in the **whole**
+template catalogue. The director *composes* templates, and a generated
+`trend_strength_gate` arrived with 1,007 warm-up bars against a shipped maximum
+of 520. From that cycle on, `chronological_split` raised for **every**
+subsequent candidate — including ones running twenty-bar templates.
+
+One generated template stopped the campaign, and it surfaced as a generic cycle
+error with nothing to indicate a single template had poisoned the rest.
+
+Traced precisely:
+
+```
+cycle 0-3: templates=12-15  max_warmup=520  (vol_normalized_momentum)  split ok
+cycle 4:   templates=16     max_warmup=1007 (gen_trend_strength_gate)  split FAILS
+cycle 5-7: ...                                                        split FAILS
+```
+
+Both defects were invisible to every test and every campaign measurement in this
+repository, for the same reason: the fixture could not reach the branch.
+
 ## 6. What would raise effectiveness most
 
 In order of expected effect:
 
-1. **Make a real-data fixture reachable in tests.** Not for realism — for
-   *coverage*. Two defects hid behind this in one branch, and the most
-   consequential path in the engine is currently untested.
+1. ~~**Make a real-data fixture reachable in tests.**~~ **Done**, and it paid
+   for itself immediately: `_cycle(..., real_data=True)` needs no fake dataset,
+   and driving it exposed the warm-up defect within eight cycles.
+   `tests/api/test_screen_classification.py` now covers that arm.
 2. **Route the loop through `ResearchPlan`.** The plan gate refuses
    unfalsifiable and already-settled work before compute; the loop does not use
    it yet. That directly attacks the 67.5%.
@@ -169,7 +213,14 @@ fixed but unmeasurable in this environment.
 **Efficiency: mediocre and honestly reported.** Two-thirds of cycles refused,
 all of them cheaply, all of them counted and attributed.
 
-**The claim I will not make:** that the fixes in this branch improve measured
-effectiveness. They fix defects that are real and demonstrated by unit test;
-the campaign measurement cannot see them, and saying otherwise would be exactly
-the kind of unearned claim this report exists to avoid.
+**Measured improvement, now that the arm is reachable:** experiments 3 → 7,
+follow-ups 1 → 2, crashed cycles 5 → 0 over eight cycles. Small numbers on a
+synthetic series, and they are about the machinery rather than about markets —
+but they are measurements rather than assertions.
+
+**The claim I still will not make:** that any of this says AlgoForge finds
+profitable strategies. Nothing here was run on real market data, nothing
+reached validation, and the series is edge-free by construction. What is
+demonstrated is that the research *machinery* explores genuinely different
+constructions and, after these fixes, keeps running and keeps learning from
+what it runs.
