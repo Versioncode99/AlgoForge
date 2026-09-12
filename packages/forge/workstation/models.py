@@ -24,6 +24,11 @@ from pydantic import Field, field_validator, model_validator
 
 from forge.contracts.hashing import stable_id
 from forge.contracts.models import FrozenModel
+from forge.workstation.context import (
+    DEFAULT_GROUP,
+    MAX_GROUPS,
+    WorkstationContext,
+)
 from forge.workstation.sidebar import Sidebar, default_sidebar_for
 
 # The layout grid. Twelve columns is the usual compromise: divisible by 2, 3, 4
@@ -235,6 +240,34 @@ class Workspace(FrozenModel):
     #: The built-in mode this workspace descends from, when it descends from
     #: one. Used only to rebuild a default sidebar on request.
     mode: str = ""
+    #: What is being looked at, per link group. The key is a panel's
+    #: `link_group`; `DEFAULT_GROUP` ("") is the workspace's own subject and is
+    #: what the context bar shows.
+    #:
+    #: Held here rather than in the browser because a context is part of an
+    #: arrangement — reopening "NQ Lab" tomorrow should reopen it on NQ — and
+    #: because the same store already versions and restores everything else the
+    #: operator composed. Empty for every workspace saved before contexts
+    #: existed, which resolves to "no context", which is correct: those panels
+    #: keep showing exactly what they always showed.
+    contexts: dict[str, WorkstationContext] = Field(default_factory=dict)
+
+    @field_validator("contexts")
+    @classmethod
+    def _contexts_are_bounded(
+        cls, contexts: dict[str, WorkstationContext]
+    ) -> dict[str, WorkstationContext]:
+        """A ceiling, and no empty rows.
+
+        An empty context stored under a group is indistinguishable from no
+        context at all when it is read, and storing it would make "this group
+        has a context" and "this group's context sets nothing" look different in
+        the record and identical on screen.
+        """
+        named = [key for key in contexts if key != DEFAULT_GROUP]
+        if len(named) > MAX_GROUPS:
+            raise ValueError(f"a workspace carries at most {MAX_GROUPS} link-group contexts")
+        return {key: value for key, value in contexts.items() if not value.empty}
 
     @field_validator("panels")
     @classmethod
@@ -415,6 +448,48 @@ class Workspace(FrozenModel):
 
     def pinning(self, pinned: bool) -> Workspace:
         return self._touch(pinned=bool(pinned))
+
+    def context_for(self, group: str = DEFAULT_GROUP) -> WorkstationContext:
+        """The context a group follows, or an empty one. Never `None`."""
+        return self.contexts.get(group) or WorkstationContext()
+
+    def with_context(
+        self, context: WorkstationContext, group: str = DEFAULT_GROUP
+    ) -> Workspace:
+        """Set one group's context. Panels are not touched.
+
+        This is the whole of "context propagation": nothing is written to any
+        panel, and `forge.workstation.context.resolve` decides at render time
+        what each one shows. Unlinking a panel afterwards reveals the symbol it
+        was pinned to, because that symbol was never overwritten.
+        """
+        contexts = dict(self.contexts)
+        if context.empty:
+            contexts.pop(group, None)
+        else:
+            contexts[group] = context
+        return self._revalidated(contexts)
+
+    def without_context(self, group: str = DEFAULT_GROUP) -> Workspace:
+        contexts = dict(self.contexts)
+        contexts.pop(group, None)
+        return self._revalidated(contexts)
+
+    def _revalidated(self, contexts: dict[str, WorkstationContext]) -> Workspace:
+        """Rebuild with new contexts, re-running the field validators.
+
+        `_touch` is `model_copy`, and pydantic's `model_copy` does **not** re-run
+        validators -- so building the new state with it would mean the group
+        ceiling and the empty-context sweep only ever ran at first construction.
+        The previous phase shipped exactly that bug in the sidebar, where every
+        mutation used `model_copy` and the duplicate-route check therefore never
+        fired after the workspace was created. Rebuilding is the fix that was
+        applied there and it is the fix here.
+        """
+        payload = self.model_dump()
+        payload["contexts"] = {key: value.model_dump() for key, value in contexts.items()}
+        payload["updated_at"] = datetime.now(UTC)
+        return Workspace(**payload)
 
     def linked(self, link_group: str | None, panel_ids: tuple[str, ...]) -> Workspace:
         for panel_id in panel_ids:

@@ -844,3 +844,32 @@
   .workstation-rail,
   .skip-link { transition: none; }
 }
+
+/* The palette's outcome line.
+ *
+ * A command that ran and a command that refused both need saying, and the
+ * refusal needs saying *without closing the palette* — the registry's messages
+ * name what was wrong and what would fix it, and a toast that vanishes takes
+ * that with it. Success closes, failure stays. */
+.palette-outcome {
+  margin: 0;
+  padding: 9px 16px;
+  font-size: var(--fs-nano);
+  color: var(--fg-1);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--pass) 8%, transparent);
+}
+.palette-outcome.is-error {
+  color: var(--fg-0);
+  background: color-mix(in srgb, var(--fail) 12%, transparent);
+}
+/* The verb sits at the right edge of every row. It used to be a bare "↵",
+   which said a key and not an effect: "open" and "stop" are very different
+   things to be one keystroke away from. */
+.palette-results button > span {
+  align-self: center;
+  font-size: var(--fs-nano);
+  letter-spacing: .04em;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
