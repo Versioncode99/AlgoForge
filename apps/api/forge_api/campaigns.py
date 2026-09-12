@@ -280,6 +280,16 @@ def _frontier_totals(service: CampaignService, campaigns: Any) -> dict[str, int]
     return totals
 
 
+#: Campaign cards rendered in the control centre. Beyond this the page stops
+#: being readable, and the cards are ordered by priority so the cut falls on the
+#: campaigns the operator cared least about.
+CARD_LIMIT = 200
+
+#: Campaigns counted for the totals. Separate from `CARD_LIMIT` because a page
+#: is allowed to be a page, and a total is not allowed to be a page.
+TOTALS_LIMIT = 10_000
+
+
 def _capacity() -> dict[str, Any]:
     """What this installation can actually run, so nothing claims otherwise."""
     servable, _ = capacity_for(requested=MAX_AGENTS)
@@ -354,18 +364,32 @@ def build_campaign_router(
         truth about the same research, and the two would diverge on the day it
         mattered.
         """
-        campaigns = service.campaigns.list(limit=200)
+        campaigns = service.campaigns.list(limit=CARD_LIMIT)
+        # Totals are over every campaign, not over the page of cards. A sum
+        # labelled "Experiments" that quietly omitted the campaigns below the
+        # cut would be wrong in the direction nobody checks.
+        counted = (
+            campaigns
+            if len(campaigns) < CARD_LIMIT
+            else service.campaigns.list(limit=TOTALS_LIMIT)
+        )
         running = [c for c in campaigns if c.running]
         totals = {
-            "campaigns": len(campaigns),
-            "running": len(running),
-            "experiments": sum(c.progress.experiments for c in campaigns),
-            "hypotheses": sum(c.progress.hypotheses for c in campaigns),
-            "mechanisms": sum(c.progress.mechanisms for c in campaigns),
-            "families_created": sum(c.progress.families_created for c in campaigns),
-            "templates_created": sum(c.progress.templates_created for c in campaigns),
-            "followups": sum(c.progress.followups_generated for c in campaigns),
-            "compute_units": round(sum(c.progress.compute_units for c in campaigns), 2),
+            "campaigns": len(counted),
+            "running": sum(1 for c in counted if c.running),
+            "experiments": sum(c.progress.experiments for c in counted),
+            "hypotheses": sum(c.progress.hypotheses for c in counted),
+            # Asked of the store that owns it, not summed across campaigns. A
+            # mechanism is a *string*, deduplicated by the hypothesis graph, so
+            # per-campaign counts overlap: three campaigns exploring one idea
+            # summed to "Mechanisms: 3". This is the number the interface leans
+            # on to separate a hundred discoveries from one idea a hundred
+            # times, and inflating it with campaign count breaks exactly that.
+            "mechanisms": service.hypotheses.distinct_mechanisms(),
+            "families_created": sum(c.progress.families_created for c in counted),
+            "templates_created": sum(c.progress.templates_created for c in counted),
+            "followups": sum(c.progress.followups_generated for c in counted),
+            "compute_units": round(sum(c.progress.compute_units for c in counted), 2),
         }
         # Validation is reported as attempts / passed / failed / blocked rather
         # than as one number. "Validation: 0" cannot distinguish "nothing was

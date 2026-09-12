@@ -198,3 +198,63 @@ def test_the_engine_diagnostics_answer_why_nothing_is_running(
     assert len(payload["skips"]["by_kind"]) == 9
     assert len(payload["skips"]["by_level"]) == 8
     assert payload["recent_skips"] == []
+
+
+def test_the_mechanism_total_does_not_count_one_idea_once_per_campaign(
+    client: TestClient,
+) -> None:
+    """"Mechanisms" is the number that separates discovery from repetition.
+
+    It is the count the campaign view leans on to say a hundred experiments
+    against three explanations is a narrow search, and it was summed from each
+    campaign's cached progress counter. That is wrong in two directions at
+    once. The counter is refreshed when a campaign cycle runs, so between
+    cycles the total lags the graph — which is what this test catches. And once
+    refreshed, a mechanism is a *string* deduplicated by the graph, so three
+    campaigns exploring one explanation each report 1 and sum to 3.
+
+    Reading the store that owns the number is right for both.
+    """
+    from forge.research.frontier import SearchKind
+
+    shared = (
+        "Liquidity provision withdraws into the open, so resting size thins and the "
+        "same order flow moves price further than it would in a normal book."
+    )
+    # The app's own graph, not a second connection to a guessed path: the route
+    # is being asked what *it* can see.
+    graph = client.app.state.actions.campaigns.hypotheses
+    campaigns = [_create(client, f"Programme {n}") for n in range(3)]
+    for index, campaign in enumerate(campaigns):
+        graph.propose(
+            campaign_id=campaign["campaign_id"],
+            statement=f"Opening expansion is larger after compressed sessions ({index}).",
+            mechanism=shared,
+            prediction="Expansion exceeds the unconditional mean.",
+            family="momentum",
+            search_kind=SearchKind.HYPOTHESIS,
+        )
+
+    totals = _data(client.get("/api/v1/campaigns/control-center"))["totals"]
+    assert totals["campaigns"] == 3
+
+    # Each campaign, asked on its own, honestly reports the one explanation it
+    # is exploring. Summing those is how "3" was arrived at.
+    per_campaign = [graph.distinct_mechanisms(c["campaign_id"]) for c in campaigns]
+    assert per_campaign == [1, 1, 1]
+    assert sum(per_campaign) == 3
+
+    assert totals["mechanisms"] == 1, (
+        "three campaigns exploring one explanation did not report one mechanism"
+    )
+
+    # A second, genuinely different explanation does move the number.
+    graph.propose(
+        campaign_id=campaigns[0]["campaign_id"],
+        statement="Session volume concentrates into the close on expiry days.",
+        mechanism="Index rebalancing forces size into the closing auction.",
+        prediction="Closing-auction share is higher on expiry days.",
+        family="flow",
+        search_kind=SearchKind.HYPOTHESIS,
+    )
+    assert _data(client.get("/api/v1/campaigns/control-center"))["totals"]["mechanisms"] == 2
