@@ -20,10 +20,25 @@ class Preregistration(FrozenModel):
     frozen_at: datetime
     preregistration_id: str = ""
     content_hash: str = ""
+    #: The fingerprint of the `TimeScope` this claim was frozen against.
+    #:
+    #: The window an experiment runs on is part of its claim. Two years and ten
+    #: years are different assertions about the same mechanism, and a programme
+    #: that tries one, dislikes the answer and reports the other has selected
+    #: rather than tested. Carrying the fingerprint here means G1 -- which
+    #: already re-derives this hash at judge time and fails ``CLAIM_MOVED`` when
+    #: anything shifted -- catches a moved window with no new gate and no change
+    #: to the ladder.
+    scope_fingerprint: str = ""
 
     @classmethod
     def freeze(
-        cls, hypothesis: str, mechanism: str, falsification: str, frozen_at: datetime
+        cls,
+        hypothesis: str,
+        mechanism: str,
+        falsification: str,
+        frozen_at: datetime,
+        scope_fingerprint: str = "",
     ) -> Preregistration:
         payload = {
             "schema_version": "1",
@@ -32,12 +47,20 @@ class Preregistration(FrozenModel):
             "falsification": falsification,
             "frozen_at": frozen_at.astimezone(UTC).isoformat(),
         }
+        # Folded in only when present. Adding it unconditionally would change
+        # the hash of every claim frozen before time scopes existed, and G1
+        # would then report CLAIM_MOVED for every strategy in the library --
+        # invalidating evidence that was never touched. The same conditional
+        # identity keeps experiment keys stable across the campaign change.
+        if scope_fingerprint:
+            payload["time_scope"] = scope_fingerprint
         digest = content_hash(payload)
         return cls(
             hypothesis=hypothesis,
             mechanism=mechanism,
             falsification=falsification,
             frozen_at=frozen_at,
+            scope_fingerprint=scope_fingerprint,
             preregistration_id=stable_id("pre", payload),
             content_hash=digest,
         )
