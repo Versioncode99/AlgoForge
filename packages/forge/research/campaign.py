@@ -34,7 +34,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from forge.contracts.hashing import stable_id
 from forge.research.allocation import Bucket, ResearchAllocation
@@ -171,6 +171,20 @@ class Campaign:
     stopped_reason: str
     created_at: str
     updated_at: str
+    description: str = ""
+    #: Higher runs first when the orchestrator cannot serve every campaign at
+    #: once. It allocates workers; it never relaxes a gate.
+    priority: int = 50
+    #: How many research agents this campaign has asked for. Honoured subject to
+    #: the installation's actual capacity — see `forge.research.agents`.
+    agent_target: int = 1
+    archived_at: str = ""
+    parent_campaign_id: str = ""
+    tags: tuple[str, ...] = ()
+
+    @property
+    def archived(self) -> bool:
+        return bool(self.archived_at)
 
     @property
     def running(self) -> bool:
@@ -231,6 +245,13 @@ class Campaign:
             "stopped_reason": self.stopped_reason,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "description": self.description,
+            "priority": self.priority,
+            "agent_target": self.agent_target,
+            "archived": self.archived,
+            "archived_at": self.archived_at,
+            "parent_campaign_id": self.parent_campaign_id,
+            "tags": list(self.tags),
         }
 
 
@@ -257,6 +278,31 @@ class CampaignStore:
                 "schema_version INTEGER NOT NULL, created_at TEXT NOT NULL, "
                 "updated_at TEXT NOT NULL)"
             )
+            self._migrate(db)
+
+    #: Columns added after the first version. Applied by ALTER TABLE so an
+    #: existing workspace keeps its campaigns rather than being asked to start
+    #: over — a research programme is not a cache.
+    _ADDED: ClassVar[tuple[tuple[str, str, str], ...]] = (
+        ("description", "TEXT", "''"),
+        # Higher runs first when the orchestrator cannot serve everything.
+        ("priority", "INTEGER", "50"),
+        # How many research agents this campaign has asked for.
+        ("agent_target", "INTEGER", "1"),
+        # Set when archived; archived campaigns keep their research and are
+        # hidden from the default listing rather than deleted.
+        ("archived_at", "TEXT", "''"),
+        # The campaign this was duplicated from, for provenance.
+        ("parent_campaign_id", "TEXT", "''"),
+        ("tags", "TEXT", "'[]'"),
+    )
+
+    def _migrate(self, db: sqlite3.Connection) -> None:
+        existing = {str(row[1]) for row in db.execute("PRAGMA table_info(campaigns)")}
+        for name, kind, default in self._ADDED:
+            if name not in existing:
+                db.execute(f"ALTER TABLE campaigns ADD COLUMN {name} {kind} DEFAULT {default}")
+        db.execute("CREATE INDEX IF NOT EXISTS campaigns_status ON campaigns(status)")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=15)
@@ -279,6 +325,11 @@ class CampaignStore:
         allowed_capabilities: Sequence[str] = DEFAULT_CAPABILITIES,
         web_research: bool = False,
         seed: int = 20260910,
+        description: str = "",
+        priority: int = 50,
+        agent_target: int = 1,
+        parent_campaign_id: str = "",
+        tags: Sequence[str] = (),
     ) -> Campaign:
         """Register a campaign. It starts stopped: creating is not running.
 
@@ -328,6 +379,11 @@ class CampaignStore:
             stopped_reason="",
             created_at=now,
             updated_at=now,
+            description=description.strip()[:2000],
+            priority=max(0, min(100, int(priority))),
+            agent_target=max(1, int(agent_target)),
+            parent_campaign_id=parent_campaign_id,
+            tags=tuple(sorted({t.strip().lower()[:40] for t in tags if t.strip()})),
         )
         self.save(campaign)
         return campaign
@@ -336,7 +392,13 @@ class CampaignStore:
         campaign.updated_at = _now()
         with self._lock, closing(self._connect()) as db, db:
             db.execute(
-                "INSERT OR REPLACE INTO campaigns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO campaigns ("
+                "campaign_id, name, objective, dataset, symbol, timeframe, universe, "
+                "start_date, end_date, allocation, stopping, capabilities, web_research, "
+                "seed, status, progress, stopped_reason, schema_version, created_at, "
+                "updated_at, description, priority, agent_target, archived_at, "
+                "parent_campaign_id, tags) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     campaign.campaign_id,
                     campaign.name,
@@ -358,6 +420,12 @@ class CampaignStore:
                     SCHEMA_VERSION,
                     campaign.created_at,
                     campaign.updated_at,
+                    campaign.description,
+                    campaign.priority,
+                    campaign.agent_target,
+                    campaign.archived_at,
+                    campaign.parent_campaign_id,
+                    json.dumps(list(campaign.tags)),
                 ),
             )
         return campaign
@@ -369,40 +437,138 @@ class CampaignStore:
             ).fetchone()
         return None if row is None else _to_campaign(row)
 
-    def list(self, *, limit: int = 100) -> builtins.list[Campaign]:
+    def list(
+        self, *, limit: int = 100, include_archived: bool = False
+    ) -> builtins.list[Campaign]:
+        """Campaigns, most recently touched first.
+
+        Archived ones are excluded by default. Archiving keeps the research and
+        removes the programme from the working set; a listing that showed both
+        identically would make archiving pointless.
+        """
+        clause = "" if include_archived else " WHERE COALESCE(archived_at,'')=''"
         with closing(self._connect()) as db:
             rows = db.execute(
-                "SELECT * FROM campaigns ORDER BY updated_at DESC LIMIT ?", (int(limit),)
+                f"SELECT * FROM campaigns{clause} ORDER BY priority DESC, updated_at DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        return [_to_campaign(row) for row in rows]
+
+    def running(self, *, limit: int = 100) -> builtins.list[Campaign]:
+        """Every running campaign, highest priority first.
+
+        There used to be at most one, on the stated grounds that two would
+        "consume each other's burn-once splits". That was not true of the code:
+        the holdout ledger is keyed by *strategy lineage*, and two campaigns
+        produce different strategies and therefore different lineages. The real
+        shared resource was the duplicate-claim namespace in `Experiments`,
+        which is now partitioned by campaign, and the trial count the judge
+        deflates against — which is deliberately *not* partitioned, because
+        every trial run against this data is a trial whoever ran it.
+
+        What remains genuinely shared is compute, and that is an allocation
+        problem for the orchestrator, not a reason to forbid a second campaign.
+        """
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT * FROM campaigns WHERE status='running' "
+                "ORDER BY priority DESC, updated_at DESC LIMIT ?",
+                (int(limit),),
             ).fetchall()
         return [_to_campaign(row) for row in rows]
 
     def active(self) -> Campaign | None:
-        """The running campaign, if there is one.
+        """The highest-priority running campaign, if there is one.
 
-        At most one campaign runs at a time: they share the engine's workers,
-        its data slice and its holdout ledger, and two of them running would
-        consume each other's burn-once splits.
+        Retained for callers that predate multi-campaign support and only ever
+        wanted "the" campaign. New code should use :meth:`running`.
         """
-        with closing(self._connect()) as db:
-            row = db.execute(
-                "SELECT * FROM campaigns WHERE status='running' ORDER BY updated_at DESC LIMIT 1"
-            ).fetchone()
-        return None if row is None else _to_campaign(row)
+        found = self.running(limit=1)
+        return found[0] if found else None
 
     def set_status(self, campaign_id: str, status: str, *, reason: str = "") -> Campaign:
         campaign = self.get(campaign_id)
         if campaign is None:
             raise CampaignError(f"No campaign '{campaign_id}'.")
-        if status == "running":
-            running = self.active()
-            if running is not None and running.campaign_id != campaign_id:
-                raise CampaignError(
-                    f"'{running.name}' is already running. Two campaigns would share the "
-                    "engine's data split and consume each other's burn-once holdout, so "
-                    "only one runs at a time."
-                )
+        if status == "running" and campaign.archived:
+            raise CampaignError(
+                f"'{campaign.name}' is archived. Restore it before running it again."
+            )
         campaign.status = status
         campaign.stopped_reason = reason
+        return self.save(campaign)
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
+    def duplicate(self, campaign_id: str, *, name: str = "", seed: int | None = None) -> Campaign:
+        """Copy a campaign's *configuration*, never its findings.
+
+        A duplicate starts at zero. Copying the progress counters would make the
+        new programme claim experiments it has not run, and copying the frontier
+        would make it claim to have settled questions it has not asked — which
+        is the precise shape of the fabricated evidence this system exists to
+        prevent.
+        """
+        source = self.get(campaign_id)
+        if source is None:
+            raise CampaignError(f"No campaign '{campaign_id}'.")
+        return self.create(
+            name=name.strip() or _copy_name(source.name),
+            objective=source.objective,
+            dataset=source.dataset,
+            symbol=source.symbol,
+            timeframe=source.timeframe,
+            universe=source.universe,
+            start_date=source.start_date,
+            end_date=source.end_date,
+            allocation=source.allocation,
+            stopping=source.stopping,
+            allowed_capabilities=source.allowed_capabilities,
+            web_research=source.web_research,
+            seed=source.seed if seed is None else int(seed),
+            description=source.description,
+            priority=source.priority,
+            agent_target=source.agent_target,
+            parent_campaign_id=source.campaign_id,
+            tags=source.tags,
+        )
+
+    def archive(self, campaign_id: str) -> Campaign:
+        campaign = self.get(campaign_id)
+        if campaign is None:
+            raise CampaignError(f"No campaign '{campaign_id}'.")
+        if campaign.running:
+            raise CampaignError("Stop the campaign before archiving it.")
+        campaign.archived_at = _now()
+        return self.save(campaign)
+
+    def restore(self, campaign_id: str) -> Campaign:
+        campaign = self.get(campaign_id)
+        if campaign is None:
+            raise CampaignError(f"No campaign '{campaign_id}'.")
+        campaign.archived_at = ""
+        return self.save(campaign)
+
+    def prioritise(self, campaign_id: str, priority: int) -> Campaign:
+        campaign = self.get(campaign_id)
+        if campaign is None:
+            raise CampaignError(f"No campaign '{campaign_id}'.")
+        campaign.priority = max(0, min(100, int(priority)))
+        return self.save(campaign)
+
+    def set_agent_target(self, campaign_id: str, agents: int) -> Campaign:
+        campaign = self.get(campaign_id)
+        if campaign is None:
+            raise CampaignError(f"No campaign '{campaign_id}'.")
+        campaign.agent_target = max(1, int(agents))
+        return self.save(campaign)
+
+    def rename(self, campaign_id: str, name: str) -> Campaign:
+        campaign = self.get(campaign_id)
+        if campaign is None:
+            raise CampaignError(f"No campaign '{campaign_id}'.")
+        if not name.strip():
+            raise CampaignError("A campaign needs a name.")
+        campaign.name = name.strip()[:120]
         return self.save(campaign)
 
     def record(self, campaign_id: str, **counters: Any) -> Campaign:
@@ -456,6 +622,18 @@ class CampaignStore:
             )
 
 
+def _copy_name(name: str) -> str:
+    """`X` becomes `X (copy)`; `X (copy)` becomes `X (copy 2)`, and so on."""
+    if not name.endswith(")"):
+        return f"{name} (copy)"[:120]
+    head, _, tail = name.rpartition(" (")
+    if tail == "copy)":
+        return f"{head} (copy 2)"[:120]
+    if tail.startswith("copy ") and tail[5:-1].isdigit():
+        return f"{head} (copy {int(tail[5:-1]) + 1})"[:120]
+    return f"{name} (copy)"[:120]
+
+
 def _to_campaign(row: sqlite3.Row) -> Campaign:
     return Campaign(
         campaign_id=row["campaign_id"],
@@ -477,4 +655,19 @@ def _to_campaign(row: sqlite3.Row) -> Campaign:
         stopped_reason=row["stopped_reason"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        description=_column(row, "description", ""),
+        priority=int(_column(row, "priority", 50) or 50),
+        agent_target=int(_column(row, "agent_target", 1) or 1),
+        archived_at=_column(row, "archived_at", "") or "",
+        parent_campaign_id=_column(row, "parent_campaign_id", "") or "",
+        tags=tuple(json.loads(_column(row, "tags", "[]") or "[]")),
     )
+
+
+def _column(row: sqlite3.Row, name: str, default: Any) -> Any:
+    """Read a column a migrated file may not have written yet."""
+    try:
+        value = row[name]
+    except (IndexError, KeyError):
+        return default
+    return default if value is None else value

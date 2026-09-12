@@ -1,0 +1,223 @@
+/* Engine runtime state, worker heartbeats and skip accounting.
+ *
+ * The visual job here is narrow and specific: make "alive" and "working"
+ * distinguishable at a glance. They used to be the same pixel — a green dot
+ * beside the word RUNNING — which is why an engine that had stopped doing
+ * research for eleven minutes looked identical to one mid-backtest.
+ *
+ * So: RUNNING is the only state that gets the pass colour. Exhausted is
+ * deliberately neutral rather than red, because a campaign that reached its
+ * target is a result and colouring it as a fault teaches the wrong lesson.
+ */
+
+/* ── the badge ───────────────────────────────────────────────────────────── */
+.runtime-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.runtime-badge svg { width: 14px; height: 14px; flex: none; }
+
+.runtime-badge strong {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+/* The reason sits beside the label and is the first thing to give way when
+ * the header is narrow — the state name must never be the part that truncates. */
+.runtime-badge-reason {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-2);
+  font-size: 0.74rem;
+}
+
+.runtime-badge[data-tone='good'] { border-color: color-mix(in srgb, var(--pass) 45%, var(--line)); color: var(--pass); }
+.runtime-badge[data-tone='warn'] { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); color: var(--warn); }
+.runtime-badge[data-tone='bad']  { border-color: color-mix(in srgb, var(--fail) 50%, var(--line)); color: var(--fail); }
+.runtime-badge[data-tone='plain'] { color: var(--fg-2); }
+
+/* Only a genuinely working engine pulses. Animation is a claim about activity
+ * and an idle engine must not make it. */
+@media (prefers-reduced-motion: no-preference) {
+  .runtime-badge[data-state='RUNNING'] svg { animation: runtime-pulse 2.4s ease-in-out infinite; }
+}
+@keyframes runtime-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+/* ── the diagnostics panel ───────────────────────────────────────────────── */
+.runtime-panel {
+  display: grid;
+  gap: var(--sp-4);
+  margin: var(--sp-4) 0;
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-1);
+}
+
+.runtime-panel.is-empty { color: var(--fg-2); }
+.runtime-panel p { margin: 0; }
+.runtime-panel h4 {
+  margin: 0 0 var(--sp-2);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-2);
+}
+.runtime-panel h4 span { margin-left: var(--sp-2); color: var(--fg-3); }
+
+.runtime-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--sp-3);
+}
+.runtime-head > svg { width: 20px; height: 20px; margin-top: 2px; }
+.runtime-head strong {
+  display: block;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+.runtime-head p { color: var(--fg-2); font-size: 0.82rem; line-height: 1.45; }
+
+.runtime-head[data-tone='good'] > svg { color: var(--pass); }
+.runtime-head[data-tone='warn'] > svg { color: var(--warn); }
+.runtime-head[data-tone='bad']  > svg { color: var(--fail); }
+.runtime-head[data-tone='plain'] > svg { color: var(--fg-2); }
+
+.runtime-clock { margin: 0; text-align: right; }
+.runtime-clock dt {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+.runtime-clock dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 1rem;
+  color: var(--fg-0);
+}
+
+.runtime-remedy {
+  padding: var(--sp-3);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--accent-wash);
+  color: var(--fg-1);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.runtime-blockers { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--sp-2); }
+.runtime-blockers li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: baseline;
+  font-size: 0.82rem;
+  color: var(--fg-1);
+}
+.runtime-blockers code {
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+  color: var(--warn);
+}
+
+.runtime-outcomes ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.runtime-outcomes li {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  font-size: 0.76rem;
+  color: var(--fg-2);
+}
+.runtime-outcomes li strong { color: var(--fg-0); font-family: var(--font-mono, ui-monospace, monospace); }
+.runtime-outcomes li[data-outcome='PROGRESS'] { border-color: color-mix(in srgb, var(--pass) 40%, var(--line)); }
+.runtime-outcomes li[data-outcome='ERROR'] { border-color: color-mix(in srgb, var(--fail) 40%, var(--line)); }
+
+/* The worker table scrolls on its own rather than pushing the page sideways. */
+.runtime-workers { overflow-x: auto; }
+.runtime-workers table { width: 100%; min-width: 520px; border-collapse: collapse; font-size: 0.8rem; }
+.runtime-workers th, .runtime-workers td {
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.runtime-workers thead th {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-3);
+  font-weight: 600;
+}
+.runtime-workers tbody th { font-family: var(--font-mono, ui-monospace, monospace); color: var(--fg-1); }
+.runtime-workers td.num { font-family: var(--font-mono, ui-monospace, monospace); text-align: right; }
+.runtime-workers b.good { color: var(--pass); }
+.runtime-workers b.warn { color: var(--warn); }
+.runtime-workers b.bad { color: var(--fail); }
+.runtime-workers tr[data-stale] { background: color-mix(in srgb, var(--warn) 6%, transparent); }
+.runtime-workers tr[data-dead] { background: color-mix(in srgb, var(--fail) 8%, transparent); }
+.runtime-workers .muted { color: var(--fg-3); font-size: 0.82rem; }
+
+/* ── the skip accounting ─────────────────────────────────────────────────── */
+.skip-accounting {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--sp-3);
+  margin: 0 0 var(--sp-4);
+}
+.skip-accounting > div {
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-1);
+}
+.skip-accounting dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-2);
+  /* The full explanation is on the title attribute; the cursor says so. */
+  cursor: help;
+}
+.skip-accounting dd {
+  margin: var(--sp-2) 0 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--fg-0);
+}
+.skip-accounting > div[data-tone='good'] dd { color: var(--pass); }
+.skip-accounting > div[data-tone='warn'] dd { color: var(--warn); }
+
+@media (max-width: 720px) {
+  .runtime-head { grid-template-columns: auto minmax(0, 1fr); }
+  .runtime-clock { grid-column: 1 / -1; text-align: left; }
+}

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections.abc import Iterable, Mapping
 from contextlib import closing
 from datetime import UTC, datetime
@@ -83,6 +84,23 @@ class ArtifactIndex:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Writes queue here rather than on SQLite's busy handler.
+        #
+        # `BacktestStore.save` deliberately calls `put_many` *outside* its own
+        # lock, so a database write does not block another worker's in-memory
+        # bookkeeping. That is the right shape, and it left the writes with no
+        # serialisation at all: six engine workers saving at once each opened
+        # their own connection and fought for the write lock.
+        #
+        # SQLite's busy handler has no fairness guarantee. Under steady
+        # contention a connection can be starved past *any* timeout, which is
+        # what "database is locked" was on a loaded Windows runner — not a
+        # timeout that was too short, but one connection never winning. A lock
+        # makes the writes queue in arrival order and the contention disappears.
+        #
+        # Reads are deliberately left outside it: they are what the interface
+        # waits on, and they do not block each other.
+        self._write_lock = threading.Lock()
         self._prepare()
 
     def _connect(self) -> sqlite3.Connection:
@@ -148,7 +166,7 @@ class ArtifactIndex:
         ]
         if not payload:
             return 0
-        with closing(self._connect()) as db, db:
+        with self._write_lock, closing(self._connect()) as db, db:
             db.executemany(
                 "INSERT OR REPLACE INTO artifacts "
                 "(name, size, strategy_id, finished_at, projection) VALUES (?, ?, ?, ?, ?)",
@@ -161,7 +179,7 @@ class ArtifactIndex:
         doomed = [(name,) for name in names]
         if not doomed:
             return 0
-        with closing(self._connect()) as db, db:
+        with self._write_lock, closing(self._connect()) as db, db:
             db.executemany("DELETE FROM artifacts WHERE name = ?", doomed)
         return len(doomed)
 
@@ -185,7 +203,7 @@ class ArtifactIndex:
         ]
         if not payload:
             return 0
-        with closing(self._connect()) as db, db:
+        with self._write_lock, closing(self._connect()) as db, db:
             db.executemany(
                 "INSERT OR REPLACE INTO unreadable (name, size, reason, noticed_at) "
                 "VALUES (?, ?, ?, ?)",
@@ -197,5 +215,5 @@ class ArtifactIndex:
         doomed = [(name,) for name in names]
         if not doomed:
             return
-        with closing(self._connect()) as db, db:
+        with self._write_lock, closing(self._connect()) as db, db:
             db.executemany("DELETE FROM unreadable WHERE name = ?", doomed)

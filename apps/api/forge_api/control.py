@@ -145,6 +145,50 @@ class CreateWorkspaceRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     template_key: str | None = None
     activate: bool = True
+    description: str = ""
+    icon: str = ""
+    #: A built-in mode to inherit the default rail from, or blank for an empty
+    #: one the operator fills.
+    mode: str = ""
+    #: Routes from `/sidebar/destinations`. Composing the rail at creation makes
+    #: "a workspace for NQ research and prop trading" one call.
+    sidebar_items: list[str] = Field(default_factory=list)
+
+
+class SidebarItemRequest(BaseModel):
+    route: str
+    group_id: str | None = None
+    label: str = ""
+    position: int | None = None
+
+
+class SidebarMoveRequest(BaseModel):
+    group_id: str
+    position: int | None = None
+
+
+class SidebarGroupRequest(BaseModel):
+    group_id: str
+    label: str = ""
+    position: int | None = None
+
+
+class SidebarFlagRequest(BaseModel):
+    value: bool = True
+
+
+class SidebarOrderRequest(BaseModel):
+    group_ids: list[str]
+
+
+class WorkspaceLinkRequest(BaseModel):
+    target_id: str
+    linked: bool = True
+
+
+class WorkspaceDescribeRequest(BaseModel):
+    description: str = ""
+    icon: str = ""
 
 
 class ImportWorkspaceRequest(BaseModel):
@@ -444,15 +488,26 @@ def build_control_router(
     # running the director returns nothing and the engine's original template
     # draw runs unchanged, so this attachment costs nothing when unused.
     engine.director = campaign_service.director
-    # A campaign that was running when the process died is not running now.
-    # Left as "running" it would refuse every new campaign as a conflict.
-    interrupted = campaign_service.campaigns.active()
-    if interrupted is not None:
+    # And the scheduler that deals the engine's workers across however many
+    # campaigns are running. Without it every worker serves the attached
+    # campaign, which is the single-campaign path the engine had before.
+    engine.orchestrator = campaign_service.orchestrator
+    # Campaigns that were running when the process died are not running now.
+    # Left as "running" they would be scheduled workers that do not exist, and
+    # their agents would show as alive with heartbeats hours old.
+    for interrupted in campaign_service.campaigns.running():
         campaign_service.campaigns.set_status(
             interrupted.campaign_id,
             "stopped",
             reason="the application restarted while this campaign was running",
         )
+        campaign_service.agents.stop_all(
+            interrupted.campaign_id, reason="the application restarted"
+        )
+    # Any claim whose lease has lapsed is released at start-up as well as on the
+    # cadence, so a run interrupted mid-experiment does not leave its hypotheses
+    # held by an agent that no longer exists.
+    campaign_service.agents.release_expired()
 
     def verdict_for(strategy_id: str) -> str | None:
         """The judge's decision for one strategy, through the dossier's own path.
@@ -896,6 +951,23 @@ def build_control_router(
     @router.post("/engine/stop", response_model=ApiEnvelope[dict[str, Any]])
     def engine_stop() -> ApiEnvelope[dict[str, Any]]:
         return ApiEnvelope(data=engine.stop())
+
+    @router.get("/engine/diagnostics", response_model=ApiEnvelope[dict[str, Any]])
+    def engine_diagnostics() -> ApiEnvelope[dict[str, Any]]:
+        """Why isn't my research running?
+
+        Answered without opening a terminal: the derived state, the reason, a
+        remedy, every worker's heartbeat, and the skip accounting behind the
+        headline number.
+        """
+        return ApiEnvelope(
+            data={
+                "runtime": engine.diagnose(),
+                "skips": engine.skips.counts(engine._campaign_id()),
+                "recent_skips": engine.skips.list(engine._campaign_id(), limit=50),
+                "retryable": engine.skips.retryable(engine._campaign_id(), limit=25),
+            }
+        )
 
     @router.get("/engine/constraints", response_model=ApiEnvelope[list[dict[str, str]]])
     def engine_constraints() -> ApiEnvelope[list[dict[str, str]]]:
@@ -1877,8 +1949,263 @@ def build_control_router(
                     "name": body.name,
                     "template_key": body.template_key,
                     "activate": body.activate,
+                    "description": body.description,
+                    "icon": body.icon,
+                    "mode": body.mode,
+                    "sidebar_items": body.sidebar_items,
                 },
             )
+        )
+
+    # ── the sidebar ──────────────────────────────────────────────────────────
+    # Every one of these is a thin call into the action registry, which is the
+    # same registry the assistant uses. There is no separate implementation for
+    # the interface, so "put my prop accounts on the right" typed to the
+    # assistant and dragged in the rail are the same operation and cannot drift.
+
+    @router.get("/sidebar/destinations", response_model=ApiEnvelope[dict[str, Any]])
+    def sidebar_destinations_route() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("list_sidebar_destinations", {}))
+
+    @router.get(
+        "/workspaces/{workspace_id}/sidebar", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def get_sidebar(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("describe_sidebar", {"workspace_id": workspace_id}))
+
+    @router.post(
+        "/workspaces/{workspace_id}/sidebar/items", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def add_sidebar_item(
+        workspace_id: str, body: SidebarItemRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "add_sidebar_item",
+                {
+                    "workspace_id": workspace_id,
+                    "route": body.route,
+                    "group_id": body.group_id,
+                    "label": body.label,
+                    "position": body.position,
+                },
+            )
+        )
+
+    @router.delete(
+        "/workspaces/{workspace_id}/sidebar/items/{route}",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def remove_sidebar_item(workspace_id: str, route: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "remove_sidebar_item", {"workspace_id": workspace_id, "route": route}
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/sidebar/items/{route}/move",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def move_sidebar_item(
+        workspace_id: str, route: str, body: SidebarMoveRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "move_sidebar_item",
+                {
+                    "workspace_id": workspace_id,
+                    "route": route,
+                    "group_id": body.group_id,
+                    "position": body.position,
+                },
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/sidebar/items/{route}/rename",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def rename_sidebar_item(
+        workspace_id: str, route: str, body: RenameWorkspaceRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "rename_sidebar_item",
+                {"workspace_id": workspace_id, "route": route, "label": body.name},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/sidebar/items/{route}/pin",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def pin_sidebar_item(
+        workspace_id: str, route: str, body: SidebarFlagRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "pin_sidebar_item",
+                {"workspace_id": workspace_id, "route": route, "pinned": body.value},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/sidebar/items/{route}/hide",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def hide_sidebar_item(
+        workspace_id: str, route: str, body: SidebarFlagRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "hide_sidebar_item",
+                {"workspace_id": workspace_id, "route": route, "hidden": body.value},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/sidebar/groups", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def add_sidebar_group(
+        workspace_id: str, body: SidebarGroupRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "add_sidebar_group",
+                {
+                    "workspace_id": workspace_id,
+                    "group_id": body.group_id,
+                    "label": body.label or body.group_id,
+                    "position": body.position,
+                },
+            )
+        )
+
+    @router.delete(
+        "/workspaces/{workspace_id}/sidebar/groups/{group_id}",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def remove_sidebar_group(workspace_id: str, group_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "remove_sidebar_group", {"workspace_id": workspace_id, "group_id": group_id}
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/sidebar/groups/{group_id}/rename",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def rename_sidebar_group(
+        workspace_id: str, group_id: str, body: RenameWorkspaceRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "rename_sidebar_group",
+                {"workspace_id": workspace_id, "group_id": group_id, "label": body.name},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/sidebar/groups/{group_id}/collapse",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def collapse_sidebar_group(
+        workspace_id: str, group_id: str, body: SidebarFlagRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "collapse_sidebar_group",
+                {"workspace_id": workspace_id, "group_id": group_id, "collapsed": body.value},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/sidebar/groups/order",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def reorder_sidebar_groups(
+        workspace_id: str, body: SidebarOrderRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "reorder_sidebar_groups",
+                {"workspace_id": workspace_id, "group_ids": body.group_ids},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/sidebar/reset", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def reset_sidebar(workspace_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Rebuild the mode's rail, discarding a custom one.
+
+        A CONFIRM action, and the confirmation is the request: the interface
+        asks before calling, the same way deleting a layout does. Throwing away
+        an arrangement somebody built is not something to do on a stray click.
+        """
+        return ApiEnvelope(
+            data=_action("reset_sidebar", {"workspace_id": workspace_id}, confirmed=True)
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/campaigns", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def link_campaign(
+        workspace_id: str, body: WorkspaceLinkRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "link_campaign_to_workspace",
+                {
+                    "workspace_id": workspace_id,
+                    "campaign_id": body.target_id,
+                    "linked": body.linked,
+                },
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/accounts", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def link_account(
+        workspace_id: str, body: WorkspaceLinkRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "link_account_to_workspace",
+                {
+                    "workspace_id": workspace_id,
+                    "account_id": body.target_id,
+                    "linked": body.linked,
+                },
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/describe", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def describe_workspace_route(
+        workspace_id: str, body: WorkspaceDescribeRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "describe_this_workspace",
+                {
+                    "workspace_id": workspace_id,
+                    "description": body.description,
+                    "icon": body.icon,
+                },
+            )
+        )
+
+    @router.post("/workspaces/{workspace_id}/pin", response_model=ApiEnvelope[dict[str, Any]])
+    def pin_workspace(
+        workspace_id: str, body: SidebarFlagRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action("pin_workspace", {"workspace_id": workspace_id, "pinned": body.value})
         )
 
     @router.post("/workspaces/{workspace_id}/open", response_model=ApiEnvelope[dict[str, Any]])
@@ -2483,7 +2810,15 @@ def build_control_router(
         hard to run. Injected into the campaign router so that module never
         touches the engine, and so "start a campaign" is one call rather than a
         sequence the interface has to get right.
+
+        Starting a campaign while the engine is **already running** does not
+        restart it. `AutonomousEngine.start` returns the current status when its
+        threads are alive, so a second campaign joins the run in progress and the
+        orchestrator begins dealing it workers on the next cycle. Restarting
+        would abandon every claim the first campaign's workers were holding, and
+        a campaign added mid-run would silently interrupt one that was working.
         """
+        already = engine.status().get("running")
         engine.start(
             EngineConfig(
                 dataset=campaign.dataset,
@@ -2494,6 +2829,14 @@ def build_control_router(
                 seed=campaign.seed,
             )
         )
+        if already:
+            log.record(
+                "RESEARCH",
+                f"'{campaign.name}' joined the run already in progress; "
+                f"{len(campaign_service.campaigns.running())} campaign(s) now share "
+                f"{engine.state.config.workers} worker(s)",
+                "info",
+            )
 
     router.include_router(
         build_campaign_router(

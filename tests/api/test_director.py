@@ -16,6 +16,7 @@ from forge.research.allocation import Bucket, ResearchAllocation
 from forge.research.frontier import FrontierState, SearchKind
 from forge.research.hypotheses import HypothesisStatus
 from forge.research.journal import EventKind
+from forge.research.skips import SkipKind
 from forge.strategy import TEMPLATES, FamilyRegistry, TemplateStore
 from forge_api.campaigns import CampaignService
 from forge_api.director import Candidate, ObservationInput, Refusal, ResearchDirector
@@ -489,10 +490,20 @@ def test_exhausting_the_budget_stops_the_campaign_by_name(
     assert director.campaign_id is None
 
 
-def test_the_engine_keeps_working_after_a_campaign_completes(
+def test_a_completed_campaign_keeps_saying_it_is_finished(
     director: ResearchDirector,
 ) -> None:
-    """A finished campaign detaches; it does not leave the engine refusing."""
+    """It used to go quiet, and quiet was read as "no campaign was ever here".
+
+    A campaign that reached a stopping criterion detached itself and
+    ``next_candidate`` began returning ``None``. The engine reads ``None`` as
+    "nothing is directing me" and answers with the uniform random template draw
+    it used before campaigns existed — so the programme ended, the engine went
+    on spending compute on undirected candidates against a scope that had
+    already claimed most of the catalogue, and the interface said RUNNING
+    throughout. The refusal has to keep coming until somebody attaches
+    something else.
+    """
     start(director, stopping={"max_experiments": 1})
     candidate = propose_until(director, Bucket.EXPLORE_HYPOTHESIS)
     assert candidate is not None
@@ -507,8 +518,21 @@ def test_the_engine_keeps_working_after_a_campaign_completes(
             decision="REJECT",
         )
     )
-    director.next_candidate(random.Random(1), 0, "exploration")
-    assert director.next_candidate(random.Random(2), 0, "exploration") is None
+    first = director.next_candidate(random.Random(1), 0, "exploration")
+    assert isinstance(first, Refusal)
+    assert "experiment budget" in first.reason
+
+    second = director.next_candidate(random.Random(2), 0, "exploration")
+    assert isinstance(second, Refusal)
+    assert second.kind is SkipKind.CAMPAIGN_EXHAUSTED
+    assert "experiment budget" in second.reason
+
+
+def test_the_engine_runs_undirected_only_when_nothing_was_ever_attached(
+    director: ResearchDirector,
+) -> None:
+    """``None`` still means "no campaign", which is a legitimate mode."""
+    assert director.next_candidate(random.Random(1), 0, "exploration") is None
 
 
 def test_observation_without_a_campaign_is_a_no_op(director: ResearchDirector) -> None:
@@ -521,3 +545,45 @@ def test_observation_without_a_campaign_is_a_no_op(director: ResearchDirector) -
     director.observe(
         ObservationInput(candidate=candidate, strategy_id="s", experiment_id="e", status="judged")
     )
+
+def test_a_family_proposal_that_is_not_new_is_still_researched(
+    director: ResearchDirector,
+) -> None:
+    """Deduplication must prevent waste without preventing discovery.
+
+    The novelty gate refuses a *family* proposal that restates a known
+    explanation — correctly, because `mean_reversion_2` should never exist. But
+    the verdict it returns carries a downgrade in its own words: "this is a new
+    hypothesis within a known explanation, which is worth testing". The director
+    used to discard that and spend the cycle on nothing, which is exactly the
+    shape of a memory that stops research rather than focusing it.
+
+    Driven directly at the builder so the assertion is about the decision and
+    not about which bucket the budget happened to draw.
+    """
+    start(director)
+    campaign = director.campaign()
+    assert campaign is not None
+    rng = random.Random(11)
+
+    # Every archetype is drawn repeatedly, so collisions with the families
+    # registered by earlier draws are guaranteed within a few dozen attempts.
+    outcomes = [director._discover_family(campaign, rng, 0) for _ in range(40)]
+    refusals = [o for o in outcomes if isinstance(o, Refusal)]
+    candidates = [o for o in outcomes if isinstance(o, Candidate)]
+
+    assert candidates, "every family proposal was refused; nothing was researched"
+
+    # Whatever was refused was refused as a restatement, with the collision
+    # named — never as a bare "duplicate".
+    for refusal in refusals:
+        assert refusal.kind is SkipKind.NOT_NOVEL
+        assert refusal.reason
+        assert refusal.matched or "archetype" in refusal.reason
+
+    # And at least one candidate came through the downgrade path rather than as
+    # an outright new family: the gate said "not a family" and research still
+    # happened.
+    downgraded = [c for c in candidates if "downgraded from a family proposal" in c.rationale]
+    assert downgraded, "no proposal was pursued at the level the gate assigned it"
+    assert all(c.search_kind is not SearchKind.PARAMETER for c in downgraded)

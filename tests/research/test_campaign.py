@@ -47,14 +47,91 @@ def test_serves_names_exactly_what_is_missing(tmp_path) -> None:
     assert campaign.serves(("L2_MBP", "TRADE_TICKS")) == ("L2_MBP", "TRADE_TICKS")
 
 
-def test_only_one_campaign_runs_at_a_time(tmp_path) -> None:
-    """Two would share the data split and consume each other's burn-once holdout."""
+def test_several_campaigns_run_at_once(tmp_path) -> None:
+    """The old rule was stronger than the constraint it claimed to enforce.
+
+    It refused a second running campaign on the grounds that two would "consume
+    each other's burn-once holdout". They would not: the holdout ledger is keyed
+    by strategy lineage, and two campaigns produce different strategies. What
+    they genuinely shared was the duplicate-claim namespace, which is now
+    partitioned per campaign in `Experiments`.
+    """
     campaigns = store(tmp_path)
-    first = make(campaigns, "First")
-    second = make(campaigns, "Second")
+    first = make(campaigns, "NQ Intraday Alpha")
+    second = make(campaigns, "ES Intraday Alpha")
+    third = make(campaigns, "Volatility Research")
     campaigns.set_status(first.campaign_id, "running")
-    with pytest.raises(CampaignError, match="already running"):
-        campaigns.set_status(second.campaign_id, "running")
+    campaigns.set_status(second.campaign_id, "running")
+    campaigns.set_status(third.campaign_id, "running")
+    assert {c.name for c in campaigns.running()} == {
+        "NQ Intraday Alpha",
+        "ES Intraday Alpha",
+        "Volatility Research",
+    }
+
+
+def test_running_is_ordered_by_priority(tmp_path) -> None:
+    campaigns = store(tmp_path)
+    low = make(campaigns, "Low")
+    high = make(campaigns, "High")
+    campaigns.prioritise(high.campaign_id, 90)
+    campaigns.prioritise(low.campaign_id, 10)
+    campaigns.set_status(low.campaign_id, "running")
+    campaigns.set_status(high.campaign_id, "running")
+    assert [c.name for c in campaigns.running()] == ["High", "Low"]
+    # `active()` still answers for callers that only ever wanted one.
+    assert campaigns.active().name == "High"
+
+
+def test_duplicating_copies_configuration_and_not_findings(tmp_path) -> None:
+    campaigns = store(tmp_path)
+    source = make(campaigns, "NQ Alpha")
+    campaigns.record(source.campaign_id, experiments=40, validated=2, hypotheses=9)
+    copy = campaigns.duplicate(source.campaign_id)
+    assert copy.name == "NQ Alpha (copy)"
+    assert copy.objective == source.objective
+    assert copy.parent_campaign_id == source.campaign_id
+    # Nothing about what the original established carries over. A duplicate that
+    # inherited the counters would claim experiments it has not run.
+    assert copy.progress.experiments == 0
+    assert copy.progress.validated == 0
+    assert copy.progress.hypotheses == 0
+    assert copy.status == "created"
+    again = campaigns.duplicate(copy.campaign_id)
+    assert again.name == "NQ Alpha (copy 2)"
+
+
+def test_archiving_hides_a_campaign_without_deleting_its_research(tmp_path) -> None:
+    campaigns = store(tmp_path)
+    campaign = make(campaigns, "Old work")
+    campaigns.archive(campaign.campaign_id)
+    assert [c.name for c in campaigns.list()] == []
+    assert [c.name for c in campaigns.list(include_archived=True)] == ["Old work"]
+    assert campaigns.get(campaign.campaign_id).archived is True
+    with pytest.raises(CampaignError, match="archived"):
+        campaigns.set_status(campaign.campaign_id, "running")
+    campaigns.restore(campaign.campaign_id)
+    assert [c.name for c in campaigns.list()] == ["Old work"]
+
+
+def test_a_running_campaign_cannot_be_archived(tmp_path) -> None:
+    campaigns = store(tmp_path)
+    campaign = make(campaigns, "Live")
+    campaigns.set_status(campaign.campaign_id, "running")
+    with pytest.raises(CampaignError, match="Stop the campaign"):
+        campaigns.archive(campaign.campaign_id)
+
+
+def test_the_new_fields_survive_a_reopen(tmp_path) -> None:
+    campaigns = store(tmp_path)
+    campaign = make(campaigns, "Tagged")
+    campaigns.prioritise(campaign.campaign_id, 77)
+    campaigns.set_agent_target(campaign.campaign_id, 8)
+    campaigns.rename(campaign.campaign_id, "Renamed")
+    reopened = store(tmp_path).get(campaign.campaign_id)
+    assert reopened.priority == 77
+    assert reopened.agent_target == 8
+    assert reopened.name == "Renamed"
 
 
 def test_the_experiment_budget_stops_the_campaign(tmp_path) -> None:

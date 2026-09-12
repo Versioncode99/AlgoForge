@@ -1,0 +1,401 @@
+/* The Research Control Center.
+ *
+ * The visual problem here is density: many campaigns, many agents, many
+ * refusals, all of which a quant wants at once. The answer is not to hide
+ * things behind tabs — it is to make the hierarchy obvious enough that a reader
+ * can skip whole sections at a glance. Hence: metrics as a flat strip, the two
+ * accountings side by side because they answer the same question from opposite
+ * ends, campaigns as cards, and the two tables only once a campaign is chosen.
+ *
+ * Nothing here uses colour to mean "bad" unless something is actually wrong. An
+ * exhausted campaign reached its target; a stalled one has not.
+ */
+
+.rcc { display: grid; gap: var(--sp-5); padding-block: var(--sp-2); }
+
+.rcc-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-5);
+  align-items: start;
+}
+.rcc-head h2 { margin: var(--sp-2) 0; font-size: 1.4rem; letter-spacing: -0.01em; }
+.rcc-sub { margin: 0; max-width: 62ch; color: var(--fg-2); font-size: 0.86rem; line-height: 1.6; }
+
+.rcc-vitals { display: flex; gap: var(--sp-5); align-items: flex-start; }
+.rcc-vitals > div { display: grid; gap: var(--sp-1); }
+.rcc-vitals span {
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.rcc-vitals strong {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 1.1rem;
+  color: var(--fg-0);
+}
+.rcc-vitals small { color: var(--fg-3); font-size: 0.7rem; }
+
+/* ── metrics ─────────────────────────────────────────────────────────────── */
+.rcc-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--sp-3);
+}
+.rcc-metric {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-1);
+}
+.rcc-metric > span {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+.rcc-metric strong {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--fg-0);
+}
+.rcc-metric small { color: var(--fg-3); font-size: 0.7rem; line-height: 1.45; }
+
+/* ── the two accountings ─────────────────────────────────────────────────── */
+.rcc-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--sp-4); }
+
+.rcc-accounting {
+  display: grid;
+  gap: var(--sp-3);
+  align-content: start;
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-1);
+}
+.rcc-accounting h3 { margin: 0; font-size: 0.95rem; }
+.rcc-note { margin: 0; color: var(--fg-3); font-size: 0.78rem; line-height: 1.55; }
+.rcc-note-tight { font-size: 0.72rem; }
+
+.rcc-accounting dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--sp-3);
+  margin: 0;
+}
+.rcc-accounting dl > div {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+}
+.rcc-accounting dt {
+  font-size: 0.66rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+.rcc-accounting dd {
+  margin: var(--sp-1) 0 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 1.2rem;
+  line-height: 1;
+  color: var(--fg-0);
+}
+.rcc-accounting dl > div[data-tone='good'] dd { color: var(--pass); }
+.rcc-accounting dl > div[data-tone='warn'] dd { color: var(--warn); }
+
+.rcc-levels h4 {
+  margin: 0 0 var(--sp-2);
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.rcc-levels ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.rcc-levels li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.78rem;
+  color: var(--fg-2);
+}
+.rcc-levels strong { font-family: var(--font-mono, ui-monospace, monospace); color: var(--fg-0); }
+
+/* ── campaigns ───────────────────────────────────────────────────────────── */
+.rcc-campaigns > header,
+.rcc-agents > header,
+.rcc-skips > header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+.rcc-campaigns h3,
+.rcc-agents h3,
+.rcc-skips h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: 0.95rem;
+}
+.rcc-campaigns h3 svg,
+.rcc-agents h3 svg,
+.rcc-skips h3 svg { width: 16px; height: 16px; color: var(--fg-2); }
+.rcc-campaigns > header > span,
+.rcc-agents > header > span,
+.rcc-skips > header > span { color: var(--fg-3); font-size: 0.76rem; }
+
+.rcc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--sp-3); }
+
+.rcc-card {
+  display: grid;
+  gap: var(--sp-3);
+  align-content: start;
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-1);
+}
+.rcc-card[data-selected] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-wash); }
+.rcc-card > header { display: flex; align-items: flex-start; gap: var(--sp-2); }
+
+.rcc-card-title {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rcc-card-title strong { font-size: 0.95rem; }
+.rcc-card-title span { color: var(--fg-3); font-size: 0.72rem; }
+
+.rcc-status {
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 0.64rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+.rcc-status[data-status='running'] { color: var(--pass); border-color: color-mix(in srgb, var(--pass) 40%, var(--line)); }
+.rcc-status[data-status='paused'] { color: var(--warn); }
+.rcc-status[data-status='completed'] { color: var(--info); }
+
+.rcc-objective {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rcc-exhausted,
+.rcc-stalled {
+  display: flex;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+.rcc-exhausted svg,
+.rcc-stalled svg { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+/* Exhausted is a *result*. Colouring it red teaches people that finishing is
+ * failing, which is the opposite of what a research budget is for. */
+.rcc-exhausted { background: var(--bg-2); color: var(--fg-2); }
+.rcc-stalled { background: color-mix(in srgb, var(--warn) 10%, transparent); color: var(--warn); }
+
+.rcc-card-figures {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin: 0;
+}
+.rcc-card-figures dt { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-3); }
+.rcc-card-figures dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.95rem;
+  color: var(--fg-0);
+}
+
+.rcc-priority { display: flex; align-items: center; gap: var(--sp-2); font-size: 0.72rem; color: var(--fg-2); }
+.rcc-priority > span { display: flex; align-items: center; gap: var(--sp-1); }
+.rcc-priority svg { width: 13px; height: 13px; }
+.rcc-priority input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.rcc-priority b { font-family: var(--font-mono, ui-monospace, monospace); color: var(--fg-0); }
+
+.rcc-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.rcc-actions button {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  font: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.rcc-actions button:hover { background: var(--bg-3); color: var(--fg-0); }
+.rcc-actions svg { width: 13px; height: 13px; }
+
+.rcc-empty {
+  margin: 0;
+  padding: var(--sp-4);
+  border: 1px dashed var(--line);
+  border-radius: var(--r);
+  color: var(--fg-3);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+/* ── agents and refusals ─────────────────────────────────────────────────── */
+.rcc-agents, .rcc-skips {
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-1);
+}
+
+.rcc-deploy { margin-left: auto; display: flex; gap: var(--sp-1); }
+.rcc-deploy button {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.rcc-deploy button:hover { background: var(--bg-3); color: var(--fg-0); }
+.rcc-deploy svg { width: 11px; height: 11px; }
+
+.rcc-capacity {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3);
+  border-left: 2px solid var(--warn);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  color: var(--fg-1);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+/* Tables scroll on their own. The page body must never scroll sideways. */
+.rcc-agent-table { overflow-x: auto; }
+.rcc-agent-table table { width: 100%; min-width: 680px; border-collapse: collapse; font-size: 0.8rem; }
+.rcc-agent-table th, .rcc-agent-table td {
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.rcc-agent-table thead th {
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  font-weight: 600;
+}
+.rcc-agent-table tbody th { color: var(--fg-0); font-weight: 500; }
+.rcc-agent-table td.num { font-family: var(--font-mono, ui-monospace, monospace); text-align: right; }
+.rcc-agent-table tr[data-stale] { background: color-mix(in srgb, var(--warn) 6%, transparent); }
+
+/* Long tasks, claims and reasons truncate rather than pushing the table wide.
+ * The full text is on the title attribute where it matters. */
+.rcc-task {
+  max-width: 26ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-2);
+}
+
+.rcc-role, .rcc-level {
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+  color: var(--fg-2);
+  font-size: 0.7rem;
+}
+.rcc-agent-state { font-size: 0.74rem; }
+.rcc-agent-state[data-tone='good'] { color: var(--pass); }
+.rcc-agent-state[data-tone='warn'] { color: var(--warn); }
+.rcc-agent-state[data-tone='bad'] { color: var(--fail); }
+.rcc-stale { color: var(--warn); font-size: 0.7rem; font-style: normal; }
+
+.rcc-remove {
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--fg-3);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.rcc-remove:hover { color: var(--fail); background: var(--bg-3); }
+
+.rcc-retryable { margin-top: var(--sp-4); }
+.rcc-retryable h4 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2);
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.rcc-retryable svg { width: 13px; height: 13px; }
+.rcc-retryable ul { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.rcc-retryable li {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 2px solid var(--line-strong);
+  background: var(--bg-2);
+}
+.rcc-retryable strong { font-size: 0.8rem; font-weight: 500; }
+.rcc-retryable span { color: var(--fg-3); font-size: 0.74rem; line-height: 1.5; }
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 860px) {
+  .rcc-head { grid-template-columns: 1fr; }
+  .rcc-vitals { flex-wrap: wrap; gap: var(--sp-4); }
+}

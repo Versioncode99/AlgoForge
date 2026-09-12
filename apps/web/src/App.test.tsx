@@ -267,7 +267,15 @@ describe('the shell inside a mode', () => {
     // The autonomous stance is the one state where the machine acts unasked, so
     // it is named in the chrome rather than only on the screen that set it.
     expect(within(badge as HTMLElement).getByText(/autonomous/i)).toBeInTheDocument()
+
+    // Switch now opens the workspace switcher rather than leaving the mode.
+    // Changing mode changes what an assistant may do on your behalf, which is a
+    // permissions decision and not a navigation one, so it lives inside the
+    // switcher beside the arrangements rather than in the header where it read
+    // as "switch screens".
     fireEvent.click(within(badge as HTMLElement).getByRole('button', { name: /switch/i }))
+    const leave = await screen.findByRole('button', { name: /change operating mode/i })
+    fireEvent.click(leave)
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(posted.some((url) => url.endsWith('/modes/leave'))).toBe(true)
   })

@@ -1,0 +1,544 @@
+/* The operator's own rail, and the workspace switcher.
+ *
+ * Two design constraints worth stating, because they are what make the feature
+ * usable rather than merely present.
+ *
+ * **Navigating must stay faster than editing.** The rail is mostly used to get
+ * somewhere. So the edit affordances are behind a toggle rather than revealed
+ * on hover: a row that sprouts five icons when the pointer crosses it is a row
+ * you have to aim at.
+ *
+ * **A collapsed rail is still a rail.** At icon width the labels go, the edit
+ * controls go, and the destinations stay — including pinned ones inside folded
+ * groups, which is what pinning is for.
+ */
+
+.ws-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ws-rail.is-empty,
+.ws-rail-empty {
+  padding: var(--sp-3);
+  color: var(--fg-3);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.ws-rail-empty b { color: var(--fg-1); }
+
+/* ── groups ──────────────────────────────────────────────────────────────── */
+.ws-group { display: grid; gap: 1px; }
+
+.ws-group > h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: 0 0 var(--sp-1);
+  padding: 0 var(--sp-2);
+  min-height: 24px;
+}
+
+.ws-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-3);
+  font: inherit;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-group-toggle:hover { color: var(--fg-2); }
+.ws-group-toggle svg { width: 12px; height: 12px; flex: none; }
+.ws-group-toggle > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-group-rename {
+  min-width: 0;
+  flex: 1;
+  padding: 2px var(--sp-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+  color: var(--fg-0);
+  font: inherit;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.ws-group-actions,
+.ws-item-actions { display: flex; align-items: center; gap: 2px; }
+
+.ws-group-actions button,
+.ws-item-actions button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.ws-group-actions button:hover,
+.ws-item-actions button:hover { background: var(--bg-3); color: var(--fg-0); }
+.ws-group-actions svg,
+.ws-item-actions svg { width: 13px; height: 13px; }
+.ws-item-actions button[aria-pressed='true'] { color: var(--accent); }
+
+.ws-group-empty {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--fg-3);
+  font-size: 0.74rem;
+}
+
+/* ── items ───────────────────────────────────────────────────────────────── */
+.ws-item { display: flex; align-items: center; gap: 2px; }
+
+.ws-item > a {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  text-decoration: none;
+  font-size: 0.84rem;
+}
+.ws-item > a svg { width: 15px; height: 15px; flex: none; }
+.ws-item > a > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-item > a:hover { background: var(--bg-2); color: var(--fg-0); }
+.ws-item > a[aria-current='page'] {
+  background: var(--bg-3);
+  color: var(--fg-0);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.ws-item > a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Hidden items are only ever drawn while editing, and are drawn as hidden. */
+.ws-item[data-hidden] > a { opacity: 0.45; font-style: italic; }
+
+/* ── the rail's own tools ────────────────────────────────────────────────── */
+.ws-rail-tools {
+  display: grid;
+  gap: 2px;
+  margin-top: auto;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+
+.ws-rail-tool,
+.rail-workspaces {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-rail-tool svg,
+.rail-workspaces svg { width: 14px; height: 14px; flex: none; }
+.ws-rail-tool:hover,
+.rail-workspaces:hover { background: var(--bg-2); color: var(--fg-0); }
+.ws-rail-tool[aria-pressed='true'] { background: var(--accent-wash); color: var(--fg-0); }
+
+.rail-workspaces {
+  margin-top: var(--sp-2);
+  border: 1px solid var(--line);
+}
+
+/* ── collapsed rail ──────────────────────────────────────────────────────── */
+.is-rail-collapsed .ws-group > h2,
+.is-rail-collapsed .ws-item-actions,
+.is-rail-collapsed .ws-group-actions,
+.is-rail-collapsed .ws-rail-tool span,
+.is-rail-collapsed .rail-workspaces span,
+.is-rail-collapsed .ws-rail-empty { display: none; }
+.is-rail-collapsed .ws-item > a { justify-content: center; padding-inline: 0; }
+.is-rail-collapsed .ws-item > a > span { display: none; }
+
+/* ── the picker ──────────────────────────────────────────────────────────── */
+.ws-picker {
+  position: fixed;
+  z-index: 60;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  gap: var(--sp-3);
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 64px));
+  padding: var(--sp-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-3);
+}
+.ws-picker.is-wide { width: min(720px, calc(100vw - 32px)); }
+
+.ws-picker > header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.ws-picker > header strong { flex: 1; font-size: 0.95rem; }
+.ws-picker > header button,
+.ws-create-dialog footer button {
+  display: grid;
+  place-items: center;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  font: inherit;
+  cursor: pointer;
+}
+.ws-picker > header button svg { width: 14px; height: 14px; }
+
+/* Specificity, deliberately: `.ws-picker label` below is a class plus a type
+ * selector and was winning over a single class, turning this row into a grid
+ * and stacking the magnifier above the field. */
+.ws-picker .ws-picker-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-2);
+}
+.ws-picker-search svg { width: 14px; height: 14px; color: var(--fg-3); }
+.ws-picker-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-0);
+  font: inherit;
+}
+.ws-picker-search input:focus { outline: none; }
+
+.ws-picker-body { min-height: 0; overflow-y: auto; display: grid; gap: var(--sp-4); }
+.ws-picker-body h3 {
+  margin: 0 0 var(--sp-2);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.ws-picker-body section { display: grid; gap: 2px; }
+.ws-picker-body section > button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--fg-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-picker-body section > button:hover:not(:disabled) { background: var(--bg-2); border-color: var(--line); }
+.ws-picker-body section > button:disabled { opacity: 0.45; cursor: default; }
+.ws-picker-body section > button[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--accent-wash);
+}
+.ws-picker-body section > button strong {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.ws-picker-body section > button span {
+  grid-column: 1;
+  grid-row: 2;
+  color: var(--fg-3);
+  font-size: 0.74rem;
+}
+.ws-picker-body section > button em {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  color: var(--fg-3);
+  font-size: 0.68rem;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ws-picker .muted { color: var(--fg-3); font-size: 0.82rem; }
+
+.ws-picker form { display: grid; gap: var(--sp-3); min-height: 0; }
+.ws-picker label { display: grid; gap: var(--sp-1); }
+.ws-picker label > span { font-size: 0.72rem; color: var(--fg-2); }
+.ws-picker input,
+.ws-picker select {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--fg-0);
+  font: inherit;
+  font-size: 0.86rem;
+}
+.ws-picker form > button[type='submit'] {
+  justify-self: start;
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+  color: var(--fg-0);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ws-create-fields { display: grid; grid-template-columns: 1fr 100px; gap: var(--sp-3); }
+.ws-create-wide { grid-column: 1 / -1; }
+
+.ws-create-picker { min-height: 0; margin: 0; padding: 0; border: 0; display: grid; gap: var(--sp-2); }
+.ws-create-picker legend {
+  padding: 0;
+  font-size: 0.72rem;
+  color: var(--fg-2);
+}
+.ws-create-picker legend small { margin-left: var(--sp-2); color: var(--fg-3); }
+.ws-create-picker .ws-picker-body { max-height: 280px; }
+
+.ws-create-dialog footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+}
+.ws-create-dialog footer p {
+  flex: 1;
+  margin: 0;
+  color: var(--fail);
+  font-size: 0.78rem;
+}
+.ws-create-dialog footer button[type='submit'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-0);
+}
+.ws-create-dialog footer button:disabled { opacity: 0.5; cursor: default; }
+
+/* ── the switcher ────────────────────────────────────────────────────────── */
+.ws-switcher-layer { position: fixed; inset: 0; z-index: 55; }
+.ws-switcher-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--bg-0) 62%, transparent);
+  cursor: pointer;
+}
+
+.ws-switcher {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  width: min(400px, 92vw);
+  padding: var(--sp-5);
+  border-right: 1px solid var(--line-strong);
+  background: var(--bg-1);
+  overflow-y: auto;
+}
+
+.ws-switcher > header { display: grid; grid-template-columns: auto 1fr; gap: var(--sp-2); align-items: center; }
+.ws-switcher > header svg { width: 18px; height: 18px; color: var(--fg-2); }
+.ws-switcher > header h2 { margin: 0; font-size: 1rem; }
+.ws-switcher > header p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--fg-3);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.ws-list { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+.ws-list li { display: flex; align-items: stretch; gap: var(--sp-1); }
+.ws-list li[aria-current] .ws-open { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+
+.ws-open {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-open:hover { background: var(--bg-3); }
+
+.ws-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: var(--r-sm);
+  background: var(--bg-raised);
+  color: var(--fg-1);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.ws-meta { display: grid; gap: 2px; min-width: 0; }
+.ws-meta strong { font-size: 0.88rem; font-weight: 500; }
+.ws-meta span {
+  color: var(--fg-3);
+  font-size: 0.74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-current { width: 15px; height: 15px; flex: none; color: var(--pass); }
+
+.ws-pin {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-2);
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.ws-pin svg { width: 14px; height: 14px; }
+.ws-pin[aria-pressed='true'] { color: var(--accent); background: var(--accent-wash); }
+
+.ws-none p { margin: 0; color: var(--fg-3); font-size: 0.8rem; line-height: 1.5; }
+
+/* The one control the whole change depends on being found. */
+.ws-create {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r);
+  background: none;
+  color: var(--fg-1);
+  font: inherit;
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+.ws-create:hover { border-color: var(--accent); color: var(--fg-0); background: var(--accent-wash); }
+.ws-create svg { width: 15px; height: 15px; }
+
+.ws-builtins h3 {
+  margin: 0 0 var(--sp-2);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.ws-builtins > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
+.ws-builtins button {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-builtins button:hover { background: var(--bg-3); }
+.ws-builtins button > span { color: var(--fg-3); font-size: 0.9rem; }
+.ws-builtins button strong { font-size: 0.82rem; font-weight: 500; }
+.ws-builtins button small { color: var(--fg-3); font-size: 0.7rem; line-height: 1.4; }
+
+.ws-leave-mode {
+  display: grid;
+  gap: 2px;
+  margin-top: auto;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-leave-mode:hover { background: var(--bg-2); color: var(--fg-0); }
+.ws-leave-mode small { color: var(--fg-3); font-size: 0.7rem; line-height: 1.45; }
+
+.mode-badge-icon {
+  margin-right: var(--sp-1);
+  font-style: normal;
+  color: var(--fg-2);
+}
+.mode-origin {
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--fg-3);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ws-error { margin: 0; color: var(--fail); font-size: 0.8rem; }
+
+@media (max-width: 640px) {
+  .ws-create-fields { grid-template-columns: 1fr; }
+  .ws-builtins > div { grid-template-columns: 1fr; }
+  .ws-switcher { width: 100vw; border-right: 0; }
+}

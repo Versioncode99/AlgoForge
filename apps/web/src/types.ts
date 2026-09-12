@@ -130,6 +130,53 @@ export type Summary = {
 }
 
 /* ── Engine, datasets, prop ─────────────────────────────────────────────── */
+
+/** The engine's actual condition, derived from worker heartbeats.
+ *
+ *  `running` used to be the only signal and it meant "threads exist". A search
+ *  that had exhausted its campaign or was refusing every proposal reported
+ *  RUNNING for as long as it was left alone. These are the states that can be
+ *  told apart, and the interface renders this rather than the boolean. */
+export type RuntimeState =
+  | 'STARTING' | 'RUNNING' | 'PAUSED' | 'IDLE' | 'WAITING_FOR_WORK'
+  | 'WAITING_FOR_DATA' | 'WAITING_FOR_AGENT' | 'BLOCKED' | 'EXHAUSTED'
+  | 'STOPPING' | 'STOPPED' | 'ERROR' | 'RECOVERING'
+
+export type WorkerHeartbeat = {
+  worker_id: string; stage: string
+  beat_at: string | null; progress_at: string | null; started_at: string | null
+  seconds_since_beat: number; seconds_since_progress: number | null
+  cycles: number; progressed: number; barren: number; errors: number
+  paused: boolean; stale: boolean; dead: boolean
+  claim: string | null; campaign_id: string | null; agent_id: string | null
+  last_outcome: string | null; last_reason: string
+}
+
+export type RuntimeSnapshot = {
+  state: RuntimeState; reason: string; code: string; remedy: string
+  detail: Record<string, unknown>
+  working: boolean; stalled: boolean
+  started_at: string | null; last_progress_at: string | null
+  seconds_without_progress: number | null
+  workers: WorkerHeartbeat[]
+  stale_workers: string[]; dead_workers: string[]
+  outcome_counts: Record<string, number>
+  recent_outcomes: { at: string | null; outcome: string; reason: string }[]
+  blockers: Record<string, string>
+}
+
+/** The accounting that replaces the single `skipped_by_memory` figure.
+ *
+ *  `useful` declined an experiment that would otherwise have run. `wasted`
+ *  refused nothing, because there was nothing to refuse — it is a symptom, and
+ *  showing it as saved compute is what made the old number unusable. */
+export type SkipCounts = {
+  total: number; distinct: number
+  useful: number; wasted: number; neutral: number
+  by_kind: Record<string, number>
+  by_level: Record<string, number>
+}
+
 export type EngineStatus = {
   stopping?: boolean
   running: boolean; started_at: string | null; cycles: number
@@ -141,6 +188,16 @@ export type EngineStatus = {
   worker_stages?: Record<string, string>
   pruned?: number; prop_tested?: number
   best_pass_rate?: number; best_strategy?: string | null; best_rule?: string | null
+  // The split that replaces the single skip counter.
+  skipped_duplicate?: number; skipped_by_region?: number; skipped_not_novel?: number
+  skipped_no_work?: number; skipped_blocked?: number; skipped_exhausted?: number
+  skipped_errors?: number; skipped_without_work?: number
+  // Derived truth. `working` is only true when a worker progressed recently.
+  runtime_state?: RuntimeState; runtime_reason?: string
+  runtime_code?: string; runtime_remedy?: string
+  working?: boolean
+  runtime?: RuntimeSnapshot
+  skips?: SkipCounts
   config: {
     dataset: string; cycle_seconds: number; max_strategies: number
     max_bars: number; workers?: number
