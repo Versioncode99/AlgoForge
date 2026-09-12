@@ -259,6 +259,9 @@ field a credential could occupy. `forge.research` imports nothing from
 | `research/test_boundaries.py` | 8 | What the research layer cannot import or construct. |
 | `api/test_campaign_lifecycle_api.py` | 11 | Create, duplicate, archive, prioritise, export, deploy — over HTTP. |
 
+Plus one added to `tests/api/test_artifact_index.py` for the write-lock
+starvation Windows CI found, written to fail at a 1 ms busy timeout without it.
+
 Plus two added to `tests/api/test_director.py`: one pinning that a completed
 campaign keeps saying so, and one pinning that a family proposal the gate refuses
 is still researched at the level the gate assigned it.
@@ -267,6 +270,35 @@ Existing tests changed, each because the behaviour it pinned was deliberately
 replaced: `test_campaign.py` (single-campaign rule removed), `test_director.py`
 (fallback-to-random removed), `test_mcp_server.py` (two new read-only tools),
 `App.test.tsx` (Switch now opens the switcher).
+
+### The bug Windows CI found
+
+The first CI run failed one test on Windows only:
+`test_a_scan_racing_with_writers_does_not_delete_their_work`, with
+`OperationalError: database is locked`. It is in `artifact_index.py`, which this
+change does not touch, and it passed on the baseline's own Windows run — so it
+could not be dismissed as somebody else's.
+
+Reproducing it needed the contention rather than the platform. Squeezing the
+busy timeout from 15 s to milliseconds reproduced it on Linux in seconds and
+named the loser: `save`, not the scan.
+
+The first hypothesis — no WAL — was **wrong**, and measurably so: enabling WAL
+took the failures from 3 to 2 at a 50 ms timeout. WAL stops readers blocking a
+writer; it does nothing for writers blocking each other, and this test runs six
+of them.
+
+The actual cause: `BacktestStore.save` calls `put_many` *outside* its own lock,
+deliberately, so a database write does not block another worker's in-memory
+bookkeeping — and `ArtifactIndex` had no lock of its own, so six workers each
+opened a connection and fought for the write lock. SQLite's busy handler has no
+fairness guarantee, so under steady contention a connection is starved past
+*any* timeout. The 15 seconds were never the problem.
+
+A `threading.Lock` around the four write methods makes them queue in arrival
+order. Verified at a **1 ms** busy timeout, where the unfixed code fails
+outright. `ArtifactIndex` was the only store in the repository with neither a
+lock nor `BEGIN IMMEDIATE`; the fix brings it in line with the others.
 
 ## 20. Visual QA
 

@@ -446,6 +446,62 @@ def test_a_scan_racing_with_writers_does_not_delete_their_work(tmp_path: Path) -
     assert BacktestStore(root).count() == on_disk
 
 
+def test_concurrent_writers_queue_rather_than_race_the_busy_handler(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Writers must not depend on SQLite's busy handler to take turns.
+
+    `BacktestStore.save` calls `put_many` outside its own lock, deliberately, so
+    a database write does not block another worker's in-memory bookkeeping. That
+    left the writes with no serialisation at all: six engine workers each opened
+    a connection and fought for the write lock.
+
+    SQLite's busy handler has no fairness guarantee, so under steady contention
+    one connection can be starved past *any* timeout. That is what
+    "database is locked" was on a loaded Windows runner — not a timeout too
+    short, but a connection that never won.
+
+    The timeout is squeezed to a millisecond here, which is what makes this a
+    test of the queueing rather than of the machine's speed: with the busy
+    handler as the only defence this fails outright, and with the writes queued
+    it cannot fail however slow the filesystem is.
+    """
+    root = tmp_path / "backtests"
+    root.mkdir()
+    store = BacktestStore(root)
+    monkeypatch.setattr(
+        ArtifactIndex,
+        "_connect",
+        lambda self: sqlite3.connect(self.path, timeout=0.001),
+    )
+    failures: list[str] = []
+
+    def writer(worker: int) -> None:
+        try:
+            for index in range(25):
+                store.save(FakeResult(artifact(f"backtest_w{worker}_{index}", "alpha")))
+        except Exception as exc:
+            failures.append(f"{type(exc).__name__}: {exc}")
+
+    def scanner() -> None:
+        try:
+            for _ in range(40):
+                store._scan()
+                store.count()
+        except Exception as exc:
+            failures.append(f"{type(exc).__name__}: {exc}")
+
+    threads = [threading.Thread(target=writer, args=(w,)) for w in range(6)]
+    threads += [threading.Thread(target=scanner) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert failures == [], "a writer lost the race for the write lock"
+    assert store.count() == 150
+
+
 def test_a_genuinely_deleted_artifact_is_still_forgotten(tmp_path: Path) -> None:
     """The race fix must not stop real deletions being noticed."""
     root = tmp_path / "backtests"
