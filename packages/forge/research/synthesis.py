@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from forge.research.grammar import OBSERVABLES, ConstructionSpec, build
 from forge.strategy.ir import (
     Arithmetic,
     Combine,
@@ -789,7 +790,15 @@ def archetypes_for(family: str) -> list[Archetype]:
 
 @dataclass(frozen=True)
 class Composition:
-    """A generated definition and the record of how it was put together."""
+    """A generated definition and the record of how it was put together.
+
+    ``construction`` is present when the signal was *assembled* by
+    :mod:`forge.research.grammar` rather than selected from the fixed archetype
+    vocabulary. It carries the grammar's own structural signature, which is what
+    the novelty gate compares — two assemblies that landed on the same shape,
+    observable, transformation and stance are the same construction however
+    differently their hypotheses are worded.
+    """
 
     definition: StrategyDefinition
     archetype: str
@@ -798,9 +807,23 @@ class Composition:
     exit_style: str
     seed: int
     features: frozenset[str] = field(default_factory=frozenset)
+    construction: dict[str, Any] | None = None
+    mechanism: str = ""
+
+    @property
+    def structural_signature(self) -> str:
+        """What this construction *is*, ignoring its numbers.
+
+        An assembled construction has the grammar's signature; a fixed archetype
+        is its own signature. Either way this is the identity two proposals are
+        compared on, and it deliberately excludes every lookback and threshold.
+        """
+        if self.construction:
+            return str(self.construction.get("signature") or self.archetype)
+        return self.archetype
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "definition_id": self.definition.definition_id,
             "definition_hash": self.definition.definition_hash,
             "archetype": self.archetype,
@@ -809,7 +832,13 @@ class Composition:
             "exit_style": self.exit_style,
             "seed": self.seed,
             "features": sorted(self.features),
+            "structural_signature": self.structural_signature,
         }
+        if self.construction:
+            payload["construction"] = self.construction
+        if self.mechanism:
+            payload["mechanism"] = self.mechanism
+        return payload
 
 
 #: How a trade is left. Each is coherent with a different claim about the effect:
@@ -1000,3 +1029,180 @@ def required_data(archetypes: Sequence[Archetype | str]) -> tuple[str, ...]:
         arch = ARCHETYPES[item] if isinstance(item, str) else item
         needed.update(arch.required_data)
     return tuple(sorted(needed))
+
+
+# ── assembled constructions ──────────────────────────────────────────────────
+# The archetype vocabulary above is ten fixed signals. Everything below composes
+# one instead, from `forge.research.grammar`. The two share this module's exits,
+# sessions and provenance on purpose: an assembled construction is a strategy
+# by exactly the same route a selected one is, and there is no second pipeline
+# for it to take.
+
+
+def compose_construction(
+    spec: ConstructionSpec,
+    *,
+    family: str | None = None,
+    symbol: str = "NQ",
+    timeframe: str = "1m",
+    seed: int = 0,
+    direction: str | None = None,
+    session: str | None = None,
+    exit_style: str | None = None,
+    derived_from: str = "grammar",
+    note: str = "",
+) -> Composition:
+    """Turn an assembled construction into an executable definition.
+
+    The exit is chosen to be *coherent with the mechanism's stance* rather than
+    drawn freely: a continuation claim gets a trail or a time stop, because a
+    fixed target caps exactly the outcome it predicts, and a reversion claim
+    gets a target at the level it says price returns to. An exit that
+    contradicts the claim makes the result a measurement of the exit.
+    """
+    built = build(spec)
+    rng = random.Random(seed)
+
+    direction = direction or rng.choice(("both", "long", "short"))
+    if direction not in {"both", "long", "short"}:
+        raise SynthesisError(f"Unknown direction '{direction}'.")
+    session = session if session is not None else rng.choice(("", "", *SESSIONS))
+    if session and session not in SESSIONS:
+        raise SynthesisError(f"Unknown session '{session}'. Known: {', '.join(SESSIONS)}.")
+    continuation = built.mechanism.stance == "continuation"
+    exit_style = exit_style or (
+        rng.choice(("trailing", "time_stop", "session_flat"))
+        if continuation
+        else rng.choice(("atr_bracket", "time_stop"))
+    )
+    if exit_style not in EXIT_STYLES:
+        raise SynthesisError(f"Unknown exit style '{exit_style}'.")
+
+    # Risk is sized in ATR whatever the signal reads, so a construction that
+    # observes no volatility still has a stop in a unit that means something.
+    # Declared under a reserved name the grammar never uses.
+    features = (*built.features, Feature(name="risk_atr", kind="atr", args=(Constant(value=14),)))
+
+    exit_rules, exit_params = _exit_rules_for(exit_style, "risk_atr")
+
+    window = None
+    if session:
+        start, end, label = SESSIONS[session]
+        window = SessionWindow(start_minute=start, end_minute=end, label=label)
+
+    entry = EntryRules(
+        long=built.long if direction in {"both", "long"} else None,
+        short=built.short if direction in {"both", "short"} else None,
+        session=window,
+    )
+
+    stated = {"both": "directional", "long": "upward", "short": "downward"}[direction]
+    claim = (
+        f"When {built.description}, {stated} follow-through is expected because "
+        f"{built.mechanism.claim[0].lower()}{built.mechanism.claim[1:]}"
+    )
+    if session:
+        claim += f" Tested only inside the {SESSIONS[session][2]} window."
+
+    by_name: dict[str, ParameterSpec] = {p.name: p for p in exit_params}
+    by_name.update({p.name: p for p in built.parameters})
+
+    definition = StrategyDefinition(
+        name=f"{spec.label[:100]} · {symbol}",
+        family=family or _family_for(built),
+        symbol=symbol,
+        timeframe=timeframe,
+        hypothesis=claim,
+        falsifiable_prediction=built.mechanism.describe(
+            OBSERVABLES[spec.observable].label.lower()
+        ),
+        features=features,
+        entry=entry,
+        exit=exit_rules,
+        parameters=tuple(by_name.values()),
+        execution=ExecutionAssumptions(),
+        provenance=DefinitionProvenance(
+            author="algoforge-research",
+            created_at=SYNTHESIS_EPOCH,
+            derived_from=derived_from,
+            note=note or built.mechanism.claim[:400],
+        ),
+    )
+    return Composition(
+        definition=definition,
+        archetype=f"grammar:{spec.shape}",
+        direction=direction,
+        session=session,
+        exit_style=exit_style,
+        seed=seed,
+        features=frozenset(f.kind for f in features),
+        construction={**spec.as_dict(), "signature": spec.signature, "label": spec.label},
+        mechanism=built.mechanism.key,
+    )
+
+
+#: Mechanism categories mapped onto the family vocabulary the rest of the system
+#: already uses. A construction reading volatility belongs in the volatility
+#: family whether it was selected or assembled, so the two halves of the
+#: vocabulary land in the same catalogue rather than beside it.
+_FAMILY_BY_CATEGORY: tuple[tuple[str, str], ...] = (
+    ("session", "session_structure"),
+    ("volatility", "volatility"),
+    ("momentum", "momentum"),
+    ("trend", "trend_following"),
+    ("volume", "liquidity"),
+    ("microstructure", "liquidity"),
+    ("oscillator", "mean_reversion"),
+    ("range", "breakout"),
+    ("price", "price_action"),
+)
+
+
+def _family_for(built: Any) -> str:
+    if built.mechanism.stance == "reversion" and "session" in built.categories:
+        return "mean_reversion"
+    for category, family in _FAMILY_BY_CATEGORY:
+        if category in built.categories:
+            return family
+    return "price_action"
+
+
+def _exit_rules_for(style: str, risk_feature: str) -> tuple[ExitRules, tuple[ParameterSpec, ...]]:
+    """The same four exits the archetypes use, sized off a named risk feature."""
+    stop = Level(kind="feature", multiple=ParamRef(name="stop_atr"), feature=risk_feature)
+    extra: list[ParameterSpec] = [
+        _p("stop_atr", 2.0, 0.5, 6.0, 0.25, "Stop distance in ATR."),
+        _p("max_bars", 30, 5, 240, 5, "Hard time stop, in bars."),
+    ]
+    if style == "trailing":
+        extra.append(_p("trail_atr", 2.0, 0.5, 6.0, 0.25, "Trailing distance in ATR."))
+        return (
+            ExitRules(
+                stop=stop,
+                trailing=Level(
+                    kind="feature", multiple=ParamRef(name="trail_atr"), feature=risk_feature
+                ),
+                max_bars=ParamRef(name="max_bars"),
+            ),
+            tuple(extra),
+        )
+    if style == "time_stop":
+        return ExitRules(stop=stop, max_bars=ParamRef(name="max_bars")), tuple(extra)
+    if style == "session_flat":
+        return (
+            ExitRules(
+                stop=stop, max_bars=ParamRef(name="max_bars"), flat_by_minute=NEW_YORK_FLAT
+            ),
+            tuple(extra),
+        )
+    extra.append(_p("target_atr", 3.0, 0.5, 10.0, 0.25, "Target distance in ATR."))
+    return (
+        ExitRules(
+            stop=stop,
+            target=Level(
+                kind="feature", multiple=ParamRef(name="target_atr"), feature=risk_feature
+            ),
+            max_bars=ParamRef(name="max_bars"),
+        ),
+        tuple(extra),
+    )
