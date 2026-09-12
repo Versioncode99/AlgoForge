@@ -182,3 +182,67 @@ def test_counts_report_every_state_and_role(registry: AgentRegistry) -> None:
     assert set(counts["by_state"]) == {str(s) for s in AgentState}
     assert set(counts["by_role"]) == {str(r) for r in AgentRole}
     assert counts["total"] == 2
+
+
+# ── does a role change what an agent does, or only what it is called? ────────
+
+
+def test_no_two_roles_prefer_exactly_the_same_work() -> None:
+    """A role whose preferences match another's is one role with two names.
+
+    An operator deploying a crew reads the role sentences and picks. If two of
+    those sentences describe different research and the code cannot tell the
+    two apart, the crew composition is decorative — and nothing anywhere would
+    say so, because each role reports its own name back.
+
+    DISCOVERY and FEATURE held the same two buckets in opposite order. The draw
+    tests membership, so the order was never read.
+    """
+    from forge.research.agents import ROLE_BUCKETS
+
+    seen: dict[frozenset[str], list[str]] = {}
+    for role, buckets in ROLE_BUCKETS.items():
+        if not buckets:
+            continue  # SPECIALIST is unbiased on purpose; see below.
+        seen.setdefault(frozenset(buckets), []).append(str(role))
+
+    duplicates = {tuple(sorted(names)) for names in seen.values() if len(names) > 1}
+    assert not duplicates, f"roles that prefer identical work: {sorted(duplicates)}"
+
+
+def test_every_role_has_a_purpose_and_a_preference() -> None:
+    """A role added without either is a role nobody can choose between."""
+    from forge.research.agents import ROLE_BUCKETS, ROLE_PURPOSE
+
+    for role in AgentRole:
+        assert ROLE_PURPOSE.get(role), f"{role} has no sentence for the interface"
+        assert role in ROLE_BUCKETS, f"{role} has no preference, not even an empty one"
+
+
+def test_a_preference_names_buckets_that_exist() -> None:
+    """A typo'd bucket name is a role that silently has no preference at all."""
+    from forge.research.agents import ROLE_BUCKETS
+    from forge.research.allocation import Bucket
+
+    valid = {b.value for b in Bucket}
+    for role, buckets in ROLE_BUCKETS.items():
+        unknown = sorted(set(buckets) - valid)
+        assert not unknown, f"{role} prefers buckets that do not exist: {unknown}"
+
+
+def test_the_feature_role_does_not_prefer_tuning() -> None:
+    """Its own sentence is "not how it is tuned"."""
+    from forge.research.agents import ROLE_BUCKETS
+
+    assert "REFINE_PARAMETERS" not in ROLE_BUCKETS[AgentRole.FEATURE]
+
+
+def test_a_specialist_is_unbiased_and_that_is_the_point() -> None:
+    """SPECIALIST draws the campaign's allocation untouched.
+
+    Pinned rather than left implicit: it is the one role that is *meant* to
+    behave like no role, so a future distinctness check does not "fix" it.
+    """
+    from forge.research.agents import ROLE_BUCKETS
+
+    assert ROLE_BUCKETS[AgentRole.SPECIALIST] == ()
