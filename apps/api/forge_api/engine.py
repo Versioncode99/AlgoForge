@@ -90,6 +90,13 @@ class EngineConfig:
     seed: int = 20260901
 
 
+#: The development screen's trade floor. Named because two places read it: the
+#: screen itself, and the classification that says *why* a candidate was
+#: screened out. A literal in both would let them drift, and the drift would be
+#: a candidate rejected for a sample problem reported as an expectancy one.
+MIN_SCREEN_TRADES = 30
+
+
 @dataclass
 class EngineState:
     running: bool = False
@@ -1258,7 +1265,7 @@ class AutonomousEngine:
             )
             if self._stop.is_set():
                 return Outcome.PROGRESS, "stopped mid-cycle after a development backtest"
-            if development.net_pnl <= 0 or len(development.trades) < 30:
+            if development.net_pnl <= 0 or len(development.trades) < MIN_SCREEN_TRADES:
                 self._bump("backtested")
                 self._bump("rejected")
                 self.log.record(
@@ -1284,6 +1291,22 @@ class AutonomousEngine:
                     reason=(
                         f"screened out: development net {development.net_pnl:+.2f} over "
                         f"{len(development.trades)} trades"
+                    ),
+                    # Classified, because a screened candidate is a *failure
+                    # with information* and this path used to throw it away.
+                    #
+                    # `_generate_followups` returns immediately when the
+                    # observation carries no failure class, and the screen sent
+                    # none -- so a construction that produced no edge on the
+                    # development window generated no research question at all.
+                    # Measured on a 120-cycle campaign: 39 experiments, most of
+                    # them dying here, and one follow-up in the whole run.
+                    #
+                    # The class is read from what the screen actually measured,
+                    # not from a gate: no gate ran, `gate` stays unset, and the
+                    # verdict remains the judge's to give.
+                    failure_class=_screen_failure(
+                        development.net_pnl, len(development.trades)
                     ),
                     backtest_id=development.backtest_id,
                     compute_units=1.0,
@@ -1836,6 +1859,25 @@ def _axis_points(spec: ParameterSpec, current: float, count: int) -> list[float]
                     break
         distance += 1
     return sorted(chosen)
+
+
+def _screen_failure(net_pnl: float, trades: int) -> FailureClass:
+    """What the development screen actually found, in the failure vocabulary.
+
+    Honest about its own standing: this is not a gate verdict and no gate ran.
+    It is a classification of two numbers the screen measured, so that a
+    candidate rejected before the judge still says *why* it was rejected in
+    terms research can act on.
+
+    Order matters. A strategy that produced nothing to measure has a sample
+    problem, not an expectancy problem, and telling it to look for an edge in
+    zero trades is the wrong question.
+    """
+    if trades == 0:
+        return FailureClass.NO_TRADES
+    if trades < MIN_SCREEN_TRADES:
+        return FailureClass.INSUFFICIENT_SAMPLE
+    return FailureClass.NEGATIVE_EXPECTANCY
 
 
 def _grid_size(grid: dict[str, list[float]]) -> int:
