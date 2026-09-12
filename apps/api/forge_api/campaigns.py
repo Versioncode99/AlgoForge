@@ -14,6 +14,7 @@ stale.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -38,6 +39,16 @@ from forge.research.synthesis import ARCHETYPES
 from pydantic import BaseModel, Field
 
 from forge_api.director import ResearchDirector
+
+
+class UnknownCampaign(CampaignError):
+    """No campaign carries that id.
+
+    A subclass of `CampaignError` so every existing `except CampaignError`
+    keeps working, and a distinct type so a caller that needs to answer 404
+    rather than 409 can tell the two apart without matching on the message.
+    """
+
 
 
 class CreateCampaignRequest(BaseModel):
@@ -123,12 +134,100 @@ class CampaignService:
         self.orchestrator = ResearchOrchestrator(
             campaigns=self.campaigns, agents=self.agents, log=log
         )
+        # Starting a campaign is *two* things — marking the row running and
+        # starting the search machinery — and only the control layer knows how
+        # to do the second. Injected rather than imported so this module never
+        # reaches into the engine, and optional so a test can exercise the
+        # bookkeeping half on its own.
+        self.start_engine: Callable[[Any, Any], None] | None = None
+        self.stop_engine: Callable[[], Any] | None = None
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
+    # These live on the service rather than inside the route closures because
+    # three surfaces have to be able to run them and get the same result: the
+    # HTTP routes below, the command palette, and an assistant calling the
+    # action registry. A second implementation for the agent — which is what
+    # existed while the registry had no campaign verbs at all — is how the AI
+    # and the UI come to disagree about what "start" means.
+
+    def require(self, campaign_id: str) -> Any:
+        """The campaign, or `UnknownCampaign`. Never `None`."""
+        campaign = self.campaigns.get(campaign_id)
+        if campaign is None:
+            raise UnknownCampaign(campaign_id)
+        return campaign
+
+    def start(self, campaign_id: str, settings: Any) -> dict[str, Any]:
+        """Run this campaign, alongside any others already running.
+
+        Starting a second campaign does not stop the first. The engine's
+        workers are dealt across every running campaign by the orchestrator,
+        and the engine itself is started once — a second start is a no-op,
+        which is what lets a campaign join a run already in progress.
+        """
+        self.require(campaign_id)
+        campaign = self.campaigns.set_status(campaign_id, "running")
+        if self.director is not None:
+            self.director.prepare(campaign)
+            # The first campaign to start is also the attached one, so an
+            # engine running with no orchestrator still has a campaign to serve.
+            if self.director.attached_campaign_id is None:
+                self.director.attach(campaign)
+        # A crew, if this campaign asked for one and has none yet.
+        note = ""
+        if campaign.agent_target > 0 and not self.agents.list(campaign_id):
+            _, note = self.agents.deploy(
+                campaign_id=campaign_id, count=campaign.agent_target
+            )
+        for agent in self.agents.list(campaign_id):
+            if agent.state in {AgentState.CREATED, AgentState.STOPPED}:
+                self.agents.set_state(
+                    agent.agent_id, AgentState.RUNNING, task="waiting for an assignment"
+                )
+        if self.start_engine is not None:
+            self.start_engine(campaign, settings)
+        payload = self.overview(campaign_id)
+        if note:
+            payload["capacity_note"] = note
+        return payload
+
+    def stop(self, campaign_id: str) -> dict[str, Any]:
+        """Stop one campaign. The engine keeps running for the others.
+
+        Stopping used to stop the engine, because there was only ever one
+        campaign and the two were the same act. With several running, stopping
+        the engine because one campaign finished would silently end the rest.
+        """
+        self.require(campaign_id)
+        self.campaigns.set_status(campaign_id, "stopped", reason="stopped by the operator")
+        self.agents.stop_all(campaign_id, reason="campaign stopped by the operator")
+        self.orchestrator.forget(campaign_id)
+        if self.director is not None:
+            self.director.forget(campaign_id)
+            if self.director.attached_campaign_id == campaign_id:
+                self.director.detach("stopped by the operator")
+        if not self.campaigns.running() and self.stop_engine is not None:
+            # Nothing left to research. Only then does the engine stop.
+            self.stop_engine()
+        return self.overview(campaign_id)
+
+    def pause(self, campaign_id: str) -> dict[str, Any]:
+        """Hold a campaign without ending it.
+
+        Distinct from stopping: a paused campaign keeps its agents, so resuming
+        it does not reset the crew or lose what each agent was working on.
+        """
+        self.require(campaign_id)
+        self.campaigns.set_status(campaign_id, "paused", reason="paused by the operator")
+        for agent in self.agents.list(campaign_id):
+            if agent.state in {AgentState.RUNNING, AgentState.IDLE, AgentState.WAITING}:
+                self.agents.set_state(agent.agent_id, AgentState.WAITING, task="campaign paused")
+        self.orchestrator.forget(campaign_id)
+        return self.overview(campaign_id)
 
     def overview(self, campaign_id: str) -> dict[str, Any]:
         """Everything one campaign screen needs, in one payload."""
-        campaign = self.campaigns.get(campaign_id)
-        if campaign is None:
-            raise HTTPException(404, {"code": "unknown_campaign", "reason": campaign_id})
+        campaign = self.require(campaign_id)
         counts = self.frontier.counts(campaign_id)
         return {
             "campaign": campaign.as_dict(),
@@ -200,6 +299,8 @@ def build_campaign_router(
     starting the search machinery — and only the control layer knows how to do
     the second.
     """
+    service.start_engine = start_engine
+    service.stop_engine = stop_engine
     router = APIRouter(prefix="/campaigns", tags=["research"])
 
     @router.get("")
@@ -307,87 +408,35 @@ def build_campaign_router(
 
     @router.get("/{campaign_id}")
     def get_campaign(campaign_id: str) -> ApiEnvelope[dict[str, Any]]:
-        return ApiEnvelope(data=service.overview(campaign_id))
+        try:
+            return ApiEnvelope(data=service.overview(campaign_id))
+        except UnknownCampaign as exc:
+            raise HTTPException(404, {"code": "unknown_campaign", "reason": str(exc)}) from exc
 
     @router.post("/{campaign_id}/start")
     def start_campaign(
         campaign_id: str, body: StartCampaignRequest
     ) -> ApiEnvelope[dict[str, Any]]:
-        """Run this campaign, alongside any others already running.
-
-        Starting a second campaign no longer stops the first. The engine's
-        workers are dealt across every running campaign by the orchestrator, and
-        the engine itself is started once — a second start is a no-op, which is
-        what lets a campaign join a run already in progress.
-        """
-        campaign = service.campaigns.get(campaign_id)
-        if campaign is None:
-            raise HTTPException(404, {"code": "unknown_campaign", "reason": campaign_id})
         try:
-            campaign = service.campaigns.set_status(campaign_id, "running")
+            return ApiEnvelope(data=service.start(campaign_id, body))
+        except UnknownCampaign as exc:
+            raise HTTPException(404, {"code": "unknown_campaign", "reason": str(exc)}) from exc
         except CampaignError as exc:
             raise HTTPException(409, {"code": "campaign_conflict", "reason": str(exc)}) from exc
-        if service.director is not None:
-            service.director.prepare(campaign)
-            # The first campaign to start is also the attached one, so an engine
-            # running with no orchestrator still has a campaign to serve.
-            if service.director.attached_campaign_id is None:
-                service.director.attach(campaign)
-        # A crew, if this campaign asked for one and has none yet.
-        note = ""
-        if campaign.agent_target > 0 and not service.agents.list(campaign_id):
-            _, note = service.agents.deploy(
-                campaign_id=campaign_id, count=campaign.agent_target
-            )
-        for agent in service.agents.list(campaign_id):
-            if agent.state in {AgentState.CREATED, AgentState.STOPPED}:
-                service.agents.set_state(
-                    agent.agent_id, AgentState.RUNNING, task="waiting for an assignment"
-                )
-        start_engine(campaign, body)
-        payload = service.overview(campaign_id)
-        if note:
-            payload["capacity_note"] = note
-        return ApiEnvelope(data=payload)
 
     @router.post("/{campaign_id}/stop")
     def stop_campaign(campaign_id: str) -> ApiEnvelope[dict[str, Any]]:
-        """Stop one campaign. The engine keeps running for the others.
-
-        Stopping used to stop the engine, because there was only ever one
-        campaign and the two were the same act. With several running, stopping
-        the engine because one campaign finished would silently end the rest.
-        """
-        campaign = service.campaigns.get(campaign_id)
-        if campaign is None:
-            raise HTTPException(404, {"code": "unknown_campaign", "reason": campaign_id})
-        service.campaigns.set_status(campaign_id, "stopped", reason="stopped by the operator")
-        service.agents.stop_all(campaign_id, reason="campaign stopped by the operator")
-        service.orchestrator.forget(campaign_id)
-        if service.director is not None:
-            service.director.forget(campaign_id)
-            if service.director.attached_campaign_id == campaign_id:
-                service.director.detach("stopped by the operator")
-        if not service.campaigns.running():
-            # Nothing left to research. Only then does the engine stop.
-            stop_engine()
-        return ApiEnvelope(data=service.overview(campaign_id))
+        try:
+            return ApiEnvelope(data=service.stop(campaign_id))
+        except UnknownCampaign as exc:
+            raise HTTPException(404, {"code": "unknown_campaign", "reason": str(exc)}) from exc
 
     @router.post("/{campaign_id}/pause")
     def pause_campaign(campaign_id: str) -> ApiEnvelope[dict[str, Any]]:
-        """Hold a campaign without ending it.
-
-        Distinct from stopping: a paused campaign keeps its agents, so resuming
-        it does not reset the crew or lose what each agent was working on.
-        """
-        if service.campaigns.get(campaign_id) is None:
-            raise HTTPException(404, {"code": "unknown_campaign", "reason": campaign_id})
-        service.campaigns.set_status(campaign_id, "paused", reason="paused by the operator")
-        for agent in service.agents.list(campaign_id):
-            if agent.state in {AgentState.RUNNING, AgentState.IDLE, AgentState.WAITING}:
-                service.agents.set_state(agent.agent_id, AgentState.WAITING, task="campaign paused")
-        service.orchestrator.forget(campaign_id)
-        return ApiEnvelope(data=service.overview(campaign_id))
+        try:
+            return ApiEnvelope(data=service.pause(campaign_id))
+        except UnknownCampaign as exc:
+            raise HTTPException(404, {"code": "unknown_campaign", "reason": str(exc)}) from exc
 
     @router.post("/{campaign_id}/resume")
     def resume_campaign(
