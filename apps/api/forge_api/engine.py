@@ -41,6 +41,7 @@ from forge.research import ResearchLedger, ResearchPartitions, chronological_spl
 from forge.research.orchestration import Assignment, ResearchOrchestrator
 from forge.research.runtime import Outcome, RuntimeMonitor, RuntimeState
 from forge.research.skips import NoveltyLevel, SkipKind, SkipLedger
+from forge.research.split import source_data_hash
 from forge.strategy import (
     SHIPPED_TEMPLATE_KEYS,
     TEMPLATES,
@@ -237,6 +238,15 @@ class AutonomousEngine:
         self._loaded: tuple[Any, Any] | None = None
         self._partitions: ResearchPartitions | None = None
         self._data_version = "unloaded"
+        # Bars per *time scope*, so two campaigns researching different windows
+        # are not served the same nine months.
+        #
+        # The engine loaded once per run — `market.load(dataset, max_bars)`,
+        # resolved as `tail(limit)` — and every worker and every experiment in
+        # every campaign shared that one window whatever its hypothesis. Keyed
+        # by the scope's fingerprint rather than by campaign, so two campaigns
+        # that happen to select the same window share one load and one split.
+        self._scoped: dict[str, tuple[Any, Any, ResearchPartitions | None, str]] = {}
         # Hashed over the **shipped** catalogue only.
         #
         # It used to hash all of `TEMPLATES`, which the research director adds to
@@ -308,6 +318,7 @@ class AutonomousEngine:
             self._loaded = None
             self._partitions = None
             self._data_version = "unloaded"
+            self._scoped.clear()
             self._active.clear()
             # Nothing of ours is alive past the guard above, so any claim still
             # marked in-flight was left by a process that died or a run that was
@@ -467,6 +478,96 @@ class AutonomousEngine:
         except Exception as exc:
             self.log.record("RESEARCH", f"observation failed: {type(exc).__name__}: {exc}", "warn")
 
+    # ── temporal scope ───────────────────────────────────────────────────────
+
+    def scope_for(self, worker: int) -> Any:
+        """The time scope this worker's campaign selects, or `None` for the default.
+
+        `None` is the ordinary answer and keeps the engine's existing behaviour
+        exactly: a campaign that names no dates gets the window the run loaded,
+        as it always did. Nothing about existing campaigns changes.
+        """
+        # Through the director, which already holds the campaign store. Reaching
+        # for a second handle on it here would be a second source of truth about
+        # which campaign a worker is serving.
+        if self.director is None:
+            return None
+        with self._state_lock:
+            assignment = self._assignments.get(worker)
+        campaign_id = assignment.campaign_id if assignment else self.director.attached_campaign_id
+        if not campaign_id:
+            return None
+        campaign = self.director.campaigns.get(campaign_id)
+        if campaign is None:
+            return None
+        try:
+            available_start, available_end = self.market.reservoir(campaign.dataset)
+        except Exception:
+            # A dataset whose span cannot be read is not a reason to stop
+            # researching; it is a reason to use the window already loaded.
+            return None
+        return campaign.time_scope(available_start, available_end)
+
+    def _bars_for(self, worker: int, default: tuple[Any, Any]) -> tuple[Any, Any, str]:
+        """The bars this cycle runs on, and the data version they carry.
+
+        Returns the run's loaded window unless the worker's campaign selects
+        one of its own. Cached per scope fingerprint: without that, a campaign
+        with dates would re-slice the archive every cycle.
+        """
+        scope = self.scope_for(worker)
+        if scope is None:
+            bars, dataset = default
+            return bars, dataset, self._data_version
+
+        key = scope.fingerprint()
+        with self._data_lock:
+            cached = self._scoped.get(key)
+            if cached is not None:
+                bars, dataset, _partitions, version = cached
+                return bars, dataset, version
+        # Loaded outside the lock: slicing a multi-million-row frame under the
+        # same lock every other worker needs would serialise the whole engine
+        # behind one campaign's first cycle.
+        try:
+            bars, dataset = self.market.load_scope(scope)
+        except Exception as exc:
+            self.log.record(
+                "DATA",
+                f"the window {scope.describe()} could not be loaded: {exc}; "
+                "this campaign's cycle is using the run's default window",
+                "warn",
+            )
+            bars, dataset = default
+            return bars, dataset, self._data_version
+
+        partitions = None
+        version = source_data_hash(bars)
+        if dataset.is_real:
+            try:
+                partitions = chronological_split(
+                    bars, warmup_bars=max(t.warmup_bars for t in TEMPLATES.values())
+                )
+                version = partitions.receipt.source_data_hash
+            except ValueError as exc:
+                # INSUFFICIENT_SPLIT_BARS. The window is real and too small to
+                # partition, which is a fact about the window rather than a
+                # failure of the engine -- and it is exactly what a campaign
+                # asking for three weeks of history should be told.
+                self.log.record(
+                    "DATA",
+                    f"the window {scope.describe()} holds too few bars to partition: {exc}",
+                    "warn",
+                )
+        with self._data_lock:
+            self._scoped[key] = (bars, dataset, partitions, version)
+        self.log.record(
+            "DATA",
+            f"{dataset.label}: {len(bars):,} bars for {scope.describe()}",
+            "pass" if dataset.is_real else "warn",
+        )
+        return bars, dataset, version
+
     # ── the loop ─────────────────────────────────────────────────────────────
     def _loop(self, worker: int = 0) -> None:
         # A different stream per worker, or four threads explore the same
@@ -516,7 +617,13 @@ class AutonomousEngine:
             outcome, reason = Outcome.PROGRESS, ""
             try:
                 self._make_room()
-                outcome, reason = self._cycle(rng, bars, dataset.is_real, worker)
+                # Resolved per cycle rather than once per run: the worker may
+                # be serving a different campaign than it was last cycle, and
+                # campaigns may select different windows.
+                cycle_bars, cycle_dataset, _version = self._bars_for(worker, (bars, dataset))
+                outcome, reason = self._cycle(
+                    rng, cycle_bars, cycle_dataset.is_real, worker
+                )
             except Exception as exc:  # a bad cycle must not kill the engine
                 with self._state_lock:
                     self.state.last_error = str(exc)
