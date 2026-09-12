@@ -195,17 +195,129 @@ high-risk action; rule 9 holds anything nobody classified.
   fall-through set, so a verb that joins it without somebody writing down why
   fails the suite. Verified to fail when a classification is removed.
 
+
+### P1 · Research Control Center metrics — swept, 2 found
+**Method.** Every number the control centre renders, traced to what computes
+it, and the label it is rendered under read against what that computation
+means.
+
+- **P2 — "Health 100%" on a campaign that had run no cycles.**
+  `CampaignRuntime.health()` scores a campaign with no history 1.0 deliberately,
+  so an unproven campaign is allocated the workers it needs to earn a real
+  score. That prior is correct where it lives and is not a measurement. The card
+  rendered it as a percentage — on the card an operator watches immediately
+  after pressing start. The scheduler is unchanged; the runtime now reports the
+  sample behind the score and the card says "no cycles yet" until there is one.
+  → `f65d4ab`
+- **P2 — "Mechanisms" counted wrong in both directions.** This is the number
+  the interface leans on to separate a hundred discoveries from one idea a
+  hundred times. It was summed from each campaign's cached progress counter,
+  which is refreshed only when a cycle runs — so between cycles it lagged the
+  graph, and three campaigns that had each proposed a hypothesis reported
+  `Mechanisms: 0`. Once refreshed it is worse: a mechanism is a *string*
+  deduplicated by the graph, so three campaigns exploring one explanation each
+  honestly report 1 and sum to **3**. Measured directly before fixing. The
+  hypothesis graph has answered this question system-wide since it was written;
+  it is asked now. → `a91e6f5`
+- **P3, same commit.** Totals were computed over a 200-row page ordered by
+  priority, so a sum labelled "Experiments" quietly omitted the campaigns below
+  the cut. Cards are still a page; totals are over every campaign.
+
+### L1 · Agent roles: distinct, or only differently named? — swept, 3 found
+**Method.** 20,000 bucket draws per role against the default campaign
+allocation, comparing the resulting workload distributions. A role's entire
+mechanical effect is a bias on that draw, so two roles with the same
+distribution are one role with two names.
+
+| | before | after |
+|---|---|---|
+| named roles | 10 | 10 |
+| distinct behaviours | **9** | **10** |
+
+- **P2 — DISCOVERY and FEATURE were identical to three decimal places.** They
+  held the same two buckets in opposite order, and the draw tests membership
+  rather than order. An operator reading "Proposes mechanisms nothing on record
+  already claims" and "Investigates how a signal is constructed" and deploying
+  one of each got two discovery agents, with nothing saying so. FEATURE now
+  prefers DISCOVER_FAMILY and ADVANCE_PROMISING, read off `BUCKET_KIND` rather
+  than chosen: those produce `SearchKind.FAMILY` and `SearchKind.STRUCTURAL`,
+  which is what "how a signal is constructed" means in this vocabulary.
+  REFINE_PARAMETERS stays out because the role's own sentence ends "not how it
+  is tuned". → `915f64e`
+
+**Two findings recorded rather than changed**, because both would alter what
+the research does and that is not a QA side-effect to make unasked:
+
+- **P2 — the LITERATURE role does not cause literature retrieval.**
+  `_maybe_retrieve` is gated on `campaign.web_research`, for every role alike. A
+  LITERATURE agent on a campaign with retrieval off retrieves nothing; a
+  DISCOVERY agent on a campaign with it on retrieves. The role's sentence —
+  "Retrieves published evidence and keeps its provenance" — describes something
+  the role does not cause.
+- **P3 — a SPECIALIST agent's objective reaches no decision.** It is stored,
+  returned by the API and shown as a tooltip. `ROLE_BUCKETS[SPECIALIST]` is
+  empty by design, so a specialist draws the campaign's allocation untouched
+  and its free-text objective changes nothing. Making the objective steer the
+  search would require model inference in the allocation path, which the
+  deterministic-policy rule argues against; the honest options are to say so on
+  the surface or to drop the role, and both are the operator's call.
+
+### B1 · Every GET route on a cold installation — swept, clean
+**Method.** All 102 API GET routes called against an empty installation inside
+the app's real lifespan, path parameters filled with ids that do not exist.
+
+| | |
+|---|---|
+| routes exercised | **102** |
+| answered | 80 |
+| named 404 | 22 |
+| 5xx or unhandled exception | **0** |
+
+Every 404 carried a machine-readable reason rather than a bare status.
+
+### B2 · Every read-only action on a cold installation — swept, clean
+**Method.** All 42 read-only actions that take no required argument, called
+through the registry as a HUMAN actor against an empty installation.
+
+Five raised `ActionError` — `describe_context`, `describe_sidebar`,
+`describe_workspace`, `workspace_history` and `prop_account_status` — each
+naming the remedy ("No workspace is open. Create one with create_workspace, or
+pass workspace_id to say which you mean."). That is the designed refusal, not a
+defect. The remaining 37 returned a dictionary. The 18 read-only actions that
+require an argument were not called and are listed in the report.
+
+### B3 · The engine and the research loop, actually running — swept, clean
+**Method.** The real app started inside its lifespan, a campaign created and
+started over HTTP, the engine left to run, then the same surfaces an operator
+would ask.
+
+```
+engine before start:  STOPPED  | not started
+after 4 cycles:       RUNNING  | 4 worker(s) processing
+after stop:           STOPPED  | stopped
+```
+
+4 cycles · 3 experiments · 3 hypotheses · 3 mechanisms · 23 journal events ·
+1 skip, classified useful · `last_error: None` · 0 errors.
+
+Campaign runtime reported `health=0.75 observed=4` against recent outcomes of
+3 PROGRESS and 1 NOT_NOVEL — the share is right and the sample behind it is now
+visible. `/api/v1/engine` and `/api/v1/engine/diagnostics` agreed on the state
+at every point, which was asserted rather than assumed.
+
+### S1 · CI, cross-platform — inspected
+`.github/workflows/ci.yml` runs Python 3.13 on **ubuntu-latest and
+windows-latest** plus a Node 24 web job. The Windows leg is what catches the
+path and line-ending assumptions this codebase can make on Linux alone. Branch
+status is on the pull request.
+
 ---
 
 ## Not yet swept
 
-- **B** — runtime exercise of the API surface and the background workers
-- **L** — agent-by-agent audit
 - **N** — product QA against the six personas
 - **O** — quality of life
-- **P** — Research Control Center metric truthfulness
 - **Q** — strategy-discovery ontology truthfulness
-- **S** — CI cross-platform inspection for this branch
 
 ## Standing verification
 
