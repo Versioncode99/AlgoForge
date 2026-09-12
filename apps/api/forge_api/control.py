@@ -2845,6 +2845,12 @@ def build_control_router(
             stop_engine=engine.stop,
         )
     )
+    # The registry gets the same service the routes got, now that the engine
+    # hooks are attached to it. Attached here rather than passed to the
+    # constructor because `start_campaign_engine` is defined in terms of the
+    # engine, which is built after the registry — and the alternative, a second
+    # way for an agent to start a campaign, is the thing this closes.
+    actions.campaigns = campaign_service
 
     return ControlSurface(
         router=router,

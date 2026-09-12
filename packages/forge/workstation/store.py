@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from forge.contracts.hashing import content_hash
+from forge.workstation.context import WorkstationContext
 from forge.workstation.models import (
     Panel,
     Workspace,
@@ -105,6 +106,11 @@ class WorkspaceStore:
         ("campaign_ids", "TEXT", "'[]'"),
         ("account_ids", "TEXT", "'[]'"),
         ("mode", "TEXT", "''"),
+        # What each link group is looking at. '{}' rather than NULL: a
+        # workspace saved before contexts existed has no context, and an empty
+        # map is exactly that -- unlike the sidebar, where "none" and "empty"
+        # are different arrangements.
+        ("contexts", "TEXT", "'{}'"),
     )
 
     def _migrate(self, db: sqlite3.Connection) -> None:
@@ -173,8 +179,8 @@ class WorkspaceStore:
                 "INSERT INTO workspaces ("
                 "workspace_id, name, template_key, profile, panels, schema_version, "
                 "created_at, updated_at, description, icon, kind, sidebar, pinned, "
-                "campaign_ids, account_ids, mode"
-                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "campaign_ids, account_ids, mode, contexts"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(workspace_id) DO UPDATE SET "
                 "name=excluded.name, template_key=excluded.template_key, "
                 "profile=excluded.profile, panels=excluded.panels, "
@@ -182,7 +188,7 @@ class WorkspaceStore:
                 "description=excluded.description, icon=excluded.icon, kind=excluded.kind, "
                 "sidebar=excluded.sidebar, pinned=excluded.pinned, "
                 "campaign_ids=excluded.campaign_ids, account_ids=excluded.account_ids, "
-                "mode=excluded.mode",
+                "mode=excluded.mode, contexts=excluded.contexts",
                 (
                     workspace.workspace_id,
                     workspace.name,
@@ -204,6 +210,12 @@ class WorkspaceStore:
                     json.dumps(list(workspace.campaign_ids)),
                     json.dumps(list(workspace.account_ids)),
                     workspace.mode,
+                    json.dumps(
+                        {
+                            group: context.model_dump(mode="json")
+                            for group, context in workspace.contexts.items()
+                        }
+                    ),
                 ),
             )
         if record_version:
@@ -289,6 +301,17 @@ class WorkspaceStore:
         if row is None or current is None:
             return None
         profile = row["profile"]
+        # A version records the *layout* — name, template, profile, panels — and
+        # nothing else. Everything that is not layout is carried from the
+        # workspace as it stands now, which is what the docstring above means by
+        # "the current identity".
+        #
+        # Carried explicitly rather than left to default, because leaving them
+        # to default is a data-loss bug: `restore` saves whatever `version`
+        # returns, so a workspace whose rail the operator had spent an afternoon
+        # arranging lost that rail the moment they restored a layout from
+        # yesterday. The sidebar has been droppable this way since sidebars
+        # existed; contexts would have joined it.
         return Workspace(
             workspace_id=workspace_id,
             name=str(row["name"]),
@@ -297,6 +320,15 @@ class WorkspaceStore:
             panels=tuple(Panel.model_validate(item) for item in json.loads(row["panels"])),
             created_at=current.created_at,
             updated_at=datetime.fromisoformat(str(row["at"])),
+            description=current.description,
+            icon=current.icon,
+            kind=current.kind,
+            sidebar=current.sidebar,
+            pinned=current.pinned,
+            campaign_ids=current.campaign_ids,
+            account_ids=current.account_ids,
+            mode=current.mode,
+            contexts=current.contexts,
         )
 
     def restore(self, workspace_id: str, version: int, *, actor: str = "operator") -> Workspace:
@@ -349,6 +381,7 @@ class WorkspaceStore:
         mode: str = "",
         campaign_ids: tuple[str, ...] = (),
         account_ids: tuple[str, ...] = (),
+        contexts: dict[str, WorkstationContext] | None = None,
     ) -> Workspace:
         """Register a workspace.
 
@@ -372,6 +405,7 @@ class WorkspaceStore:
             mode=mode,
             campaign_ids=campaign_ids,
             account_ids=account_ids,
+            contexts=dict(contexts or {}),
         )
         return self.save(workspace, summary=summary or "created", actor=actor)
 
@@ -507,6 +541,12 @@ class WorkspaceStore:
             "template_key": workspace.template_key,
             "profile": workspace.profile.model_dump(mode="json") if workspace.profile else None,
             "panels": [p.model_dump(mode="json") for p in workspace.panels],
+            # Part of the arrangement, so it travels with it. Optional on the
+            # way in, so an export written before contexts existed still imports.
+            "contexts": {
+                group: context.model_dump(mode="json")
+                for group, context in workspace.contexts.items()
+            },
         }
 
     def import_workspace(
@@ -544,6 +584,16 @@ class WorkspaceStore:
         except Exception as exc:
             raise WorkspaceImportError(f"The export could not be read: {exc}") from exc
         chosen = (name or str(payload.get("name") or "")).strip() or "Imported workspace"
+        raw_contexts = payload.get("contexts") or {}
+        if not isinstance(raw_contexts, dict):
+            raise WorkspaceImportError("The export's contexts are not an object.")
+        try:
+            contexts = {
+                str(group): WorkstationContext.model_validate(value)
+                for group, value in raw_contexts.items()
+            }
+        except Exception as exc:
+            raise WorkspaceImportError(f"The export's contexts could not be read: {exc}") from exc
         return self.create(
             chosen[:120],
             panels=panels,
@@ -551,6 +601,7 @@ class WorkspaceStore:
             template_key=payload.get("template_key"),
             summary="imported",
             actor=actor,
+            contexts=contexts,
         )
 
     def active(self) -> Workspace | None:
@@ -610,4 +661,8 @@ def _to_workspace(row: dict[str, Any]) -> Workspace:
         campaign_ids=tuple(json.loads(row.get("campaign_ids") or "[]")),
         account_ids=tuple(json.loads(row.get("account_ids") or "[]")),
         mode=str(row.get("mode") or ""),
+        contexts={
+            group: WorkstationContext.model_validate(payload)
+            for group, payload in json.loads(row.get("contexts") or "{}").items()
+        },
     )

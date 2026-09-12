@@ -474,9 +474,21 @@ test('the command palette indexes the open mode’s sections', async () => {
   renderApp()
   await screen.findByRole('link', { name: /strategies/i })
   fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
-  expect(await screen.findByRole('dialog', { name: /navigate algoforge/i })).toBeInTheDocument()
-  fireEvent.change(screen.getByPlaceholderText(/go to a view/i), { target: { value: 'Positions' } })
+  expect(await screen.findByRole('dialog', { name: /search and run commands/i })).toBeInTheDocument()
+  fireEvent.change(screen.getByPlaceholderText(/run a command/i), { target: { value: 'Positions' } })
   expect(screen.getByRole('button', { name: /Positions & Orders.*Book/i })).toBeInTheDocument()
+})
+
+test('a palette row says what it does, not which key does it', async () => {
+  // "open" and "stop" are very different things to be one keystroke away from,
+  // and the row used to end in a bare ↵ for both.
+  session = { mode: 'normal', stance: null, workspace_id: 'w1' }
+  renderApp()
+  await screen.findByRole('link', { name: /strategies/i })
+  fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+  await screen.findByRole('dialog', { name: /search and run commands/i })
+  fireEvent.change(screen.getByPlaceholderText(/run a command/i), { target: { value: 'Positions' } })
+  expect(screen.getByRole('button', { name: /Positions & Orders.*Book.*open/i })).toBeInTheDocument()
 })
 
 test('strategies still opens on the catalogue rather than one record', async () => {

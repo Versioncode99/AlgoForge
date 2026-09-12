@@ -34,6 +34,15 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import HTTPException
+from forge.data.freshness import RANK, TIER_MEANING, Tier
+from forge.data.providers import (
+    CRYPTO_PUBLIC,
+    DATABENTO,
+    FRED,
+    LOCAL_FIXTURE,
+    PROVIDER_TIERS,
+)
+from forge.data.services import ABSENT_CAPABILITIES, ServiceRegistry
 from forge.execution.oms import OrderRefused
 from forge.hedgefund.approvals import ApprovalQueue, ApprovalRequest
 from forge.hedgefund.audit import AuditLog, Outcome
@@ -52,7 +61,12 @@ from forge.modes.permissions import (
 from forge.modes.store import ModeStore
 from forge.prop.account import AccountRules, AccountState, ClosedTrade, state_from_trades
 from forge.prop.account import assess as prop_assess
+from forge.propdesk.instruments import MappingError, default_catalogue
+from forge.propdesk.news import CalendarRegistry
 from forge.research import chronological_split
+from forge.research.agents import MAX_AGENTS, AgentRole
+from forge.research.campaign import CampaignError
+from forge.research.frontier import FrontierState
 from forge.strategy import (
     DESCRIBED_TARGETS,
     TEMPLATES,
@@ -84,12 +98,18 @@ from forge.workstation import (
     new_panel_id,
     template,
 )
+from forge.workstation.context import DEFAULT_GROUP
+from forge.workstation.context import Facet as ContextFacet
+from forge.workstation.context import groups_in as context_groups
+from forge.workstation.context import resolve_all as resolve_context
 from forge.workstation.sidebar import CATALOGUE as SIDEBAR_CATALOGUE
 from forge.workstation.sidebar import Sidebar, SidebarError
 from forge.workstation.sidebar import destinations as sidebar_destinations
 from forge.workstation.sidebar import known as sidebar_known
 from pydantic import ValidationError
 
+from forge_api.campaigns import StartCampaignRequest
+from forge_api.credentials import credential_present
 from forge_api.fund import FundError
 from forge_api.jobs import REGISTRY, JobHandle
 
@@ -250,6 +270,13 @@ class Actions:
         # test; the actions that need it refuse by name rather than raising an
         # attribute error.
         self.prop_desk = prop_desk
+        # The campaign service, attached by `forge_api.control` once the engine
+        # hooks exist. Research campaigns were reachable over HTTP long before
+        # they were reachable here, which meant the interface could start a
+        # campaign and an assistant could not — not because it was denied, but
+        # because the verb did not exist in the only vocabulary it has. These
+        # actions call the same `CampaignService` methods the routes call.
+        self.campaigns: Any = None
         self._lock = threading.Lock()
         # Set for the duration of one `call`, so an action can attribute what it
         # writes without every signature growing an actor argument.
@@ -707,6 +734,9 @@ class Actions:
         self._register_prop()
         self._register_prop_desk()
         self._register_fund()
+        self._register_campaigns()
+        self._register_context()
+        self._register_data_health()
 
     def _register_ir(self) -> None:
         """The Strategy IR verbs.
@@ -4065,6 +4095,774 @@ class Actions:
             "pending": [request.as_dict() for request in self.approvals.pending()],
             "history": [request.as_dict() for request in self.approvals.history(50)],
         }
+
+    # ── research campaigns ───────────────────────────────────────────────────
+    # Campaigns had a full HTTP surface and no presence here at all, which made
+    # the registry an incomplete account of what AlgoForge can do: the interface
+    # could start a campaign, and the assistant — restricted, correctly, to the
+    # verbs in this file — could not. These call `CampaignService` directly, so
+    # a campaign started from the palette, from a keyboard shortcut and from an
+    # assistant takes exactly the same path as one started from the campaign
+    # screen, including the agent crew and the engine handshake.
+    #
+    # None of them is `protected`. A campaign allocates *research* effort; it
+    # cannot relax a gate, lower a threshold or change what counts as evidence,
+    # and `priority` allocates workers and nothing else. Destroying one is
+    # `CONFIRM`, because an archive holds work somebody did.
+
+    def _campaign_service(self) -> Any:
+        if self.campaigns is None:
+            raise ActionError(
+                "no campaign service is configured in this process; research "
+                "campaigns are unavailable here"
+            )
+        return self.campaigns
+
+    def _campaign(self, campaign_id: str) -> Any:
+        service = self._campaign_service()
+        campaign = service.campaigns.get(_str(campaign_id, "campaign_id"))
+        if campaign is None:
+            known = [c.campaign_id for c in service.campaigns.list()][:8]
+            raise ActionError(
+                f"no campaign '{campaign_id}'."
+                + (f" Known campaigns: {', '.join(known)}." if known else " None exist yet.")
+            )
+        return campaign
+
+    def list_campaigns(self, status: str | None = None) -> dict[str, Any]:
+        service = self._campaign_service()
+        rows = [c.as_dict() for c in service.campaigns.list()]
+        if status:
+            wanted = _str(status, "status", lower=True)
+            rows = [row for row in rows if str(row.get("status", "")).lower() == wanted]
+        return {"campaigns": rows, "count": len(rows)}
+
+    def describe_campaign(self, campaign_id: str) -> dict[str, Any]:
+        """The whole campaign screen's payload: frontier, hypotheses, agents, skips."""
+        campaign = self._campaign(campaign_id)
+        overview: dict[str, Any] = self._campaign_service().overview(campaign.campaign_id)
+        return overview
+
+    def create_campaign(
+        self,
+        name: str,
+        objective: str,
+        dataset: str,
+        symbol: str = "NQ",
+        timeframe: str = "1m",
+        description: str = "",
+        priority: int = 50,
+        agent_target: int = 1,
+        seed: int = 20260910,
+    ) -> dict[str, Any]:
+        service = self._campaign_service()
+        try:
+            campaign = service.campaigns.create(
+                name=_str(name, "name", limit=120),
+                objective=_str(objective, "objective", limit=2000),
+                dataset=_str(dataset, "dataset", limit=80),
+                symbol=_str(symbol, "symbol", limit=20),
+                timeframe=_str(timeframe, "timeframe", limit=20),
+                description=str(description or "")[:600],
+                priority=_bounded(priority, 50, 0, 100, "priority"),
+                agent_target=_bounded(agent_target, 1, 0, MAX_AGENTS, "agent_target"),
+                seed=int(seed),
+            )
+        except (CampaignError, ValueError) as exc:
+            raise ActionError(str(exc)) from exc
+        # Created is not running. Stated because "create and start" reads as one
+        # act in a sentence and is two here, and an agent that assumed otherwise
+        # would report research under way that nothing had begun.
+        return {
+            "campaign": campaign.as_dict(),
+            "status": campaign.status,
+            "note": "Created. It is not running until you start it.",
+        }
+
+    def start_campaign(
+        self,
+        campaign_id: str,
+        workers: int = 4,
+        cycle_seconds: float = 4.0,
+        max_strategies: int = 400,
+    ) -> dict[str, Any]:
+        campaign = self._campaign(campaign_id)
+        service = self._campaign_service()
+        settings = StartCampaignRequest(
+            workers=_bounded(workers, 4, 1, 64, "workers"),
+            cycle_seconds=float(cycle_seconds),
+            max_strategies=_bounded(max_strategies, 400, 1, 100_000, "max_strategies"),
+        )
+        try:
+            payload: dict[str, Any] = service.start(campaign.campaign_id, settings)
+        except CampaignError as exc:
+            raise ActionError(str(exc)) from exc
+        return payload
+
+    def pause_campaign(self, campaign_id: str) -> dict[str, Any]:
+        campaign = self._campaign(campaign_id)
+        try:
+            paused: dict[str, Any] = self._campaign_service().pause(campaign.campaign_id)
+        except CampaignError as exc:
+            raise ActionError(str(exc)) from exc
+        return paused
+
+    def resume_campaign(
+        self, campaign_id: str, workers: int = 4, cycle_seconds: float = 4.0
+    ) -> dict[str, Any]:
+        return self.start_campaign(
+            campaign_id, workers=workers, cycle_seconds=cycle_seconds
+        )
+
+    def stop_campaign(self, campaign_id: str) -> dict[str, Any]:
+        campaign = self._campaign(campaign_id)
+        try:
+            stopped: dict[str, Any] = self._campaign_service().stop(campaign.campaign_id)
+        except CampaignError as exc:
+            raise ActionError(str(exc)) from exc
+        return stopped
+
+    def prioritise_campaign(self, campaign_id: str, priority: int) -> dict[str, Any]:
+        campaign = self._campaign(campaign_id)
+        service = self._campaign_service()
+        try:
+            updated = service.campaigns.prioritise(
+                campaign.campaign_id, _bounded(priority, 50, 0, 100, "priority")
+            )
+        except CampaignError as exc:
+            raise ActionError(str(exc)) from exc
+        return {
+            "campaign": updated.as_dict(),
+            "note": (
+                "Priority allocates workers across running campaigns. It cannot "
+                "relax a gate, lower a threshold or change what counts as evidence."
+            ),
+        }
+
+    def rename_campaign(self, campaign_id: str, name: str) -> dict[str, Any]:
+        campaign = self._campaign(campaign_id)
+        try:
+            renamed = self._campaign_service().campaigns.rename(
+                campaign.campaign_id, _str(name, "name", limit=120)
+            )
+        except CampaignError as exc:
+            raise ActionError(str(exc)) from exc
+        return {"campaign": renamed.as_dict()}
+
+    def duplicate_campaign(self, campaign_id: str, name: str = "") -> dict[str, Any]:
+        campaign = self._campaign(campaign_id)
+        try:
+            copy = self._campaign_service().campaigns.duplicate(
+                campaign.campaign_id, name=str(name or "")[:120]
+            )
+        except CampaignError as exc:
+            raise ActionError(str(exc)) from exc
+        return {"campaign": copy.as_dict(), "copied_from": campaign.campaign_id}
+
+    def archive_campaign(self, campaign_id: str) -> dict[str, Any]:
+        campaign = self._campaign(campaign_id)
+        try:
+            return {"campaign": self._campaign_service().campaigns.archive(
+                campaign.campaign_id
+            ).as_dict()}
+        except CampaignError as exc:
+            raise ActionError(str(exc)) from exc
+
+    def campaign_agents(self, campaign_id: str) -> dict[str, Any]:
+        campaign = self._campaign(campaign_id)
+        service = self._campaign_service()
+        return {
+            "roster": [a.as_dict() for a in service.agents.list(campaign.campaign_id)],
+            "counts": service.agents.counts(campaign.campaign_id),
+            "claims": service.agents.claims(campaign.campaign_id),
+        }
+
+    def deploy_campaign_agents(
+        self, campaign_id: str, count: int = 4, roles: list[str] | None = None
+    ) -> dict[str, Any]:
+        campaign = self._campaign(campaign_id)
+        service = self._campaign_service()
+        chosen: list[Any] = []
+        for name in roles or []:
+            try:
+                chosen.append(AgentRole(_str(name, "roles", lower=True)))
+            except ValueError as exc:
+                raise ActionError(
+                    f"'{name}' is not a research role. Known roles: "
+                    f"{', '.join(sorted(str(r) for r in AgentRole))}."
+                ) from exc
+        agents, note = service.agents.deploy(
+            campaign_id=campaign.campaign_id,
+            count=_bounded(count, 4, 1, MAX_AGENTS, "count"),
+            roles=tuple(chosen) or None,
+        )
+        # `note` is how the registry says "you asked for more than this machine
+        # can serve". Carried through rather than dropped: agents that would
+        # queue without researching are not agents, and silence here is what
+        # makes a roster of thirty look like thirty workers.
+        return {
+            "deployed": [a.as_dict() for a in agents],
+            "count": len(agents),
+            "capacity_note": note,
+        }
+
+    def campaign_skips(self, campaign_id: str, limit: int = 40) -> dict[str, Any]:
+        """What this campaign refused to run, by kind, with the rows behind each count."""
+        campaign = self._campaign(campaign_id)
+        service = self._campaign_service()
+        count = _bounded(limit, 40, 1, 500, "limit")
+        return {
+            "counts": service.skips.counts(campaign.campaign_id),
+            "skips": service.skips.list(campaign.campaign_id, limit=count),
+            # What could be tried again once something changes. Kept separate
+            # from the refusals themselves: "we will not run this" and "we will
+            # not run this *yet*" are different answers to the same question.
+            "retryable": service.skips.retryable(campaign.campaign_id, limit=50),
+        }
+
+    def campaign_frontier(self, campaign_id: str, state: str | None = None) -> dict[str, Any]:
+        campaign = self._campaign(campaign_id)
+        service = self._campaign_service()
+        chosen: Any = None
+        if state:
+            try:
+                chosen = FrontierState(_str(state, "state").upper())
+            except ValueError as exc:
+                raise ActionError(
+                    f"'{state}' is not a frontier state. Known states: "
+                    f"{', '.join(str(s) for s in FrontierState)}."
+                ) from exc
+        return {
+            "counts": service.frontier.counts(campaign.campaign_id),
+            "items": [
+                item.as_dict()
+                for item in service.frontier.list(
+                    campaign.campaign_id,
+                    states=(chosen,) if chosen is not None else None,
+                    limit=200,
+                )
+            ],
+        }
+
+    def _register_campaigns(self) -> None:
+        campaign_arg = {"type": "string", "description": "The campaign id."}
+        self._add(
+            "list_campaigns",
+            "List every research campaign with its status, objective, priority and "
+            "agent target. Optionally filtered to one status.",
+            {
+                "status": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "running, paused, stopped, completed or archived.",
+                }
+            },
+            self.list_campaigns,
+        )
+        self._add(
+            "describe_campaign",
+            "Everything known about one campaign: frontier counts by state, hypothesis "
+            "counts, the agent roster and their claims, the validation queue, and the "
+            "refusal accounting broken down by kind.",
+            {"campaign_id": campaign_arg},
+            self.describe_campaign,
+        )
+        self._add(
+            "create_campaign",
+            "Register a research campaign. It starts stopped - creating is not "
+            "running. Capabilities are intersected with what this installation can "
+            "actually serve, so a campaign cannot schedule research the data cannot "
+            "support.",
+            {
+                "name": {"type": "string"},
+                "objective": {
+                    "type": "string",
+                    "description": "What is being investigated, in a sentence.",
+                },
+                "dataset": {"type": "string", "description": "A dataset key, e.g. nq_1m_16y."},
+                "symbol": {"type": "string", "optional": True},
+                "timeframe": {"type": "string", "optional": True},
+                "description": {"type": "string", "optional": True},
+                "priority": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "0-100. Allocates workers only.",
+                },
+                "agent_target": {"type": "integer", "optional": True},
+                "seed": {"type": "integer", "optional": True},
+            },
+            self.create_campaign,
+            mutating=True,
+        )
+        self._add(
+            "start_campaign",
+            "Run a campaign, alongside any others already running. Deploys its agent "
+            "crew if it asked for one and has none, and starts the engine if it is not "
+            "already running. Starting a second campaign does not stop the first.",
+            {
+                "campaign_id": campaign_arg,
+                "workers": {"type": "integer", "optional": True},
+                "cycle_seconds": {"type": "number", "optional": True},
+                "max_strategies": {"type": "integer", "optional": True},
+            },
+            self.start_campaign,
+            mutating=True,
+        )
+        self._add(
+            "pause_campaign",
+            "Hold a campaign without ending it. Its agents are kept, so resuming does "
+            "not reset the crew or lose what each agent was working on.",
+            {"campaign_id": campaign_arg},
+            self.pause_campaign,
+            mutating=True,
+        )
+        self._add(
+            "resume_campaign",
+            "Resume a paused campaign. Identical to starting it.",
+            {
+                "campaign_id": campaign_arg,
+                "workers": {"type": "integer", "optional": True},
+                "cycle_seconds": {"type": "number", "optional": True},
+            },
+            self.resume_campaign,
+            mutating=True,
+        )
+        self._add(
+            "stop_campaign",
+            "Stop one campaign and release its agents. The engine keeps running for "
+            "any other campaigns; it stops only when none is left.",
+            {"campaign_id": campaign_arg},
+            self.stop_campaign,
+            mutating=True,
+        )
+        self._add(
+            "prioritise_campaign",
+            "Set how much of the engine a campaign gets, 0-100. Priority allocates "
+            "workers and nothing else: it cannot relax a gate, lower a threshold or "
+            "change what counts as evidence.",
+            {
+                "campaign_id": campaign_arg,
+                "priority": {"type": "integer", "description": "0-100."},
+            },
+            self.prioritise_campaign,
+            mutating=True,
+        )
+        self._add(
+            "rename_campaign",
+            "Rename a campaign. Its id, research and evidence are unchanged.",
+            {"campaign_id": campaign_arg, "name": {"type": "string"}},
+            self.rename_campaign,
+            mutating=True,
+        )
+        self._add(
+            "duplicate_campaign",
+            "Copy a campaign's configuration into a new, stopped campaign. The copy "
+            "starts with an empty frontier - findings are not inherited.",
+            {"campaign_id": campaign_arg, "name": {"type": "string", "optional": True}},
+            self.duplicate_campaign,
+            mutating=True,
+        )
+        self._add(
+            "archive_campaign",
+            "Archive a campaign. Its research is kept and readable; it no longer "
+            "appears in the active list and cannot be started without restoring it.",
+            {"campaign_id": campaign_arg},
+            self.archive_campaign,
+            mutating=True,
+            risk=ActionRisk.CONFIRM,
+        )
+        self._add(
+            "campaign_agents",
+            "The agent roster for a campaign: role, state, current task, lease and "
+            "last heartbeat for each, plus what each one currently claims.",
+            {"campaign_id": campaign_arg},
+            self.campaign_agents,
+        )
+        self._add(
+            "deploy_campaign_agents",
+            "Add research agents to a campaign. Roles may be named explicitly, or "
+            "omitted for a default crew. If more are requested than this installation "
+            "can serve, the surplus is not created and the reason is returned.",
+            {
+                "campaign_id": campaign_arg,
+                "count": {"type": "integer", "optional": True},
+                "roles": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "optional": True,
+                    "description": "e.g. discovery, falsification, validation, reviewer.",
+                },
+            },
+            self.deploy_campaign_agents,
+            mutating=True,
+        )
+        self._add(
+            "campaign_skips",
+            "What a campaign refused to run and why, counted by kind - exact "
+            "duplicates, near duplicates, budget refusals, data blocks and the rest - "
+            "with the rows behind each count.",
+            {
+                "campaign_id": campaign_arg,
+                "limit": {"type": "integer", "optional": True},
+            },
+            self.campaign_skips,
+        )
+        self._add(
+            "campaign_frontier",
+            "The research frontier for a campaign: how many questions sit in each "
+            "state, and the items themselves. Optionally filtered to one state.",
+            {
+                "campaign_id": campaign_arg,
+                "state": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "UNKNOWN, UNTESTED, PROMISING, VALIDATED, FAILED, "
+                    "BLOCKED_BY_DATA, EXHAUSTED, INCONCLUSIVE or PARTIALLY_EXPLORED.",
+                },
+            },
+            self.campaign_frontier,
+        )
+
+    # ── workstation context ──────────────────────────────────────────────────
+    # What the operator is currently looking at, and which panels follow it.
+    #
+    # Setting a context writes nothing to any panel. `forge.workstation.context`
+    # resolves at render time, so a panel pinned to MNQ keeps its MNQ even while
+    # a linked neighbour follows the workspace onto NQ — and unlinking it later
+    # reveals the symbol it always had. The alternative, writing the new symbol
+    # across a group, destroys the pinned value and cannot be undone.
+
+    def _catalogue(self) -> Any:
+        return default_catalogue()
+
+    def _instrument(self, root: str) -> Any:
+        """A known instrument, or a refusal naming the ones that exist.
+
+        Instruments are never invented here. A root the catalogue does not carry
+        is refused rather than stored as a string somebody might later size a
+        position from.
+        """
+        wanted = _str(root, "instrument").upper()
+        catalogue = self._catalogue()
+        try:
+            return catalogue.require(wanted)
+        except (KeyError, MappingError) as exc:
+            known = ", ".join(sorted(i.root for i in catalogue.all()))
+            raise ActionError(
+                f"'{root}' is not an instrument AlgoForge carries. Known roots: {known}."
+            ) from exc
+
+    def list_instruments(self) -> dict[str, Any]:
+        """Every instrument, with whether its contract specification was verified."""
+        rows = []
+        for instrument in self._catalogue().all():
+            row = instrument.model_dump(mode="json")
+            # Surfaced rather than buried in `source_note`: an unverified
+            # multiplier is the number a position would be sized from, and a
+            # search result that does not say so is how a sizing error enters at
+            # the top of the funnel.
+            row["specification"] = "verified" if instrument.verified else "unverified"
+            rows.append(row)
+        return {
+            "instruments": rows,
+            "count": len(rows),
+            "verified": sum(1 for row in rows if row["specification"] == "verified"),
+        }
+
+    def search_instruments(self, query: str, limit: int = 20) -> dict[str, Any]:
+        """Find instruments by root, description, exchange or product group."""
+        needle = _str(query, "query", limit=60).lower()
+        count = _bounded(limit, 20, 1, 100, "limit")
+        matches = []
+        for instrument in self._catalogue().all():
+            haystack = " ".join(
+                (
+                    instrument.root,
+                    instrument.description,
+                    instrument.exchange,
+                    instrument.product_group,
+                )
+            ).lower()
+            if needle in haystack:
+                row = instrument.model_dump(mode="json")
+                row["specification"] = "verified" if instrument.verified else "unverified"
+                matches.append(row)
+        # Exact root first: somebody typing "NQ" means NQ, not MNQ.
+        matches.sort(key=lambda row: (row["root"].lower() != needle, row["root"]))
+        return {"query": query, "matches": matches[:count], "count": len(matches)}
+
+    def describe_context(self, workspace_id: str | None = None) -> dict[str, Any]:
+        """What each link group is looking at, and what each panel therefore shows."""
+        workspace = self._workspace(workspace_id)
+        contexts = workspace.contexts
+        return {
+            "workspace_id": workspace.workspace_id,
+            "context": workspace.context_for().facets(),
+            "groups": {
+                group: contexts[group].facets() for group in sorted(contexts) if group
+            },
+            # Which groups panels actually name, so a surface can show a context
+            # set on a group no panel belongs to as the dead letter it is.
+            "panel_groups": list(context_groups(workspace.panels)),
+            "panels": [
+                resolved.as_dict()
+                for resolved in resolve_context(workspace.panels, contexts)
+            ],
+        }
+
+    def set_context(
+        self,
+        instrument: str | None = None,
+        timeframe: str | None = None,
+        dataset: str | None = None,
+        campaign_id: str | None = None,
+        strategy_id: str | None = None,
+        account_id: str | None = None,
+        group: str = "",
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        # Arguments are checked before the workspace is looked up. An unknown
+        # instrument is an unknown instrument whether or not a workspace is
+        # open, and reporting "no workspace" for it sends the caller to fix the
+        # wrong thing.
+        name = _str(group, "group", limit=40, lower=True) if group else DEFAULT_GROUP
+        changes: dict[str, str] = {}
+        resolved_instrument = ""
+        if instrument is not None:
+            found = self._instrument(instrument)
+            resolved_instrument = found.root
+            changes["instrument"] = found.root
+        if timeframe is not None:
+            changes["timeframe"] = _str(timeframe, "timeframe", limit=12, lower=True)
+        if dataset is not None:
+            changes["dataset"] = _str(dataset, "dataset", limit=80)
+        if campaign_id is not None:
+            changes["campaign_id"] = self._campaign(campaign_id).campaign_id
+        if strategy_id is not None:
+            changes["strategy_id"] = _str(strategy_id, "strategy_id", limit=120)
+        if account_id is not None:
+            changes["account_id"] = _str(account_id, "account_id", limit=120)
+        if not changes:
+            raise ActionError(
+                "set_context needs at least one facet: instrument, timeframe, "
+                "dataset, campaign_id, strategy_id or account_id."
+            )
+        workspace = self._workspace(workspace_id)
+        updated = workspace.with_context(workspace.context_for(name).set(**changes), name)
+        followers = [
+            panel.panel_id for panel in updated.panels if (panel.link_group or "") == name
+        ]
+        payload = self._save_workspace(
+            updated,
+            f"context {'/'.join(f'{k}={v}' for k, v in changes.items())}"
+            + (f" for group '{name}'" if name else ""),
+        )
+        payload["context"] = updated.context_for(name).facets()
+        payload["following"] = followers
+        # Stated because a context set on a group no panel belongs to looks
+        # exactly like a context that did nothing -- and it did.
+        payload["note"] = (
+            f"{len(followers)} panel(s) follow this context. Panels outside the "
+            "group keep their own symbol; nothing was written to any panel."
+            if followers
+            else (
+                "No panel belongs to this group, so nothing on screen follows it. "
+                "Link panels with link_panels to make them follow."
+            )
+        )
+        if resolved_instrument and not self._catalogue().require(resolved_instrument).verified:
+            payload["specification_warning"] = (
+                f"{resolved_instrument}'s contract specification is not individually "
+                "verified. Sizing from it should be checked against the exchange."
+            )
+        return payload
+
+    def clear_context(
+        self, facet: str | None = None, group: str = "", workspace_id: str | None = None
+    ) -> dict[str, Any]:
+        """Unset one facet, or the whole context for a group."""
+        name = _str(group, "group", limit=40, lower=True) if group else DEFAULT_GROUP
+        chosen = None
+        if facet:
+            try:
+                chosen = ContextFacet(_str(facet, "facet", lower=True))
+            except ValueError as exc:
+                raise ActionError(
+                    f"'{facet}' is not a context facet. Known facets: "
+                    f"{', '.join(str(f) for f in ContextFacet)}."
+                ) from exc
+        workspace = self._workspace(workspace_id)
+        if chosen is not None:
+            updated = workspace.with_context(workspace.context_for(name).cleared(chosen), name)
+            summary = f"cleared {chosen} from the context"
+        else:
+            updated = workspace.without_context(name)
+            summary = "cleared the context"
+        payload = self._save_workspace(updated, summary)
+        payload["context"] = updated.context_for(name).facets()
+        return payload
+
+    def _register_context(self) -> None:
+        group_arg = {
+            "type": "string",
+            "optional": True,
+            "description": "A link group. Omitted means the workspace's own context.",
+        }
+        self._add(
+            "list_instruments",
+            "Every instrument AlgoForge carries, with its exchange, multiplier, tick "
+            "size and tick value, and whether the contract specification was verified "
+            "against the exchange or is carried unverified.",
+            {},
+            self.list_instruments,
+        )
+        self._add(
+            "search_instruments",
+            "Find instruments by root, description, exchange or product group. Only "
+            "instruments in the catalogue are returned; nothing is invented.",
+            {
+                "query": {"type": "string", "description": "e.g. NQ, nasdaq, CME, gold."},
+                "limit": {"type": "integer", "optional": True},
+            },
+            self.search_instruments,
+        )
+        self._add(
+            "describe_context",
+            "What the workspace and each link group are looking at, and what each panel "
+            "therefore shows - with, for every panel, whether the symbol came from the "
+            "context or from the panel's own setting.",
+            {"workspace_id": {"type": "string", "optional": True}},
+            self.describe_context,
+        )
+        self._add(
+            "set_context",
+            "Set what is being looked at: instrument, timeframe, dataset, campaign, "
+            "strategy or account. Panels in the link group follow it; panels outside it "
+            "are untouched, and nothing is written to any panel - a pinned symbol "
+            "survives and reappears when the panel is unlinked.",
+            {
+                "instrument": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "A root from the catalogue, e.g. NQ. Unknown roots are refused.",
+                },
+                "timeframe": {"type": "string", "optional": True},
+                "dataset": {"type": "string", "optional": True},
+                "campaign_id": {"type": "string", "optional": True},
+                "strategy_id": {"type": "string", "optional": True},
+                "account_id": {"type": "string", "optional": True},
+                "group": group_arg,
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.set_context,
+            mutating=True,
+        )
+        self._add(
+            "clear_context",
+            "Unset one facet of a context, or the whole context for a group. Clearing "
+            "is not setting a default: a panel following a cleared context falls back "
+            "to its own setting.",
+            {
+                "facet": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "instrument, timeframe, dataset, campaign, strategy or account.",
+                },
+                "group": group_arg,
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.clear_context,
+            mutating=True,
+        )
+
+    # ── data health ──────────────────────────────────────────────────────────
+    # `data_health` measured datasets on disk and nothing else. An operator
+    # could see that the NQ archive had a four-hour hole in 2019 and could not
+    # find out that Databento had been refusing since lunchtime.
+    #
+    # This composes the two: the measured archives, and the *services* that
+    # feed them and the rest of the workstation. Sources that do not exist say
+    # so by name rather than being omitted -- an absent row reads as "fine",
+    # and "AlgoForge has no headline news feed" is a fact an operator needs.
+
+    def _service_registry(self) -> Any:
+        registry: Any = getattr(self, "_services", None)
+        if registry is None:
+            registry = ServiceRegistry()
+            self._services = registry
+            self._declare_services(registry)
+        return registry
+
+    def _declare_services(self, registry: Any) -> None:
+        """Register every source, so one nobody has called still has a row.
+
+        A health panel that lists only services somebody happened to use cannot
+        show that the one you are waiting on has never been tried.
+        """
+        for descriptor in (DATABENTO, FRED, CRYPTO_PUBLIC, LOCAL_FIXTURE):
+            tier = Tier(PROVIDER_TIERS.get(descriptor.provider_id, str(Tier.INDICATIVE)))
+            unconfigured = ""
+            if descriptor.requires_credentials and not credential_present(descriptor.provider_id):
+                unconfigured = (
+                    f"{descriptor.provider_id} needs a credential and none is configured "
+                    "in this installation."
+                )
+            registry.declare(descriptor.provider_id, tier, unconfigured=unconfigured)
+
+    def data_health(self) -> dict[str, Any]:
+        """What can be relied on right now, and what cannot -- with the remedy.
+
+        Four sections, because they fail differently and are fixed differently:
+        the archives on disk, the services that answer over a network, the
+        capabilities this build genuinely does not have, and the tier ladder
+        that decides what any of it may be evidence for.
+        """
+        registry = self._service_registry()
+        datasets = self.market.health_matrix() if self.market is not None else []
+        worst = "ok"
+        order = {"ok": 0, "note": 1, "warn": 2, "fail": 3}
+        for row in datasets:
+            status = str(row.get("status") or ("fail" if not row.get("measurable", True) else "ok"))
+            if order.get(status, 0) > order[worst]:
+                worst = status
+
+        calendars: list[dict[str, Any]] = []
+        for availability in CalendarRegistry().availability():
+            payload = availability.as_dict()
+            payload["state"] = "HEALTHY" if availability.available else "UNCONFIGURED"
+            calendars.append(payload)
+
+        return {
+            "datasets": {
+                "rows": datasets,
+                "count": len(datasets),
+                "worst": worst,
+                "note": (
+                    "Measured from the archive on disk. A dataset is never called "
+                    "healthy because it was paid for or because it is named after a range."
+                ),
+            },
+            "services": registry.snapshot(),
+            "calendars": calendars,
+            # Stated rather than omitted. An absent row reads as "fine".
+            "absent": ABSENT_CAPABILITIES,
+            "tiers": [
+                {"tier": str(tier), "rank": rank, "means": TIER_MEANING[tier]}
+                for tier, rank in sorted(RANK.items(), key=lambda item: -item[1])
+            ],
+        }
+
+    def _register_data_health(self) -> None:
+        self._add(
+            "data_health",
+            "What can be relied on right now: every dataset measured from the archive "
+            "on disk, every service that answers over a network with whether it has "
+            "actually been called, the calendar sources and what each needs, and the "
+            "capabilities this build does not have. Each unhealthy row carries what is "
+            "wrong, why, what it stops, and the remedy.",
+            {},
+            self.data_health,
+        )
 
 
 def _parse_rules(rules: Any) -> AccountRules:

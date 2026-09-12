@@ -172,3 +172,115 @@ one event that mattered under thousands of identical ones. `RuntimeMonitor.backo
 now grows the wait towards 30 s as barren cycles accumulate and returns to full
 rate the instant anything progresses. The reported state is unchanged; only how
 often the same answer is recomputed.
+
+---
+
+# Part two — the OpenTerminal integration
+
+What changed on screen in the workstation phase, what it replaced, and what was
+checked on the running application rather than in a test.
+
+## 1. The lie this phase found
+
+**The link badge.** `Panel.link_group` was declared with the docstring *"Panels
+sharing a link group follow each other's symbol and timeframe"*. The
+`link_panels` action's summary repeated it. `Workspace.tsx` drew the group's
+name as a badge on the panel header. And nothing anywhere made any panel follow
+any other: `Workspace.linked()` wrote the tag and no code read it.
+
+So the interface showed the operator a badge asserting a behaviour that did not
+exist. By §61's definition that is a fake feature, and it was one AlgoForge had
+already shipped.
+
+It is now true. A panel in a link group displays the group's context; a panel
+outside one displays its own settings; and **nothing is ever written to a
+panel**, so unlinking reveals the symbol it was always pinned to. The badge's
+tooltip says which of the two is happening.
+
+## 2. What is on screen that was not
+
+**The subject.** The context bar could name the workspace and the mode and could
+not name the instrument, the campaign, the strategy or the account. It now
+renders one chip per set facet, each with its own label and its own clear
+button, in a group visually separate from the telemetry beside it and the mode
+badge before it — because those are three different kinds of fact and the
+previous phase's bug was exactly that kind of conflation.
+
+An unset context renders **nothing**. Six chips reading "—" is a row of controls
+that look broken, and a context nobody has set is not a fault.
+
+**Commands in the palette.** The palette searched six record types and could not
+run anything; every result set a hash. It now has Commands and Instruments
+groups, each row ends in what it does (`open`, `start`, `pause`, `stop`,
+`set context`) rather than in a bare `↵`, and a refusal is shown verbatim with
+the palette left open.
+
+**Sources, beside archives.** `HealthMatrix` measured datasets on disk very
+well. Nothing showed whether a *source* answered. `ServiceHealth` sits beneath
+it: each row collapses to a status line and opens to WHAT / WHY / IMPACT /
+REMEDY, a source nobody has called reads `NOT OBSERVED` rather than healthy, a
+missing credential reads `NOT CONFIGURED` rather than failing, and the three
+capabilities this build does not have are **named** rather than omitted.
+
+## 3. Found by looking at the running application
+
+Four faults, none of which a test would have suggested:
+
+**Typing a ticker offered to start a campaign.** With Commands pinned first in
+the palette, typing `NQ` put *"Start campaign · NQ Momentum"* at the top,
+because the campaign's name contains NQ. On a keyboard-first surface that is a
+research campaign one Enter away from somebody who meant to look at a chart.
+Group order is now fixed only while nothing is typed.
+
+**MNQ sorted above NQ.** A plain substring filter has no opinion, and MNQ comes
+first in the catalogue. Exact matches now sort above prefixes, prefixes above
+substrings.
+
+**A header disagreed with its own body.** A panel pinned to MNQ and linked to a
+context on NQ drew "MNQ 5m" over a body reading "no archive for NQ". The title
+now follows what is shown.
+
+**A resumed campaign un-resumed itself.** Caught by a test that passed alone and
+failed in the full suite, then reproduced deliberately: a research worker
+holding a campaign row read before a pause wrote `status='paused'` back over the
+operator's resume. See the final report.
+
+## 4. Visual QA
+
+Four widths on the running application — 1920, 1440, 1024, 420 — across the
+shell, the palette, the palette with a query, and Data Health.
+
+- **No horizontal overflow at any width**, on any of the four screens.
+- **No console errors and no page errors** at any width.
+- The palette opens, searches and runs at 420 px.
+- At 420 the instrument chip drops its timeframe suffix and Data Health's
+  four-column status line stacks rather than squeezing.
+
+The only network errors observed were `409 Conflict` from `/bars` for a paid
+dataset that has not been downloaded — the API correctly refusing to serve what
+it does not have, with the panel showing *"No archive for NQ. Add one, or pick a
+different symbol above."* That is the honest empty state §41 asks for, and it is
+pre-existing behaviour.
+
+## 5. Accessibility
+
+- The palette dialog is `role="dialog" aria-modal="true"` with a name; rows are
+  buttons; `Escape` closes; arrows move; the verb is part of each row's
+  accessible name.
+- Context chips carry a visually-hidden facet label, so a screen reader hears
+  "Instrument: NQ" rather than "NQ".
+- Each clear button has an explicit `aria-label` naming its facet.
+- Source health rows are `<details>`/`<summary>`, so the disclosure is native
+  and keyboard-operable, and the terms are a real `<dl>`.
+- The status badge for an unobserved source has its own token rather than
+  borrowing the "passed" colour.
+- No literal radii: `test_the_shell_names_no_literal_radius` caught one in this
+  work and it was changed to `var(--r-sm)`.
+
+## 6. Visual identity
+
+No new card style, no gradient, no metric tile. The chips reuse the existing
+`.context-facts` geometry with the brand tint; the source rows reuse the table
+and badge vocabulary already in the shell; the palette is unchanged apart from
+one outcome line and a right-hand verb column. Progressive disclosure carries
+the new density: a source row is one line until it is opened.
