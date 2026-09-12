@@ -8,7 +8,7 @@ import { getJson } from '../api'
 import { RuntimeBadge, RuntimeDiagnostics } from '../components/RuntimeState'
 import {
   AGENT_TONE, useCampaignAgents, useCampaignControl, useCampaignSkips, useControlCenter,
-  type Campaign, type ResearchAgent,
+  type Campaign, type CampaignRuntime, type ResearchAgent,
 } from '../research'
 import type { EngineStatus } from '../types'
 
@@ -149,8 +149,8 @@ export function ResearchControlView() {
               campaign={campaign}
               workers={plan.filter((id) => id === campaign.campaign_id).length}
               stalled={stalled.has(campaign.campaign_id)}
-              health={data.allocation.running_campaigns
-                .find((r) => r.campaign_id === campaign.campaign_id)?.runtime.health}
+              runtime={data.allocation.running_campaigns
+                .find((r) => r.campaign_id === campaign.campaign_id)?.runtime}
               selected={selected === campaign.campaign_id}
               onSelect={() => setSelected(
                 selected === campaign.campaign_id ? null : campaign.campaign_id,
@@ -170,6 +170,29 @@ export function ResearchControlView() {
       {selected && <SkipLedger campaignId={selected} />}
     </section>
   )
+}
+
+/** Health is a share of *observed* cycles. With none observed there is no share.
+ *
+ * The scheduler scores an unstarted campaign 1.0 on purpose, so it is allocated
+ * the workers it needs to earn a real score. That prior is correct where it
+ * lives and wrong the moment it is rendered as a percentage: an operator
+ * watching a campaign they just started would read "100%" off a campaign that
+ * has done nothing. An unknown is shown as an unknown.
+ */
+function healthLabel(runtime: CampaignRuntime | undefined): string {
+  if (runtime == null) return '—'
+  if (runtime.health_observed === 0) return 'no cycles yet'
+  return `${Math.round(runtime.health * 100)}%`
+}
+
+function healthNote(runtime: CampaignRuntime | undefined): string {
+  if (runtime == null) return 'This campaign is not running, so nothing is observing it.'
+  if (runtime.health_observed === 0) {
+    return 'Running, but no cycle has completed yet. There is nothing to score.'
+  }
+  const cycles = runtime.health_observed === 1 ? 'cycle' : 'cycles'
+  return `Share of the last ${runtime.health_observed} ${cycles} that produced something.`
 }
 
 function Metric({ label, value, note }: { label: string; value: number | undefined; note: string }) {
@@ -204,13 +227,13 @@ function NoveltyBreakdown({ levels }: { levels: Record<string, number> | undefin
 }
 
 function CampaignCard({
-  campaign, workers, stalled, health, selected, onSelect,
+  campaign, workers, stalled, runtime, selected, onSelect,
   onStart, onPause, onStop, onDuplicate, onPrioritise,
 }: {
   campaign: Campaign
   workers: number
   stalled: boolean
-  health: number | undefined
+  runtime: CampaignRuntime | undefined
   selected: boolean
   onSelect: () => void
   onStart: () => void
@@ -252,7 +275,7 @@ function CampaignCard({
         <div><dt>Workers</dt><dd>{workers}</dd></div>
         <div>
           <dt>Health</dt>
-          <dd>{health == null ? '—' : `${Math.round(health * 100)}%`}</dd>
+          <dd title={healthNote(runtime)}>{healthLabel(runtime)}</dd>
         </div>
       </dl>
 

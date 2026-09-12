@@ -41,6 +41,7 @@ from forge.research import ResearchLedger, ResearchPartitions, chronological_spl
 from forge.research.orchestration import Assignment, ResearchOrchestrator
 from forge.research.runtime import Outcome, RuntimeMonitor, RuntimeState
 from forge.research.skips import NoveltyLevel, SkipKind, SkipLedger
+from forge.research.split import source_data_hash
 from forge.strategy import (
     SHIPPED_TEMPLATE_KEYS,
     TEMPLATES,
@@ -87,6 +88,13 @@ class EngineConfig:
     # clear the 30-trading-day gate.
     max_bars: int = 250_000
     seed: int = 20260901
+
+
+#: The development screen's trade floor. Named because two places read it: the
+#: screen itself, and the classification that says *why* a candidate was
+#: screened out. A literal in both would let them drift, and the drift would be
+#: a candidate rejected for a sample problem reported as an expectancy one.
+MIN_SCREEN_TRADES = 30
 
 
 @dataclass
@@ -237,6 +245,15 @@ class AutonomousEngine:
         self._loaded: tuple[Any, Any] | None = None
         self._partitions: ResearchPartitions | None = None
         self._data_version = "unloaded"
+        # Bars per *time scope*, so two campaigns researching different windows
+        # are not served the same nine months.
+        #
+        # The engine loaded once per run — `market.load(dataset, max_bars)`,
+        # resolved as `tail(limit)` — and every worker and every experiment in
+        # every campaign shared that one window whatever its hypothesis. Keyed
+        # by the scope's fingerprint rather than by campaign, so two campaigns
+        # that happen to select the same window share one load and one split.
+        self._scoped: dict[str, tuple[Any, Any, ResearchPartitions | None, str]] = {}
         # Hashed over the **shipped** catalogue only.
         #
         # It used to hash all of `TEMPLATES`, which the research director adds to
@@ -308,6 +325,7 @@ class AutonomousEngine:
             self._loaded = None
             self._partitions = None
             self._data_version = "unloaded"
+            self._scoped.clear()
             self._active.clear()
             # Nothing of ours is alive past the guard above, so any claim still
             # marked in-flight was left by a process that died or a run that was
@@ -467,6 +485,152 @@ class AutonomousEngine:
         except Exception as exc:
             self.log.record("RESEARCH", f"observation failed: {type(exc).__name__}: {exc}", "warn")
 
+    def _split_for(
+        self, bars: list[Bar], template: Any, worker: int
+    ) -> ResearchPartitions | None:
+        """Partitions for *this* candidate, purged for the template under test.
+
+        The purge gap exists to stop a feature window spanning an evidence
+        boundary, and the feature window belongs to the template being tested.
+        Using the largest warm-up in the whole catalogue is conservative and was
+        fine while every template was shipped and similar -- but the director
+        *composes* templates, and one generated construction with a long warm-up
+        then sizes the purge for every candidate in the campaign.
+
+        Measured: a generated `trend_strength_gate` arrived with 1,007 warm-up
+        bars against a shipped maximum of 520, and from that cycle on
+        `chronological_split` raised `split fractions produce an undersized
+        partition` for **every** subsequent cycle, including ones running
+        20-bar templates. One template stopped the campaign.
+
+        So the catalogue-wide maximum is tried first -- it is the stricter
+        gap, and keeps boundaries identical across candidates while it fits --
+        and only when it does not fit does this fall back to the candidate's own
+        warm-up, which is the gap that candidate actually needs. Returns `None`
+        when even that will not fit, because a window too small for the
+        strategy under test is a fact about the window and the caller should
+        say so rather than run.
+        """
+        widest = max(t.warmup_bars for t in TEMPLATES.values())
+        own = int(getattr(template, "warmup_bars", widest))
+        for warmup, shared in ((widest, True), (own, False)):
+            try:
+                split = chronological_split(bars, warmup_bars=warmup)
+            except ValueError:
+                continue
+            if not shared:
+                # Said out loud: this candidate's evidence boundaries differ
+                # from the campaign's others, and a reader comparing two
+                # results needs to know that before comparing them.
+                self.log.record(
+                    "DATA",
+                    f"partitioned for {getattr(template, 'key', '?')} alone at a "
+                    f"{warmup}-bar purge; the catalogue's widest ({widest}) does not fit "
+                    f"{len(bars):,} bars, so these boundaries are not the campaign's shared ones",
+                    "warn",
+                )
+            return split
+        return None
+
+    # ── temporal scope ───────────────────────────────────────────────────────
+
+    def scope_for(self, worker: int) -> Any:
+        """The time scope this worker's campaign selects, or `None` for the default.
+
+        `None` is the ordinary answer and keeps the engine's existing behaviour
+        exactly: a campaign that names no dates gets the window the run loaded,
+        as it always did. Nothing about existing campaigns changes.
+        """
+        # Through the director, which already holds the campaign store. Reaching
+        # for a second handle on it here would be a second source of truth about
+        # which campaign a worker is serving.
+        if self.director is None:
+            return None
+        with self._state_lock:
+            assignment = self._assignments.get(worker)
+        campaign_id = assignment.campaign_id if assignment else self.director.attached_campaign_id
+        if not campaign_id:
+            return None
+        campaign = self.director.campaigns.get(campaign_id)
+        if campaign is None:
+            return None
+        try:
+            available_start, available_end = self.market.reservoir(campaign.dataset)
+        except Exception:
+            # A dataset whose span cannot be read is not a reason to stop
+            # researching; it is a reason to use the window already loaded.
+            return None
+        return campaign.time_scope(available_start, available_end)
+
+    def _bars_for(
+        self, worker: int, default: tuple[Any, Any]
+    ) -> tuple[Any, Any, str, ResearchPartitions | None]:
+        """The bars this cycle runs on, their version, and *their* partitions.
+
+        Returns the run's loaded window unless the worker's campaign selects
+        one of its own. Cached per scope fingerprint: without that, a campaign
+        with dates would re-slice the archive every cycle.
+
+        The partitions travel with the bars, and that is not a convenience.
+        `ResearchPartitions` holds actual bar *lists*, so handing a cycle
+        scoped bars while it split the run's default window would have run the
+        backtest on the default window's development partition and reported it
+        against the scope -- the scope silently ignored, on real data only,
+        with nothing to show it had happened.
+        """
+        scope = self.scope_for(worker)
+        if scope is None:
+            bars, dataset = default
+            return bars, dataset, self._data_version, self._partitions
+
+        key = scope.fingerprint()
+        with self._data_lock:
+            cached = self._scoped.get(key)
+            if cached is not None:
+                bars, dataset, partitions, version = cached
+                return bars, dataset, version, partitions
+        # Loaded outside the lock: slicing a multi-million-row frame under the
+        # same lock every other worker needs would serialise the whole engine
+        # behind one campaign's first cycle.
+        try:
+            bars, dataset = self.market.load_scope(scope)
+        except Exception as exc:
+            self.log.record(
+                "DATA",
+                f"the window {scope.describe()} could not be loaded: {exc}; "
+                "this campaign's cycle is using the run's default window",
+                "warn",
+            )
+            bars, dataset = default
+            return bars, dataset, self._data_version, self._partitions
+
+        partitions = None
+        version = source_data_hash(bars)
+        if dataset.is_real:
+            try:
+                partitions = chronological_split(
+                    bars, warmup_bars=max(t.warmup_bars for t in TEMPLATES.values())
+                )
+                version = partitions.receipt.source_data_hash
+            except ValueError as exc:
+                # INSUFFICIENT_SPLIT_BARS. The window is real and too small to
+                # partition, which is a fact about the window rather than a
+                # failure of the engine -- and it is exactly what a campaign
+                # asking for three weeks of history should be told.
+                self.log.record(
+                    "DATA",
+                    f"the window {scope.describe()} holds too few bars to partition: {exc}",
+                    "warn",
+                )
+        with self._data_lock:
+            self._scoped[key] = (bars, dataset, partitions, version)
+        self.log.record(
+            "DATA",
+            f"{dataset.label}: {len(bars):,} bars for {scope.describe()}",
+            "pass" if dataset.is_real else "warn",
+        )
+        return bars, dataset, version, partitions
+
     # ── the loop ─────────────────────────────────────────────────────────────
     def _loop(self, worker: int = 0) -> None:
         # A different stream per worker, or four threads explore the same
@@ -516,7 +680,15 @@ class AutonomousEngine:
             outcome, reason = Outcome.PROGRESS, ""
             try:
                 self._make_room()
-                outcome, reason = self._cycle(rng, bars, dataset.is_real, worker)
+                # Resolved per cycle rather than once per run: the worker may
+                # be serving a different campaign than it was last cycle, and
+                # campaigns may select different windows.
+                cycle_bars, cycle_dataset, _version, cycle_parts = self._bars_for(
+                    worker, (bars, dataset)
+                )
+                outcome, reason = self._cycle(
+                    rng, cycle_bars, cycle_dataset.is_real, worker, partitions=cycle_parts
+                )
             except Exception as exc:  # a bad cycle must not kill the engine
                 with self._state_lock:
                     self.state.last_error = str(exc)
@@ -828,7 +1000,13 @@ class AutonomousEngine:
             )
 
     def _cycle(
-        self, rng: random.Random, bars: list[Bar], real_data: bool, worker: int = 0
+        self,
+        rng: random.Random,
+        bars: list[Bar],
+        real_data: bool,
+        worker: int = 0,
+        *,
+        partitions: ResearchPartitions | None = None,
     ) -> tuple[Outcome, str]:
         """Run one research cycle and say what it produced.
 
@@ -1103,11 +1281,27 @@ class AutonomousEngine:
                 spec.strategy_id,
             )
         started = time.time()
-        partitions: ResearchPartitions | None = None
         if real_data:
-            partitions = self._partitions or chronological_split(
-                bars, warmup_bars=max(t.warmup_bars for t in TEMPLATES.values())
+            # The caller's partitions when it has them -- they are the ones cut
+            # from *these* bars. Falling through to `self._partitions` here
+            # would splice the run's default window into a scoped experiment.
+            partitions = partitions or self._partitions or self._split_for(
+                bars, template, worker
             )
+            if partitions is None:
+                reason = (
+                    f"the window holds {len(bars):,} bars, too few to partition with the "
+                    f"{template.warmup_bars}-bar warm-up {template_key} needs"
+                )
+                self._observe(
+                    research,
+                    campaign_id,
+                    strategy_id="",
+                    status="blocked",
+                    reason=reason,
+                    real_data=real_data,
+                )
+                return Outcome.BLOCKED, reason
             development = run_backtest(
                 module,
                 spec,
@@ -1132,7 +1326,7 @@ class AutonomousEngine:
             )
             if self._stop.is_set():
                 return Outcome.PROGRESS, "stopped mid-cycle after a development backtest"
-            if development.net_pnl <= 0 or len(development.trades) < 30:
+            if development.net_pnl <= 0 or len(development.trades) < MIN_SCREEN_TRADES:
                 self._bump("backtested")
                 self._bump("rejected")
                 self.log.record(
@@ -1158,6 +1352,22 @@ class AutonomousEngine:
                     reason=(
                         f"screened out: development net {development.net_pnl:+.2f} over "
                         f"{len(development.trades)} trades"
+                    ),
+                    # Classified, because a screened candidate is a *failure
+                    # with information* and this path used to throw it away.
+                    #
+                    # `_generate_followups` returns immediately when the
+                    # observation carries no failure class, and the screen sent
+                    # none -- so a construction that produced no edge on the
+                    # development window generated no research question at all.
+                    # Measured on a 120-cycle campaign: 39 experiments, most of
+                    # them dying here, and one follow-up in the whole run.
+                    #
+                    # The class is read from what the screen actually measured,
+                    # not from a gate: no gate ran, `gate` stays unset, and the
+                    # verdict remains the judge's to give.
+                    failure_class=_screen_failure(
+                        development.net_pnl, len(development.trades)
                     ),
                     backtest_id=development.backtest_id,
                     compute_units=1.0,
@@ -1710,6 +1920,25 @@ def _axis_points(spec: ParameterSpec, current: float, count: int) -> list[float]
                     break
         distance += 1
     return sorted(chosen)
+
+
+def _screen_failure(net_pnl: float, trades: int) -> FailureClass:
+    """What the development screen actually found, in the failure vocabulary.
+
+    Honest about its own standing: this is not a gate verdict and no gate ran.
+    It is a classification of two numbers the screen measured, so that a
+    candidate rejected before the judge still says *why* it was rejected in
+    terms research can act on.
+
+    Order matters. A strategy that produced nothing to measure has a sample
+    problem, not an expectancy problem, and telling it to look for an edge in
+    zero trades is the wrong question.
+    """
+    if trades == 0:
+        return FailureClass.NO_TRADES
+    if trades < MIN_SCREEN_TRADES:
+        return FailureClass.INSUFFICIENT_SAMPLE
+    return FailureClass.NEGATIVE_EXPECTANCY
 
 
 def _grid_size(grid: dict[str, list[float]]) -> int:

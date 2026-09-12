@@ -216,6 +216,59 @@ class Campaign:
                 return True, f"time budget reached ({s.max_hours:g} hours)"
         return False, ""
 
+    def time_scope(self, available_start: Any, available_end: Any) -> Any:
+        """The window this campaign selects from the reservoir, or `None`.
+
+        `start_date` and `end_date` have been on this model since it was
+        written. They were validated, stored in their own columns, returned by
+        `as_dict`, copied by `duplicate` -- and read by nothing at all. An
+        operator who set a date range got the most recent 250,000 bars anyway,
+        because that is what the engine asked `MarketService.load` for, and
+        nothing anywhere compared the two.
+
+        This is where they start meaning something. A campaign with no dates
+        returns `None` and the engine keeps its existing behaviour exactly, so
+        every campaign configured before this change runs as it always did.
+        """
+        from forge.research.timescope import ScopeError, fixed_range
+
+        if not self.start_date and not self.end_date:
+            return None
+        try:
+            start = datetime.fromisoformat(self.start_date) if self.start_date else available_start
+            end = datetime.fromisoformat(self.end_date) if self.end_date else available_end
+        except ValueError:
+            return None
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=UTC)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=UTC)
+        # Clamped to what exists rather than refused: a campaign asking for
+        # history from before the archive begins is asking for all of it, and
+        # the scope records both ends so the clamp stays visible.
+        start = max(start, available_start)
+        end = min(end, available_end)
+        if end <= start:
+            return None
+        try:
+            return fixed_range(
+                dataset=self.dataset,
+                available_start=available_start,
+                available_end=available_end,
+                start=start,
+                end=end,
+                rationale=(
+                    f"The campaign '{self.name}' was configured to research "
+                    f"{start.date()} to {end.date()}, so its experiments run on that "
+                    "window rather than on whatever the engine last loaded."
+                ),
+                selected_by=f"campaign:{self.campaign_id}",
+            )
+        except (ScopeError, ValueError):
+            # An incoherent range is not a reason to stop researching; it is a
+            # reason to fall back to the engine's default and say nothing new.
+            return None
+
     def serves(self, requirements: Sequence[str]) -> tuple[str, ...]:
         """Which of these data requirements this campaign cannot serve."""
         allowed = {c.upper() for c in self.allowed_capabilities}

@@ -157,7 +157,11 @@ def engine(tmp_path):
 def test_restart_cannot_clear_a_stop_while_old_workers_are_alive(engine, monkeypatch):
     entered, release = threading.Event(), threading.Event()
 
-    def cycle(*args):
+    # `**kwargs` because `_cycle` takes its partitions by keyword. A stub that
+    # does not accept them raises inside the loop, the loop swallows it (a bad
+    # cycle must not kill the engine), and the test fails by timing out on a
+    # cycle that never entered rather than by saying the signature moved.
+    def cycle(*args, **kwargs):
         entered.set()
         release.wait(3)
 

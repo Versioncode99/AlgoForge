@@ -73,7 +73,6 @@ class Observation:
     trades: int = 0
     net_pnl: float = 0.0
     #: Whether the run produced a positive development result that failed later.
-    was_profitable: bool = False
 
 
 @dataclass(frozen=True)

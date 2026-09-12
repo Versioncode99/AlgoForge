@@ -130,7 +130,15 @@ ROLE_PURPOSE: dict[AgentRole, str] = {
 ROLE_BUCKETS: dict[AgentRole, tuple[str, ...]] = {
     AgentRole.DISCOVERY: ("DISCOVER_FAMILY", "EXPLORE_HYPOTHESIS"),
     AgentRole.LITERATURE: ("DISCOVER_FAMILY",),
-    AgentRole.FEATURE: ("EXPLORE_HYPOTHESIS", "DISCOVER_FAMILY"),
+    # Composing a construction, and changing the *structure* of one that
+    # exists. `BUCKET_KIND` makes this exact: DISCOVER_FAMILY produces
+    # SearchKind.FAMILY and ADVANCE_PROMISING produces SearchKind.STRUCTURAL,
+    # which is what "how a signal is constructed" means here. REFINE_PARAMETERS
+    # is deliberately absent -- the role's own sentence says "not how it is
+    # tuned". It previously held the same two buckets as DISCOVERY, in the
+    # other order, and since the draw tests membership rather than order the
+    # two roles were one role with two names.
+    AgentRole.FEATURE: ("DISCOVER_FAMILY", "ADVANCE_PROMISING"),
     AgentRole.HYPOTHESIS: ("EXPLORE_HYPOTHESIS",),
     AgentRole.FALSIFICATION: ("ADVANCE_PROMISING", "ROBUSTNESS"),
     AgentRole.REGIME: ("EXPLORE_HYPOTHESIS", "ADVANCE_PROMISING"),

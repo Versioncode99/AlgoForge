@@ -86,11 +86,22 @@ class CampaignRuntime:
         A campaign with no history scores 1.0: an unproven campaign is given the
         benefit of the doubt for its first window, because scoring it zero would
         deny it the workers it needs to earn a score.
+
+        That 1.0 is a **scheduling weight, not a measurement**, and the two are
+        not interchangeable. Read `observed` before showing this number to
+        anybody: a campaign that has run no cycles has no health, and rendering
+        its weight as "100%" tells an operator their campaign is doing
+        perfectly at the exact moment it has done nothing at all.
         """
         if not self.outcomes:
             return 1.0
         progressed = sum(1 for outcome in self.outcomes if outcome is Outcome.PROGRESS)
         return max(MIN_HEALTH, progressed / len(self.outcomes))
+
+    @property
+    def observed(self) -> int:
+        """Cycles behind `health`. Zero means the score is a prior, not a result."""
+        return len(self.outcomes)
 
     def stalled(self) -> bool:
         return self.barren_run >= STALL_THRESHOLD
@@ -101,6 +112,7 @@ class CampaignRuntime:
             "campaign_id": self.campaign_id,
             "workers": self.workers,
             "health": round(self.health(), 3),
+            "health_observed": self.observed,
             "barren_run": self.barren_run,
             "stalled": self.stalled(),
             "last_progress_at": self.last_progress_at,

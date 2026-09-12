@@ -239,7 +239,21 @@ class MarketService:
             raise ProviderError(f"unknown dataset '{key}'")
         if not dataset.is_imported:
             bars, _ = self.load(key)
-            return [b for b in bars if start <= b.event_time <= end], dataset
+            inside = [
+                index
+                for index, bar in enumerate(bars)
+                if start <= bar.event_time <= end
+            ]
+            if not inside:
+                return [], dataset
+            # `pad_bars` was documented on this method and applied only on the
+            # imported branch, so the same call padded on an archive and
+            # silently did not on a streamed or generated set. A strategy given
+            # no warm-up computes its first indicators on insufficient history
+            # and reports nothing unusual, which is the quiet version of a
+            # wrong answer.
+            first = max(0, inside[0] - max(0, pad_bars))
+            return bars[first : inside[-1] + 1], dataset
 
         pd = _pd()
         frame = self._frame_for(key, dataset)
@@ -261,6 +275,83 @@ class MarketService:
         first, last = int(inside[0]), int(inside[-1])
         window = frame.iloc[max(0, first - max(0, pad_bars)) : last + 1]
         return _frame_to_bars(window, dataset.symbol, dataset.provider), dataset
+
+    # ── time scopes ──────────────────────────────────────────────────────────
+
+    def reservoir(self, key: str) -> tuple[Any, Any]:
+        """The first and last instants this dataset actually holds.
+
+        A `TimeScope` is a claim about a slice of a reservoir, and it cannot be
+        built honestly without knowing where the reservoir begins and ends. Read
+        from the archive rather than from the dataset's declared span, for the
+        same reason `forge.data.health` measures rather than asserts: a purchased
+        archive can still start later than its label says.
+        """
+        dataset = DATASETS.get(key)
+        if dataset is None:
+            raise ProviderError(f"unknown dataset '{key}'")
+        if not dataset.is_imported:
+            bars, _ = self.load(key)
+            if not bars:
+                raise ProviderError(f"dataset '{key}' holds no bars")
+            return bars[0].event_time, bars[-1].event_time
+        frame = self._frame_for(key, dataset)
+        if frame.empty:
+            raise ProviderError(f"dataset '{key}' holds no bars")
+        times = _pd().to_datetime(frame["event_time"], utc=True)
+        return times.iloc[0].to_pydatetime(), times.iloc[-1].to_pydatetime()
+
+    def load_scope(
+        self, scope: Any, *, pad_bars: int = 0, minimum_bars: int = 1
+    ) -> tuple[list[Bar], Dataset]:
+        """The bars one experiment's time scope selects.
+
+        This is the method that makes a window mean something. `load` takes a
+        bar count and resolves it as `tail(limit)`, which is how every
+        experiment in a campaign came to share the most recent nine months
+        whatever its hypothesis. A scope names dates, and this returns those
+        dates.
+
+        Refuses an empty result rather than returning one. A scope that selects
+        no bars is a scope that was built against the wrong reservoir, and
+        letting it through produces an experiment that ran on nothing and says
+        so only in the trade count.
+        """
+        bars, dataset = self.load_range(
+            scope.dataset, scope.selected_start, scope.selected_end, pad_bars=pad_bars
+        )
+        if not bars:
+            raise ProviderError(
+                f"the selected window {scope.selected_start.date()} to "
+                f"{scope.selected_end.date()} holds no bars in '{scope.dataset}'"
+            )
+        # Sufficiency is a bar count, and this is the layer that can count.
+        # `TimeScope` deliberately holds no minimum length: the same twenty days
+        # is six thousand one-minute bars and twenty daily ones.
+        if len(bars) < minimum_bars:
+            raise ProviderError(
+                f"the selected window holds {len(bars):,} bars; this experiment needs "
+                f"at least {minimum_bars:,}. Widen the window or choose a finer interval."
+            )
+        return bars, dataset
+
+    def load_window(self, scope: Any, role: str, *, pad_bars: int = 0) -> tuple[list[Bar], Dataset]:
+        """One named window of a scope — a train span, a fold, a regime."""
+        window = scope.window_for(role)
+        if window is None:
+            known = ", ".join(w.role for w in scope.windows) or "none"
+            raise ProviderError(
+                f"this scope has no '{role}' window. It carries: {known}."
+            )
+        bars, dataset = self.load_range(
+            scope.dataset, window.start, window.end, pad_bars=pad_bars
+        )
+        if not bars:
+            raise ProviderError(
+                f"the '{role}' window {window.start.date()} to {window.end.date()} "
+                f"holds no bars in '{scope.dataset}'"
+            )
+        return bars, dataset
 
     # ── charting ─────────────────────────────────────────────────────────────
     def chart_bars(

@@ -148,6 +148,42 @@ PREPARATORY: frozenset[str] = frozenset(
         "duplicate_workspace_version",
         "export_workspace",
         "import_workspace",
+        # The sidebar is the panel list by another name. `remove_panel` is
+        # already here, so a policy that permitted rearranging panels but held
+        # rearranging the sidebar would be drawing a line the interface does
+        # not have. Every one of these is undone by doing it again, and
+        # `reset_sidebar` — the one that is not — carries CONFIRM risk and is
+        # held by the destructive rule before any list here is consulted.
+        "add_sidebar_group",
+        "rename_sidebar_group",
+        "remove_sidebar_group",
+        "reorder_sidebar_groups",
+        "collapse_sidebar_group",
+        "add_sidebar_item",
+        "rename_sidebar_item",
+        "remove_sidebar_item",
+        "move_sidebar_item",
+        "pin_sidebar_item",
+        "hide_sidebar_item",
+        # What the workstation is currently pointed at. Resolution-at-render
+        # state: it changes which symbol the panels show and nothing else, and
+        # an assistant that cannot point the screen at the instrument it is
+        # about to discuss has to narrate the click instead of making it.
+        "set_context",
+        "clear_context",
+        # Workspace identity and association. A description, an icon, a pin and
+        # which campaign a workspace is about — labels on a screen, reversible,
+        # reaching no evidence and no order.
+        "describe_this_workspace",
+        "pin_workspace",
+        "link_campaign_to_workspace",
+        # Proposing and organising research. `create_strategy` is already here
+        # on exactly this reasoning: creating a campaign commits nobody to
+        # anything, and starting one — which does — is automation below.
+        "create_campaign",
+        "duplicate_campaign",
+        "rename_campaign",
+        "prioritise_campaign",
     }
 )
 
@@ -160,6 +196,15 @@ AUTOMATION: frozenset[str] = frozenset(
         "start_engine",
         "stop_engine",
         "run_agent",
+        # The same commitment at campaign granularity. A campaign that is
+        # running is workers spending cycles on it, which is precisely what
+        # `start_engine` means and precisely what somebody in Normal mode did
+        # not ask for.
+        "start_campaign",
+        "stop_campaign",
+        "pause_campaign",
+        "resume_campaign",
+        "deploy_campaign_agents",
     }
 )
 
