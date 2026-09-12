@@ -214,6 +214,40 @@ Stated here so the document cannot be read as a claim:
   registry and are tested end to end, but the autonomous loop has not been
   rewritten to go through them.
 - **Pilots are not executed.** The design, the outcomes and the promotion rule
-  exist and are tested; nothing runs a reduced backtest yet.
+  exist and are tested; nothing runs a reduced backtest yet. Note that the
+  engine *does* already screen: `_cycle` runs the development partition first
+  and rejects on `net_pnl <= 0 or trades < 30` before validation is touched.
+  That is a cheap gate before an expensive path — it is simply not a *temporal*
+  pilot, because it uses the same window rather than a smaller one.
 - **The plan critic (§9) is not built.** `agents/debate.py` critiques a verdict;
   nothing critiques a plan before compute is spent.
+
+
+## A defect this design introduced, and what it cost to find
+
+Worth recording, because it is the exact failure mode the whole feature exists
+to prevent, reintroduced by the feature.
+
+`ResearchPartitions` holds actual bar **lists**. `_cycle` resolved them as
+`self._partitions or chronological_split(bars, ...)`, and `self._partitions` is
+cut from the run's default window. So the first version of the engine wiring
+handed a cycle scoped bars and left it backtesting the **default** window's
+development partition, reporting the result against the scope — the window
+silently ignored, on real data only, with nothing on screen to show it.
+
+It hid from all eight tests written for the feature because the synthetic
+dataset is not `is_real`, so the partitioned path never ran.
+
+The fix threads the partitions with the bars. The regression test needed
+strengthening twice: the first version called `_bars_for` once, which returns
+through the cache-*miss* branch, and re-introducing the leak in the cache-*hit*
+branch left it passing. It now loads twice, and was confirmed to fail with the
+leak in place and pass without it.
+
+Two lessons that generalise beyond this change:
+
+1. **A fixture that cannot reach a code path cannot test it.** `is_real` gates a
+   whole arm of the cycle, and every test for a data-path feature was written
+   against a fixture that takes the other arm.
+2. **A cache has two return paths and a test usually exercises one.** Any
+   assertion about what a cached function returns has to load twice.
