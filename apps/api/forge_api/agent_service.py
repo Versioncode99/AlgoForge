@@ -404,24 +404,61 @@ class AgentService:
         )
 
     def propose(self, raw: dict[str, Any], known_sources: set[str]) -> dict[str, Any]:
-        template = TEMPLATES.get(str(raw.get("template", "")))
+        # These refusals reach the operator as `proposal_rejected`, and they are
+        # what a proposer has to correct against. A refusal that does not name
+        # the parameter, the bound it missed, or the templates that do exist
+        # leaves the reader to diff their proposal against the catalogue by
+        # hand, so each one carries the specific fact that would fix it.
+        requested = str(raw.get("template", ""))
+        template = TEMPLATES.get(requested)
         if template is None:
-            raise ValueError("Unknown template")
+            known = ", ".join(sorted(TEMPLATES)[:12])
+            raise ValueError(
+                f"Unknown template '{requested}'. Available: {known}"
+                + (", …" if len(TEMPLATES) > 12 else "")
+            )
         params = raw.get("parameters", {})
-        if not isinstance(params, dict) or set(params) - {p.name for p in template.parameters}:
-            raise ValueError("Unknown parameter")
+        if not isinstance(params, dict):
+            raise ValueError(
+                f"'parameters' must be an object of name to number, not "
+                f"{type(params).__name__}."
+            )
+        declared = {p.name for p in template.parameters}
+        unknown = sorted(set(params) - declared)
+        if unknown:
+            raise ValueError(
+                f"Unknown parameter(s) {', '.join(unknown)} for template "
+                f"'{requested}'. It declares: {', '.join(sorted(declared))}."
+            )
         clean: dict[str, float] = {}
         for p in template.parameters:
             value = float(params.get(p.name, p.default))
             if not math.isfinite(value) or not p.low <= value <= p.high:
-                raise ValueError("Parameter outside declared range")
+                raise ValueError(
+                    f"'{p.name}' is {value:g}, outside its declared range "
+                    f"{p.low:g} to {p.high:g}."
+                )
             steps = (value - p.low) / p.step
             if abs(steps - round(steps)) > 1e-6:
-                raise ValueError("Parameter outside declared grid")
+                nearest = p.low + round(steps) * p.step
+                raise ValueError(
+                    f"'{p.name}' is {value:g}, off the declared grid: it steps by "
+                    f"{p.step:g} from {p.low:g}. The nearest valid value is "
+                    f"{nearest:g}."
+                )
             clean[p.name] = value
         source_ids = raw.get("source_ids", [])
-        if not source_ids or any(s not in known_sources for s in source_ids):
-            raise ValueError("Proposal requires known source IDs")
+        if not source_ids:
+            raise ValueError(
+                "Proposal cites no sources. Cite the id of at least one source "
+                "that was retrieved for this task."
+            )
+        unrecognised = sorted(str(s) for s in source_ids if s not in known_sources)
+        if unrecognised:
+            raise ValueError(
+                f"Proposal cites source(s) not retrieved for this task: "
+                f"{', '.join(unrecognised)}."
+            )
         hypothesis = str(raw.get("hypothesis", ""))
         if len(hypothesis) < 40:
             raise ValueError("Proposal needs a falsifiable mechanism")

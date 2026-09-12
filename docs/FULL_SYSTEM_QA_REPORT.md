@@ -14,8 +14,8 @@ sweep and its count are stated, because "clean" without a method is an opinion.
 
 ## 1. What was found
 
-**Nine defects, one of them P0.** Four more findings are recorded and
-deliberately not changed, for reasons given against each.
+**Fourteen defects, one of them P0.** Four more findings are recorded and
+deliberately not changed, for reasons given against each (§9).
 
 | # | Severity | Finding | Status |
 |---|---|---|---|
@@ -32,6 +32,7 @@ deliberately not changed, for reasons given against each.
 | 11 | P2 | `load_range` ignored `pad_bars`, so warm-up was silently skipped | fixed `8df0c8c` |
 | 12 | P2 | A test double no longer matched the signature it doubled | fixed `480121d` |
 | 13 | P3 | Two model fields written and never read | fixed `de623da` |
+| 14 | P2 | The proposal refusals an agent corrects against named nothing specific | fixed, §8 |
 
 Recorded, not changed:
 
@@ -166,17 +167,55 @@ state at every point rather than assumed to.
 ```
 ruff check .                     clean
 mypy --strict                    clean, 189 source files
-pytest (backend)                 2,697 passed, 0 failed
-vitest (frontend)                110 passed, 14 files
+pytest (backend)                 2,719 passed, 0 failed
+vitest (frontend)                121 passed, 16 files
 tsc --noEmit                     clean
 CI                               ubuntu-latest + windows-latest, Python 3.13; Node 24 web job
 ```
 
-## 8. What is still unswept
+## 8. The product, used
 
-Parts N (product QA as six personas) and O (quality of life) are product
-judgement rather than defect-finding, and are not attempted here. Saying so is
-the point: this report claims a clean result only for the areas it names a
-method and a number for.
+Six personas were walked against the running API — each a sequence of things
+that person must be able to do, not a list of opinions. **Zero findings.**
 
-The four recorded-not-changed findings in §1 are open decisions, not oversights.
+The step worth naming is the last: a second application was constructed over
+the same state, and the campaign, its status and every total came back
+identical. An unattended research run that cannot survive a restart is a run
+whose results you cannot trust, and this is now checked rather than assumed.
+
+Two answers stood out as already right, and both are the product of earlier
+phases rather than this one: an operator asking *"is it working, or merely
+alive?"* gets a `working` field distinct from `running`, and an operator asking
+*"why is it producing nothing?"* gets a skip ledger with every refusal
+classified useful, wasted or neutral.
+
+**One quality-of-life defect fixed.** `AgentService.propose` refused a bad
+experiment proposal with `Unknown template`, `Unknown parameter`,
+`Parameter outside declared range` and `Parameter outside declared grid`. These
+reach the operator as `proposal_rejected` and are what the proposer is expected
+to correct against — and none named the template, the parameter, the bound it
+missed, or a value that would work. They now carry the specific fact that fixes
+them, including the nearest on-grid value, and "cited no source" is told apart
+from "cited a source that was not retrieved", which used to arrive as one
+sentence.
+
+One measurement here is worth reporting against itself: the first refusal sweep
+flagged 161 messages as unhelpful, and the number was wrong.
+`'panel_ids' must be a non-empty list of panel ids` **is** the remedy; a check
+that cannot see that is measuring its own regex. The corrected figure is 81, and
+most of those name an internal wiring cause a reader cannot act on regardless.
+
+## 9. Open decisions
+
+The four recorded-not-changed findings in §1 are decisions, not oversights.
+Each would change what the product does, and none is a QA side-effect to make
+unasked:
+
+- Whether the LITERATURE role should cause retrieval, rather than
+  `campaign.web_research` deciding it for every role alike.
+- Whether a SPECIALIST agent's objective should steer its work, or whether the
+  surface should say that it does not.
+- Whether to drop `NVIDIA_NIM_API_KEY` from `.env.example` now the provider is
+  gone.
+- **Whether to grow the archetype vocabulary** — §4, and by a wide margin the
+  most consequential of the four.

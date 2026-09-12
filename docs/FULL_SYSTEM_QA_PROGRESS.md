@@ -341,18 +341,66 @@ what was never measured was the size of the space it is computed over. A
 roughly 17-21 constructions — essentially all of it. §2.1 of that report now
 carries the measurement and the amended conclusion.
 
+### N1 · Six people using the product — walked, clean
+**Method.** Not opinion: each persona is a sequence of things that person must
+be able to do, executed against the running API. A step that 5xxs, returns an
+empty answer where a fact exists, or cannot be reached at all is a finding.
+
+| persona | asked | result |
+|---|---|---|
+| 1. first run, nothing configured | is the API up; what can this installation serve; is anything running and why not; do the empty surfaces answer or error | `STOPPED — not started`; capabilities served; strategies, campaigns and runs all return `[]` |
+| 2. a researcher starting a campaign | state a falsifiable objective; is a vague one refused; what data exists; start it | `"find alpha"` refused **400**; 11 datasets; started |
+| 3. an operator watching an unattended run | is it *working* or merely alive; if barren, why; per-campaign health with its sample; what has it done | `working=True`; skips 4, all classified useful; `health=0.636 observed=11`; 58 journal events |
+| 4. reviewing evidence behind a result | what was produced; why did it pass or fail; is the gate ladder inspectable | 5 strategies; dossier present; overview present |
+| 5. a prop-firm trader | is the rule set readable; with no account, is the refusal actionable | 4 rule entries; *"no prop account is selected. Configure one first: the rule engine has nothing to evaluate against."* |
+| 6. coming back after a restart | stop cleanly; does the work survive a real process restart | totals and campaign both survived a fresh `create_app` against the same home |
+
+**0 findings.** The restart step is the one worth naming: a second application
+was constructed over the same state and the campaign, its status and every
+total came back identical.
+
+### O1 · Friction, where it can be measured — swept, 1 fixed
+**Method.** Three things a user meets constantly and that can be checked
+mechanically: a refusal that does not say what to do, an action with no usable
+description, and a parameter a caller cannot guess.
+
+```
+actions                                          154
+  with a summary under 25 characters               1  (and it is clear: "Rename a sidebar group.")
+single-string refusals in the backend            195
+  stating neither a remedy nor the required shape  81  (most name an internal cause precisely)
+string parameters with no description             86
+```
+
+The first pass flagged 161 refusals until the heuristic was corrected: `'panel_ids'
+must be a non-empty list of panel ids` **is** the remedy, and a check that
+cannot see that is measuring its own regex. Recorded because the corrected
+number, 81, is the one that means anything, and most of those name an internal
+wiring cause the reader cannot act on anyway.
+
+- **P2 — the proposal refusals an agent has to correct against said nothing
+  useful.** `AgentService.propose` refused with `Unknown template`,
+  `Unknown parameter`, `Parameter outside declared range` and
+  `Parameter outside declared grid`. These are not internal: `run` catches them
+  and hands the text back as `proposal_rejected`, in a note the operator reads
+  and the proposer is expected to correct against. None named the template, the
+  parameter, the bound it missed, or a value that would work. Each now carries
+  the specific fact that would fix it — including the nearest on-grid value —
+  and citing no source is told apart from citing one that was not retrieved,
+  which previously arrived as the same sentence.
+
+The 86 undescribed parameters are mostly self-evident (`add_panel.symbol`,
+`create_campaign.timeframe`). They are recorded rather than filled in: writing
+86 descriptions to satisfy a sweep is how a schema acquires 86 restatements of
+the parameter name.
+
 ---
 
 ## Not yet swept
 
-- **N** — product QA against the six personas
-- **O** — quality of life
-
-Both are product judgement rather than defect-finding. They are not attempted,
-and saying so is the point: an area is reported clean only where a method and a
-number are recorded for it.
+Nothing. Every part of the brief has a method and a number recorded above.
 
 ## Standing verification
 
 `ruff check .` clean · `mypy --strict` clean across 189 source files ·
-**2,697 backend tests, 0 failures** · 110 frontend tests across 14 files.
+**2,719 backend tests, 0 failures** · 121 frontend tests across 16 files.
