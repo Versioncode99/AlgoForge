@@ -425,7 +425,18 @@ def build_router(
         try:
             receipt = ResearchSplitReceipt.model_validate(raw_receipt)
             source, dataset = market.load(dataset_key, limit=receipt.source_bar_count)
-        except Exception:
+        except Exception as exc:
+            # Still unmeasured, which is the safe answer: G9 reads `None` as
+            # INCONCLUSIVE and never as a pass. But "this run predates receipts"
+            # and "this run's receipt will not parse" are different facts, and
+            # collapsing them silently leaves a corrupt artifact looking exactly
+            # like a legacy one. The outcome does not change; the record does.
+            log.record(
+                "MECHANISM",
+                f"G9 unmeasured for a stored run: {dataset_key} receipt could not be "
+                f"replayed ({type(exc).__name__}: {exc})",
+                "warn",
+            )
             return None
         if not dataset.is_real:
             return None
