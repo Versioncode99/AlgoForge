@@ -1,3 +1,4 @@
+import type { FanPoint } from './fan'
 export type Run = {
   run_id: string; preregistration_id: string; preregistration_hash: string
   tier: string; source_hash: string; data_hash: string; cost_hash: string
@@ -233,6 +234,13 @@ export type PropResult = {
     var_95: number; cvar_95: number; skewness: number; excess_kurtosis: number
     terminal_p05: number; terminal_median: number; terminal_p95: number
   }
+  /* The band over *every* path, day by day. `equity_paths` above is a sample of
+     individual accounts; this is the population. */
+  equity_fan: FanPoint[]
+  payout: {
+    mean: number; median: number; p05: number; p95: number; best: number
+    any_probability: number
+  }
   labels: string[]; interval_width: number; resample_ratio: number
 }
 
@@ -364,6 +372,27 @@ export type BacktestJobResult = {
 }
 
 /* ── Prop matrix ─────────────────────────────────────────────────────────── */
+/* One provider's challenge and funded phases as a single simulated history.
+   `reached` differs per leg on purpose: only the accounts that cleared the
+   challenge ever start the funded one, and each rate is against the accounts
+   that actually got that far. */
+export type JourneyStage = {
+  rule_id: string; display_name: string; phase: 'CHALLENGE' | 'FUNDED'
+  reached: number; cleared: number; failed: number; timed_out: number
+  days_p10: number | null; days_median: number | null; days_p90: number | null
+}
+export type PropJourney = {
+  journey_id: string; strategy_id: string; provider: string
+  challenge: JourneyStage; funded: JourneyStage
+  path_count: number; seed: number; trading_days: number
+  payout_probability: number; payout_interval_low: number; payout_interval_high: number
+  payout: { mean: number; median: number; p05: number; p95: number; best: number; any_probability: number }
+  days_to_payout_p10: number | null
+  days_to_payout_median: number | null
+  days_to_payout_p90: number | null
+  labels: string[]
+  source_labels: string[]
+}
 export type MatrixCell = {
   strategy_id: string; strategy_name: string
   rule_id: string; rule_name: string; provider: string; phase: string

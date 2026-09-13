@@ -31,7 +31,12 @@ from forge.modes.models import MODE_ORDER
 from forge.modes.models import catalogue as mode_catalogue
 from forge.modes.permissions import Actor
 from forge.modes.store import ModeStore
-from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
+from forge.prop import (
+    assess_day_coverage,
+    load_rules,
+    simulate_prop_journey,
+    simulate_prop_paths,
+)
 from forge.prop.accounts import PropAccountStore
 from forge.prop.engine import MAX_BACKTEST_BARS, MIN_TRADING_DAYS
 from forge.propdesk import PropDeskStore
@@ -312,6 +317,22 @@ class AttachRequest(BaseModel):
 class PropRequest(BaseModel):
     rule_id: str
     paths: int = Field(default=1000, ge=100, le=10_000)
+    seed: int = 20260901
+
+
+class PropJourneyRequest(BaseModel):
+    """One provider's two phases, played through as one account's history.
+
+    `paths` is capped far below the single-leg simulation's ceiling: a journey
+    is two replays per path plus a double-bootstrap interval that runs the
+    whole journey again forty times over. Ten thousand paths here is minutes of
+    compute for an interval that a longer track record would narrow far more
+    cheaply.
+    """
+
+    challenge_rule_id: str
+    funded_rule_id: str
+    paths: int = Field(default=500, ge=100, le=2_000)
     seed: int = 20260901
 
 
@@ -1679,9 +1700,14 @@ def build_control_router(
             },
         )
 
-    # ── prop simulation, linked to a real strategy ───────────────────────────
-    @router.post("/strategies/{strategy_id}/prop", response_model=ApiEnvelope[dict[str, Any]])
-    def strategy_prop(strategy_id: str, body: PropRequest) -> ApiEnvelope[dict[str, Any]]:
+    def _tradable_days(strategy_id: str) -> tuple[dict[str, Any], tuple[float, ...]]:
+        """The strategy's latest backtest and its daily P&L, or the refusal.
+
+        Shared by the single-leg simulation and the journey. Both need exactly
+        the same three guards, and two copies of a refusal are two refusals that
+        can drift apart -- one route telling a caller how many more bars it needs
+        while the other says "run a backtest first" for the same strategy.
+        """
         latest = store.latest(strategy_id)
         if latest is None:
             raise HTTPException(422, {"code": "no_backtest", "detail": "run a backtest first"})
@@ -1720,6 +1746,12 @@ def build_control_router(
                     "detail": coverage.explain(),
                 },
             )
+        return latest, daily
+
+    # ── prop simulation, linked to a real strategy ───────────────────────────
+    @router.post("/strategies/{strategy_id}/prop", response_model=ApiEnvelope[dict[str, Any]])
+    def strategy_prop(strategy_id: str, body: PropRequest) -> ApiEnvelope[dict[str, Any]]:
+        latest, daily = _tradable_days(strategy_id)
 
         rules = {rule.rule_id: rule for rule in load_rules(root / "rules")}
         rule = rules.get(body.rule_id)
@@ -1778,6 +1810,80 @@ def build_control_router(
                     "Double bootstrap: the observed days are resampled before each batch of "
                     "accounts, so the interval carries sample-size uncertainty, not just path "
                     "noise. Blocks of 5 days preserve losing streaks."
+                ),
+            },
+        )
+
+    # ── the journey: one provider's challenge and funded phases, joined ──────
+    @router.post(
+        "/strategies/{strategy_id}/prop/journey",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def strategy_prop_journey(
+        strategy_id: str, body: PropJourneyRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """What a funded-account trader is actually asking: do I ever get paid.
+
+        Neither leg answers it alone, and the two cannot be multiplied -- the
+        accounts that reach the funded leg are the ones that passed, which under
+        a resampling model are the luckier draws rather than a fair sample. The
+        engine plays the journey through instead, so the conditioning is real.
+        """
+        latest, daily = _tradable_days(strategy_id)
+        rules = {rule.rule_id: rule for rule in load_rules(root / "rules")}
+        challenge = rules.get(body.challenge_rule_id)
+        funded = rules.get(body.funded_rule_id)
+        for rule_id, rule in (
+            (body.challenge_rule_id, challenge),
+            (body.funded_rule_id, funded),
+        ):
+            if rule is None:
+                raise HTTPException(404, {"code": "rule_not_found", "rule_id": rule_id})
+        assert challenge is not None and funded is not None  # narrowed by the loop above
+
+        try:
+            journey = simulate_prop_journey(
+                latest["backtest_id"],
+                challenge,
+                funded,
+                daily,
+                seed=body.seed,
+                paths=body.paths,
+                allow_unverified=True,
+            )
+        except ValueError as exc:
+            # The engine's refusals are written for a person and name the rule
+            # that caused them, so they are passed through rather than replaced.
+            code = str(exc).split(":", 1)[0]
+            raise HTTPException(422, {"code": code.lower(), "detail": str(exc)}) from exc
+
+        log.record(
+            "PROP",
+            f"{strategy_id} — {challenge.provider} journey, "
+            f"{journey.payout_probability:.1%} reach a payout over "
+            f"{journey.path_count:,} accounts",
+            "pass" if journey.payout_probability > 0.1 else "warn",
+            journey.journey_id,
+        )
+
+        return ApiEnvelope(
+            data={
+                **journey.model_dump(mode="json"),
+                "strategy_id": strategy_id,
+                "provider": challenge.provider,
+                "trading_days": len(daily),
+                "source_labels": list(_source_labels(latest)),
+            },
+            meta={
+                "rules_verified": challenge.verified and funded.verified,
+                "note": (
+                    "The payout rate is over every simulated account, not over the ones that "
+                    "passed the challenge."
+                ),
+                "interval_method": (
+                    "Double bootstrap over the whole journey: the observed days are resampled "
+                    "before each batch, so the interval carries how little was observed rather "
+                    "than only how many accounts were drawn."
                 ),
             },
         )

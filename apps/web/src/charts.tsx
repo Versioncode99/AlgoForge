@@ -5,6 +5,7 @@ import { GridComponent, TooltipComponent, MarkLineComponent } from 'echarts/comp
 import { CanvasRenderer } from 'echarts/renderers'
 import type { ComponentProps } from 'react'
 
+import { seriesOf, type FanPoint } from './fan'
 import { token, useAppearanceVersion } from './theme'
 
 echarts.use([BarChart, LineChart, ScatterChart, GridComponent, TooltipComponent, MarkLineComponent, CanvasRenderer])
@@ -50,6 +51,90 @@ function base() {
       },
     },
   }
+}
+
+/** The percentile band of account balances, day by day, over every path.
+ *
+ * The bands are drawn as a transparent floor at p05 with three stacked areas on
+ * top of it, which is how echarts expresses a band. The arithmetic for that is
+ * in `fan.ts` and tested there, because a band drawn one stack out of place is
+ * wrong in a way that still looks like a chart.
+ *
+ * `marked` is the scrubbed day and is drawn as a vertical rule, so the number
+ * being read in the panel below has a visible position in the shape above it.
+ */
+export function FanBands({
+  points,
+  marked,
+  onScrub,
+  height = 300,
+}: {
+  points: FanPoint[]
+  marked: number
+  onScrub?: (day: number) => void
+  height?: number
+}) {
+  const s = seriesOf(points)
+  const band = (data: number[], opacity: number) => ({
+    type: 'line' as const,
+    stack: 'fan',
+    data,
+    showSymbol: false,
+    silent: true,
+    lineStyle: { width: 0 },
+    areaStyle: { color: token('--s3', '#39c5cf'), opacity },
+  })
+  return (
+    <ReactECharts
+      style={{ height }}
+      onEvents={
+        onScrub
+          ? {
+              updateAxisPointer: (event: { dataIndex?: number }) => {
+                if (typeof event.dataIndex === 'number') onScrub(s.days[event.dataIndex])
+              },
+            }
+          : undefined
+      }
+      option={{
+        ...base(),
+        tooltip: { ...base().tooltip, axisPointer: { type: 'line' } },
+        grid: { left: 58, right: 18, top: 16, bottom: 32 },
+        xAxis: { type: 'category', data: s.days, ...axis() },
+        yAxis: { type: 'value', scale: true, ...axis() },
+        series: [
+          /* The floor. Stacked under the bands and never drawn. */
+          {
+            type: 'line' as const,
+            stack: 'fan',
+            data: s.base,
+            showSymbol: false,
+            silent: true,
+            lineStyle: { width: 0 },
+            areaStyle: { opacity: 0 },
+            tooltip: { show: false },
+          },
+          band(s.lower, 0.14),
+          band(s.middle, 0.3),
+          band(s.upper, 0.14),
+          {
+            type: 'line' as const,
+            name: 'median',
+            data: s.median,
+            showSymbol: false,
+            lineStyle: { width: 1.6, color: token('--chart-up', '#3ddc97') },
+            markLine: {
+              silent: true,
+              symbol: 'none',
+              label: { show: false },
+              lineStyle: { color: token('--fg-2', '#8b949e'), width: 1, type: 'solid' },
+              data: [{ xAxis: String(marked) }],
+            },
+          },
+        ],
+      }}
+    />
+  )
 }
 
 export function EquityChart({ paths, start = 0 }: { paths: number[][]; start?: number }) {

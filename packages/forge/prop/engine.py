@@ -15,7 +15,11 @@ from forge.prop.models import (
     BoundaryEvent,
     BoundaryRaceSummary,
     DistributionBin,
+    EquityFanPoint,
+    JourneyStage,
     PathOutcome,
+    PayoutSummary,
+    PropJourney,
     PropRuleSet,
     ReturnDrawdownPoint,
     TailRiskSummary,
@@ -42,6 +46,11 @@ class PropSimulation(FrozenModel):
     terminal_histogram: tuple[DistributionBin, ...]
     return_drawdown_map: tuple[ReturnDrawdownPoint, ...]
     tail_risk: TailRiskSummary
+    #: The percentile band per day, over every path. `equity_paths` below is a
+    #: sample of individual accounts; this is the population, and the two answer
+    #: different questions.
+    equity_fan: tuple[EquityFanPoint, ...]
+    payout: PayoutSummary
     #: Why the failing accounts failed, counted over **every** path. This has to
     #: be summarised here rather than by a caller, because `outcomes` below is a
     #: sample: a consumer tallying reasons from it reported 100 failures out of a
@@ -328,18 +337,6 @@ def _sample_aware_interval(
     return float(np.percentile(rates, 2.5)), float(np.percentile(rates, 97.5))
 
 
-def _wilson(successes: int, total: int, z: float = 1.959963984540054) -> tuple[float, float]:
-    probability = successes / total
-    denominator = 1 + z * z / total
-    centre = (probability + z * z / (2 * total)) / denominator
-    margin = (
-        z
-        / denominator
-        * math.sqrt(probability * (1 - probability) / total + z * z / (4 * total * total))
-    )
-    return max(0.0, centre - margin), min(1.0, centre + margin)
-
-
 def _optional_quantiles(values: list[int]) -> tuple[float | None, float | None, float | None]:
     if not values:
         return None, None, None
@@ -352,6 +349,62 @@ def _max_drawdown(equity: tuple[float, ...]) -> float:
     if values.size == 0:
         return 0.0
     return float(np.max(np.maximum.accumulate(values) - values))
+
+
+def _equity_fan(equities: list[tuple[float, ...]], timeout_days: int) -> tuple[EquityFanPoint, ...]:
+    """Per-day percentile bands over every path, closed accounts carried forward.
+
+    Paths have different lengths: one that hits the maximum loss on day 12 has
+    no day 40. Taking the percentile over whatever is present on day 40 would
+    compute it over survivors, which is the standard way to make a simulation
+    look better than it was -- the band tightens and drifts upward exactly
+    because the bad paths stopped being counted.
+
+    A closed account keeps its final balance instead, so every day is a
+    percentile over the same `len(equities)` accounts and the days are
+    comparable to each other. `live` carries the honest half of that: it is the
+    count still trading, and it is what tells a reader whether a narrowing band
+    means agreement or attrition.
+    """
+    if not equities:
+        return ()
+    span = min(timeout_days, max(len(path) for path in equities) - 1)
+    counted = len(equities)
+    points: list[EquityFanPoint] = []
+    for day in range(span + 1):
+        values = np.asarray(
+            [path[day] if day < len(path) else path[-1] for path in equities], dtype=float
+        )
+        live = sum(1 for path in equities if day < len(path))
+        p05, p25, median, p75, p95 = (
+            float(value) for value in np.percentile(values, (5, 25, 50, 75, 95))
+        )
+        points.append(
+            EquityFanPoint(
+                day=day,
+                p05=round(p05, 2),
+                p25=round(p25, 2),
+                median=round(median, 2),
+                p75=round(p75, 2),
+                p95=round(p95, 2),
+                live=live,
+                resolved=counted - live,
+            )
+        )
+    return tuple(points)
+
+
+def _payout_summary(payouts: list[float]) -> PayoutSummary:
+    values = np.asarray(payouts, dtype=float)
+    p05, median, p95 = (float(value) for value in np.percentile(values, (5, 50, 95)))
+    return PayoutSummary(
+        mean=round(float(np.mean(values)), 2),
+        median=round(median, 2),
+        p05=round(p05, 2),
+        p95=round(p95, 2),
+        best=round(float(np.max(values)), 2),
+        any_probability=round(float(np.count_nonzero(values > 0) / values.size), 6),
+    )
 
 
 def _tail_summary(terminal_pnl: np.ndarray) -> TailRiskSummary:
@@ -526,6 +579,8 @@ def simulate_prop_paths(
         terminal_histogram=_histogram(terminal_pnl),
         return_drawdown_map=return_drawdown,
         tail_risk=_tail_summary(terminal_pnl),
+        equity_fan=_equity_fan(equities, rule.timeout_days),
+        payout=_payout_summary([item.payouts for item in outcomes]),
         failure_reasons=reasons,
         outcomes=tuple(outcomes[:OUTCOME_SAMPLE]),
         outcome_sample_size=min(len(outcomes), OUTCOME_SAMPLE),
@@ -534,5 +589,183 @@ def simulate_prop_paths(
             *METHOD_LABELS,
             *(() if rule.verified else ("UNVERIFIED_RULES",)),
             *source_labels,
+        ),
+    )
+
+
+#: What the two-stage simulation itself assumes, on top of the per-leg method
+#: labels. Stated separately because it is the assumption a reader is most
+#: likely to carry away wrongly.
+JOURNEY_LABELS: tuple[str, ...] = (
+    "TWO_STAGE_RESAMPLE",
+    "FUNDED_LEG_RESAMPLES_THE_SAME_DAYS",
+)
+
+
+def _stage(
+    rule: PropRuleSet,
+    outcomes: list[PathOutcome],
+    reached: int,
+    cleared: list[PathOutcome],
+) -> JourneyStage:
+    days = _optional_quantiles([item.days for item in cleared])
+    return JourneyStage(
+        rule_id=rule.rule_id,
+        display_name=rule.display_name,
+        phase=rule.phase,
+        reached=reached,
+        cleared=len(cleared),
+        failed=sum(1 for item in outcomes if item.outcome == "FAIL"),
+        timed_out=sum(1 for item in outcomes if item.outcome == "TIMEOUT"),
+        days_p10=None if days[0] is None else round(days[0], 2),
+        days_median=None if days[1] is None else round(days[1], 2),
+        days_p90=None if days[2] is None else round(days[2], 2),
+    )
+
+
+def _first_payout_day(outcome: PathOutcome) -> int | None:
+    for event in outcome.events:
+        if event.event == "PAYOUT":
+            return event.day
+    return None
+
+
+def _journey_interval(
+    pnl: np.ndarray,
+    challenge: PropRuleSet,
+    funded: PropRuleSet,
+    paths: int,
+    seed: int,
+    replicates: int = 40,
+) -> tuple[float, float]:
+    """The payout-probability interval, widened by how few days were observed.
+
+    Deliberately the same double bootstrap as `_sample_aware_interval` rather
+    than a Wilson interval over paths. A Wilson interval would treat the path
+    count as the sample size and report near-certainty from thirty observed
+    days, which is the precise false confidence the single-leg simulation
+    already refuses to produce. Drawing more paths from the same thirty days
+    cannot learn anything more about the strategy, and the interval has to say
+    so.
+    """
+    rng = np.random.default_rng(seed + 1451)
+    inner = max(20, paths // replicates)
+    rates: list[float] = []
+    for _ in range(replicates):
+        days = _block_bootstrap(pnl, pnl.size, rng)
+        paid = 0
+        for _ in range(inner):
+            outcome, _ = replay_path(
+                challenge, _block_bootstrap(days, challenge.timeout_days, rng)
+            )
+            if outcome.outcome not in {"PASS", "SURVIVED"}:
+                continue
+            after, _ = replay_path(funded, _block_bootstrap(days, funded.timeout_days, rng))
+            paid += _first_payout_day(after) is not None
+        rates.append(paid / inner)
+    return float(np.percentile(rates, 2.5)), float(np.percentile(rates, 97.5))
+
+
+def simulate_prop_journey(
+    run_id: str,
+    challenge: PropRuleSet,
+    funded: PropRuleSet,
+    pnl_values: tuple[float, ...],
+    *,
+    seed: int = 20260901,
+    paths: int = 300,
+    allow_unverified: bool = False,
+) -> PropJourney:
+    """Simulate challenge then funded as one run, per account.
+
+    The question a funded-account trader actually has is not "what is my pass
+    rate" and not "what is my funded survival rate" -- it is "what are the odds
+    I ever get paid, and how long does that take". Those two numbers cannot be
+    multiplied into that answer, because the accounts that reach the funded leg
+    are exactly the ones that passed, and under resampling they are the luckier
+    draws rather than a fair sample. Playing the journey through keeps the
+    conditioning where it belongs.
+
+    What this does assume, and what `FUNDED_LEG_RESAMPLES_THE_SAME_DAYS` says:
+    the funded leg draws fresh blocks from the same observed days. So it takes
+    the strategy to behave after the challenge the way it behaved during it. It
+    introduces no assumption the single-leg simulation does not already make,
+    but it applies it twice, over a longer horizon.
+    """
+    if challenge.phase != "CHALLENGE":
+        raise ValueError(f"NOT_A_CHALLENGE: {challenge.rule_id} is {challenge.phase}")
+    if funded.phase != "FUNDED":
+        raise ValueError(f"NOT_A_FUNDED_RULE: {funded.rule_id} is {funded.phase}")
+    if challenge.provider != funded.provider:
+        raise ValueError(
+            f"PROVIDER_MISMATCH: {challenge.provider} challenge against {funded.provider} funded. "
+            "A journey crosses one provider's two phases; joining two providers would describe "
+            "an account nobody can open."
+        )
+    if not allow_unverified and not (
+        challenge.runnable(date.today()) and funded.runnable(date.today())
+    ):
+        raise ValueError("RULE_LOCKED_UNVERIFIED_OR_EXPIRED")
+    if paths < 20:
+        raise ValueError("at least 20 paths required")
+    pnl = np.asarray(pnl_values, dtype=float)
+    if pnl.size < MIN_TRADING_DAYS:
+        raise ValueError(
+            f"INSUFFICIENT_DAYS: {pnl.size} trading days observed, {MIN_TRADING_DAYS} required."
+        )
+
+    rng = np.random.default_rng(seed)
+    challenge_outcomes: list[PathOutcome] = []
+    funded_outcomes: list[PathOutcome] = []
+    payouts: list[float] = []
+    days_to_payout: list[int] = []
+    for _ in range(paths):
+        outcome, _ = replay_path(challenge, _block_bootstrap(pnl, challenge.timeout_days, rng))
+        challenge_outcomes.append(outcome)
+        if outcome.outcome not in {"PASS", "SURVIVED"}:
+            payouts.append(0.0)
+            continue
+        after, _ = replay_path(funded, _block_bootstrap(pnl, funded.timeout_days, rng))
+        funded_outcomes.append(after)
+        payouts.append(after.payouts)
+        first = _first_payout_day(after)
+        if first is not None:
+            days_to_payout.append(outcome.days + first)
+
+    passed = [item for item in challenge_outcomes if item.outcome in {"PASS", "SURVIVED"}]
+    paid = [item for item in funded_outcomes if item.payouts > 0]
+    payout_days = _optional_quantiles(days_to_payout)
+    reached_payout = len(days_to_payout)
+    low, high = _journey_interval(pnl, challenge, funded, paths, seed)
+    return PropJourney(
+        journey_id=stable_id(
+            "journey",
+            {
+                "run": run_id,
+                "challenge": challenge.rule_id,
+                "funded": funded.rule_id,
+                "seed": seed,
+                "paths": paths,
+            },
+        ),
+        challenge=_stage(challenge, challenge_outcomes, paths, passed),
+        funded=_stage(funded, funded_outcomes, len(passed), paid),
+        path_count=paths,
+        seed=seed,
+        payout_probability=round(reached_payout / paths, 6),
+        payout_interval_low=round(low, 6),
+        payout_interval_high=round(high, 6),
+        payout=_payout_summary(payouts),
+        days_to_payout_p10=None if payout_days[0] is None else round(payout_days[0], 2),
+        days_to_payout_median=None if payout_days[1] is None else round(payout_days[1], 2),
+        days_to_payout_p90=None if payout_days[2] is None else round(payout_days[2], 2),
+        labels=(
+            *METHOD_LABELS,
+            *JOURNEY_LABELS,
+            *(
+                ()
+                if challenge.verified and funded.verified
+                else ("UNVERIFIED_RULES",)
+            ),
         ),
     )

@@ -1,13 +1,23 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ChevronDown, Grid3x3, TriangleAlert } from 'lucide-react'
+import { ChevronDown, Grid3x3, Route, TriangleAlert } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { ApiError, getJson, postJson } from '../api'
 import { EquityChart, ReturnDrawdownChart, TargetReachChart, TerminalHistogram } from '../charts'
+import { EquityFan } from '../components/EquityFan'
 import { JobBar } from '../components/JobBar'
 import { Empty, PanelHead, Stat } from '../components/ui'
 import { useJob } from '../hooks/useJob'
 import { money, pct } from '../lib'
-import type { Job, MatrixCell, MatrixSkip, PropMatrix, PropResult, Rule } from '../types'
+import type {
+  Job,
+  JourneyStage,
+  MatrixCell,
+  MatrixSkip,
+  PropJourney,
+  PropMatrix,
+  PropResult,
+  Rule,
+} from '../types'
 
 type Phase = 'ALL' | 'CHALLENGE' | 'FUNDED'
 type SortKey = 'pass' | 'ruin' | 'name'
@@ -33,6 +43,10 @@ const ASSUMPTION: Record<string, string> = {
   SYNTHETIC_DATA:
     'The daily series came from a backtest over generated bars. The account outcome describes the generator, not a market.',
   UNDECLARED_SOURCE: 'The caller did not state what the daily series is.',
+  TWO_STAGE_RESAMPLE:
+    'The challenge and the funded account were played through as one history per account, so the funded figures are over the accounts that actually passed rather than over all of them.',
+  FUNDED_LEG_RESAMPLES_THE_SAME_DAYS:
+    'The funded phase draws fresh days from the same observed record as the challenge. It therefore assumes the strategy behaves after the evaluation the way it behaved during it, over a horizon that is usually much longer.',
 }
 
 function describe(label: string): string {
@@ -57,16 +71,25 @@ function PropReport({ result }: { result: PropResult }) {
   return (
     <div className="stack">
       <div className="headline-row">
+        {/* The interval belongs beside the rate it qualifies. It used to sit five
+            cards away under "Observed days", where a reader taking the headline
+            had no reason to look for it. */}
         <Stat label="Passes" value={<span className="mono">{pct(result.pass_rate)}</span>}
           tone={result.pass_rate >= 0.5 ? 'good' : 'bad'}
-          note={`${result.pass_count.toLocaleString()} of ${result.path_count.toLocaleString()} accounts`} />
+          note={`${pct(result.interval_low)}–${pct(result.interval_high)} · ${result.pass_count.toLocaleString()} of ${result.path_count.toLocaleString()} accounts`} />
         <Stat label="Fails" value={<span className="mono">{pct(days.loss_first_probability)}</span>}
           tone={days.loss_first_probability > 0.3 ? 'bad' : 'plain'}
           note={`${result.fail_count.toLocaleString()} hit the maximum loss first`} />
         <Stat label="Runs out of time" value={<span className="mono">{pct(days.timeout_probability)}</span>}
           note={`${result.timeout_count.toLocaleString()} neither passed nor failed`} />
-        <Stat label="Expected payout" value={<span className="mono">{money(result.mean_payout)}</span>}
-          note="mean across every account, passing and failing alike" />
+        {/* A mean payout cannot separate "most accounts paid this" from "one in
+            twenty paid all of it", and under a rule with no payout terms the
+            mean is zero for a reason worth stating rather than showing as a
+            spread of zeros. */}
+        <Stat label="Expected payout" value={<span className="mono">{money(result.payout.mean)}</span>}
+          note={result.payout.any_probability === 0
+            ? 'no account received a payout — this rule set has no payout terms'
+            : `${pct(result.payout.any_probability)} of accounts paid · median ${money(result.payout.median)} · p95 ${money(result.payout.p95)} · best ${money(result.payout.best)}`} />
         <Stat label="Expected terminal P&L"
           value={<span className="mono">{money(result.tail_risk.terminal_median)}</span>}
           tone={result.tail_risk.terminal_median >= 0 ? 'good' : 'bad'}
@@ -92,7 +115,18 @@ function PropReport({ result }: { result: PropResult }) {
           tone={result.tail_risk.cvar_95 > 0 ? 'bad' : 'plain'}
           note={`VaR 95 ${money(-result.tail_risk.var_95)} — mean of the worst 5%`} />
         <Stat label="Observed days" value={<span className="mono">{result.trading_days}</span>}
-          note={`interval width ${pct(result.interval_width)} — narrower needs more days, not more paths`} />
+          note={`the pass interval above is ${pct(result.interval_width)} wide — narrowing it needs more days, not more paths`} />
+      </div>
+
+      <div className="panel">
+        {/* Over every path, and readable at a chosen day rather than only as a
+            shape. Closed accounts are carried forward at their final balance,
+            which is what keeps the day-to-day bands comparable. */}
+        <PanelHead title="Where the accounts were, day by day"
+          meta={`p05–p95 over all ${result.path_count.toLocaleString()}`} />
+        <div className="panel-body">
+          <EquityFan points={result.equity_fan} start={result.rule.starting_balance} />
+        </div>
       </div>
 
       <div className="panel">
@@ -151,6 +185,105 @@ function PropReport({ result }: { result: PropResult }) {
   )
 }
 
+/* ── challenge and funded, as one account's history ───────────────────────── */
+
+function StageRow({ stage, clearedLabel }: { stage: JourneyStage; clearedLabel: string }) {
+  const rate = stage.reached === 0 ? 0 : stage.cleared / stage.reached
+  return (
+    <tr>
+      <th scope="row">{stage.display_name.replace(' (research fixture)', '')}</th>
+      <td className="mono num">{stage.reached.toLocaleString()}</td>
+      <td className="mono num">{stage.reached === 0 ? '—' : pct(rate)}</td>
+      <td className="sub">{clearedLabel}</td>
+      <td className="mono num">{stage.failed.toLocaleString()}</td>
+      <td className="mono num">{stage.timed_out.toLocaleString()}</td>
+      <td className="mono num">
+        {stage.days_median === null
+          ? '—'
+          : `${stage.days_p10} · ${stage.days_median} · ${stage.days_p90}`}
+      </td>
+    </tr>
+  )
+}
+
+/** The two phases joined, because neither of them is the question.
+ *
+ * A pass rate answers "can this strategy clear an evaluation" and a funded
+ * survival rate answers "could it hold an account it already has". Nobody has
+ * either question on its own: the question is whether this ever pays, and how
+ * long that takes. The two rates cannot be multiplied into it — the accounts
+ * that reach the funded phase are exactly the ones that passed — so the journey
+ * is simulated through both phases instead and the joined figure comes out of
+ * the simulation rather than out of arithmetic done here.
+ */
+function JourneyReport({ journey }: { journey: PropJourney }) {
+  const paid = journey.payout_probability
+  return (
+    <div className="stack">
+      <div className="headline-row">
+        <Stat label="Ever paid" value={<span className="mono">{pct(paid)}</span>}
+          tone={paid >= 0.25 ? 'good' : paid > 0 ? 'plain' : 'bad'}
+          note={`${pct(journey.payout_interval_low)}–${pct(journey.payout_interval_high)} · over all ${journey.path_count.toLocaleString()} accounts, not over the ones that passed`} />
+        <Stat label="Days to the first payout"
+          value={<span className="mono">{journey.days_to_payout_median ?? '—'}</span>}
+          note={journey.days_to_payout_median === null
+            ? 'no account reached a payout'
+            : `p10 ${journey.days_to_payout_p10} · p90 ${journey.days_to_payout_p90} — both phases together`} />
+        <Stat label="Expected payout"
+          value={<span className="mono">{money(journey.payout.mean)}</span>}
+          note={journey.payout.any_probability === 0
+            ? 'nothing was paid on any path'
+            : `median of the paid ${money(journey.payout.median)} · best ${money(journey.payout.best)}`} />
+        <Stat label="Cleared the challenge"
+          value={<span className="mono">{pct(journey.challenge.cleared / journey.path_count)}</span>}
+          note={`${journey.challenge.cleared.toLocaleString()} accounts went on to the funded phase`} />
+      </div>
+
+      <div className="panel">
+        <PanelHead title="Where the accounts went" meta={`${journey.provider} · ${journey.path_count.toLocaleString()} accounts`} />
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Phase</th>
+                <th className="num">Started it</th>
+                <th className="num">Cleared</th>
+                <th>What clearing means</th>
+                <th className="num">Failed</th>
+                <th className="num">Ran out of time</th>
+                <th className="num">Days p10 · median · p90</th>
+              </tr>
+            </thead>
+            <tbody>
+              <StageRow stage={journey.challenge} clearedLabel="reached the profit target" />
+              <StageRow stage={journey.funded} clearedLabel="received at least one payout" />
+            </tbody>
+          </table>
+        </div>
+        <p className="pad sub">
+          The funded row starts from {journey.challenge.cleared.toLocaleString()} accounts rather
+          than {journey.path_count.toLocaleString()}, because only the accounts that passed ever
+          had a funded account to lose. Reading its rate against every simulated account would
+          understate it; reading the payout rate above against this row would overstate the
+          journey.
+        </p>
+      </div>
+
+      <div className="panel">
+        <PanelHead title="What this journey assumes" meta={`${journey.labels.length} stated`} />
+        <ul className="prop-assumptions">
+          {journey.labels.map((label) => (
+            <li key={label}>
+              <span className="mono">{label}</span>
+              <p>{describe(label)}</p>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
 /** Every backtested strategy against every rule set, in one grid.
  *
  * One strategy against one rule answers almost nothing. Prop rule sets differ
@@ -174,6 +307,11 @@ export function PropFirmView() {
   // to answer a question nobody asked yet.
   const [detail, setDetail] = useState<PropResult | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
+  // The journey is a third request rather than part of the detail: it simulates
+  // both phases and then bootstraps the whole thing forty times over, so it is
+  // asked for when somebody wants it rather than every time a cell is opened.
+  const [journey, setJourney] = useState<PropJourney | null>(null)
+  const [journeyError, setJourneyError] = useState<string | null>(null)
 
   const job = useJob()
   const drill = useMutation({
@@ -187,11 +325,32 @@ export function PropFirmView() {
   })
   const rules = useQuery({ queryKey: ['rules'], queryFn: () => getJson<Rule[]>('/prop/rules') })
 
+  /** The two rule sets one provider's journey needs, or null if it has only one phase. */
+  const pairFor = (cell: MatrixCell | null) => {
+    if (!cell) return null
+    const all = rules.data ?? []
+    const challenge = all.find((r) => r.provider === cell.provider && r.phase === 'CHALLENGE')
+    const funded = all.find((r) => r.provider === cell.provider && r.phase === 'FUNDED')
+    return challenge && funded ? { challenge, funded } : null
+  }
+
+  const walk = useMutation({
+    mutationFn: (pair: { challenge: Rule; funded: Rule }) =>
+      postJson<PropJourney>(`/strategies/${picked!.strategy_id}/prop/journey`, {
+        challenge_rule_id: pair.challenge.rule_id,
+        funded_rule_id: pair.funded.rule_id,
+        paths: Math.min(1000, Math.max(250, paths)),
+      }),
+    onSuccess: (r) => { setJourney(r); setJourneyError(null) },
+    onError: (e: Error) => { setJourney(null); setJourneyError(e.message) },
+  })
+
   const run = useMutation({
     mutationFn: () => postJson<Job>('/prop/matrix', { paths, phase }),
     onSuccess: (started) => {
       setMatrix(null); setPicked(null); setError(null); setRefused(null)
-      setDetail(null); setDetailError(null); job.start(started)
+      setDetail(null); setDetailError(null)
+      setJourney(null); setJourneyError(null); job.start(started)
     },
     onError: (e: Error) => {
       setError(e.message)
@@ -349,6 +508,11 @@ export function PropFirmView() {
                                 if (detail && detail.rule.rule_id !== cell.rule_id) setDetail(null)
                                 if (detail && detail.strategy_id !== cell.strategy_id) setDetail(null)
                                 setDetailError(null)
+                                // The journey is per strategy and per provider, so
+                                // a cell in another column or row invalidates it.
+                                if (journey && (journey.strategy_id !== cell.strategy_id
+                                  || journey.provider !== cell.provider)) setJourney(null)
+                                setJourneyError(null)
                               }}
                               title={`${pct(cell.pass_rate)} pass · ${pct(cell.risk_of_ruin)} ruin`}
                             >
@@ -406,6 +570,28 @@ export function PropFirmView() {
                   assumption — over this strategy's own trade ledger.
                 </span>
               </div>
+              {pairFor(picked) && (
+                <div className="pad">
+                  <button
+                    className="btn af-press"
+                    disabled={walk.isPending}
+                    onClick={() => walk.mutate(pairFor(picked)!)}
+                  >
+                    <Route />
+                    {walk.isPending
+                      ? 'Simulating both phases…'
+                      : journey
+                        ? 'Re-run the journey'
+                        : `Open the ${picked.provider} journey`}
+                  </button>
+                  <span className="sub">
+                    {' '}Challenge and funded played through as one account's history — how
+                    often this ever reaches a payout, and how long that takes.
+                  </span>
+                </div>
+              )}
+              {journeyError && <p className="warning" role="status">{journeyError}</p>}
+              {journey && <div className="pad"><JourneyReport journey={journey} /></div>}
               {detailError && (
                 <p className="warning" role="status">{detailError}</p>
               )}

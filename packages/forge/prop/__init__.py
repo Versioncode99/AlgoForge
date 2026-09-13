@@ -22,9 +22,10 @@ from forge.prop.engine import (
     PropSimulation,
     assess_day_coverage,
     load_rules,
+    simulate_prop_journey,
     simulate_prop_paths,
 )
-from forge.prop.models import PropRuleSet
+from forge.prop.models import PropJourney, PropRuleSet
 
 __all__ = [
     "CAUTION_HEADROOM",
@@ -40,6 +41,7 @@ __all__ = [
     "Metric",
     "PropAccount",
     "PropAccountStore",
+    "PropJourney",
     "PropRuleSet",
     "PropSimulation",
     "RuleStatus",
@@ -49,6 +51,7 @@ __all__ = [
     "assess_day_coverage",
     "load_rules",
     "loss_floor",
+    "simulate_prop_journey",
     "simulate_prop_paths",
     "state_from_trades",
 ]
