@@ -1028,6 +1028,12 @@ class ResearchDirector:
         refused. "This campaign has tried everything it is allowed to try" is a
         finding about the frontier; another near-duplicate is not.
         """
+        if ASSEMBLED_SHARE <= 0.0:
+            # The grammar is off. A share of zero is not "assemble rarely"; it
+            # is the written archetypes only, which is what the engine had
+            # before this phase and what the comparison harness's baseline arm
+            # needs in order to be a baseline.
+            return None
         excluded = set(self._tried_signatures()) | set(extra_excluded)
         for _ in range(ASSEMBLY_ATTEMPTS):
             spec = draw(
@@ -1078,9 +1084,20 @@ class ResearchDirector:
         engine stopped discovering — the grammar assembles a new one instead.
         """
         runnable = [a for a in ARCHETYPES.values() if not campaign.serves(a.required_data)]
+        # A written archetype this campaign has already built is not a fresh
+        # proposal, and proposing it again is a cycle spent composing a
+        # definition, rendering it, registering a template and having the
+        # novelty gate refuse the claim — correctly, and expensively.
+        #
+        # Measured before this filter: a 320-cycle campaign produced 222
+        # SAME_CONSTRUCTION refusals, most of them the ten written archetypes
+        # coming round again. The gate was doing its job; the draw was asking
+        # it the same question repeatedly.
+        tried = self._tried_signatures()
+        unspent = [a for a in runnable if a.key not in tried]
         if prefer_unused:
             known = self.families.all_keys()
-            fresh = [a for a in runnable if f"discovered_{a.key}"[:40] not in known]
+            fresh = [a for a in unspent if f"discovered_{a.key}"[:40] not in known]
             if fresh:
                 return fresh[rng.randrange(len(fresh))]
             # Every written archetype already has a family. That used to be the
@@ -1088,7 +1105,7 @@ class ResearchDirector:
             assembled = self._assemble(campaign, rng)
             if assembled is not None:
                 return assembled
-        if not runnable:
+        if not unspent:
             return self._assemble(campaign, rng)
         # Past the seeds, the grammar is the larger half of the vocabulary and
         # is drawn from most of the time. The written archetypes stay reachable
@@ -1097,7 +1114,7 @@ class ResearchDirector:
             assembled = self._assemble(campaign, rng)
             if assembled is not None:
                 return assembled
-        return runnable[rng.randrange(len(runnable))]
+        return unspent[rng.randrange(len(unspent))]
 
     def _archetype_for_item(
         self, item: Any, rng: random.Random, *, exclude_used: bool = False
@@ -1182,6 +1199,53 @@ class ResearchDirector:
 
         template_key = f"gen_{archetype.key}_{definition.definition_hash[:8]}"[:50]
         registered_here = template_key not in TEMPLATES
+
+        # The claim is checked *before* the template is built.
+        #
+        # It used to be the other way round: register, then assess, then
+        # withdraw when the claim turned out to be one already on the frontier.
+        # Registering runs `to_python`, the static guard and a smoke test over
+        # synthetic bars, and withdrawing deletes it again — measured at 220 of
+        # 320 cycles in one campaign, all of that work thrown away for a verdict
+        # that cost nothing and could have come first.
+        #
+        # A fresh claim only. Picking up an existing frontier item is not a new
+        # claim at all, and that branch is below.
+        verdict = None
+        if existing_node is None or existing_item is None:
+            proposal = Subject.of(
+                template_key,
+                statement=definition.hypothesis,
+                mechanism=archetype.mechanism,
+                family=family,
+                features=archetype.signature(),
+                required_data=archetype.required_data,
+            )
+            corpus = subjects_from_hypotheses(
+                self.hypotheses.list(campaign.campaign_id, limit=400)
+            ) + subjects_from_templates(
+                {k: v for k, v in TEMPLATES.items() if k != template_key}
+            )
+            verdict = assess(proposal, corpus, claimed=search_kind)
+            if not verdict.admitted and search_kind is not SearchKind.PARAMETER:
+                self._event(
+                    EventKind.HYPOTHESIS_REJECTED,
+                    verdict.reason,
+                    detail={**verdict.as_dict(), "template_not_built": template_key},
+                    level="warn",
+                    worker=worker,
+                )
+                return Refusal(
+                    reason=verdict.reason,
+                    bucket=bucket,
+                    duplicate=True,
+                    kind=SkipKind.NOT_NOVEL,
+                    level=_level_of(verdict),
+                    matched=verdict.nearest.key if verdict.nearest else None,
+                    similarity=verdict.nearest.combined if verdict.nearest else None,
+                    subject=archetype.label,
+                )
+
         if registered_here:
             registered = self._register_template(
                 campaign, composition, template_key, family, worker, sources
@@ -1229,47 +1293,8 @@ class ResearchDirector:
                 or f"testing an open question with the {archetype.key} construction",
             )
 
-        # A fresh claim, checked against every claim already made. A structural
-        # variant that turns out to restate an existing hypothesis is refused
-        # here rather than becoming a near-duplicate node in the graph.
-        proposal = Subject.of(
-            template_key,
-            statement=definition.hypothesis,
-            mechanism=archetype.mechanism,
-            family=family,
-            features=archetype.signature(),
-            required_data=archetype.required_data,
-        )
-        corpus = subjects_from_hypotheses(
-            self.hypotheses.list(campaign.campaign_id, limit=400)
-        ) + subjects_from_templates({k: v for k, v in TEMPLATES.items() if k != template_key})
-        verdict = assess(proposal, corpus, claimed=search_kind)
-        if not verdict.admitted and search_kind is not SearchKind.PARAMETER:
-            # Take the template back out. It was registered a moment ago to
-            # prove the claim was implementable, and the claim turned out to be
-            # one already on the frontier — leaving it would put a template in
-            # the catalogue that no hypothesis points at, and inflate the
-            # "templates created" count with work that answered nothing.
-            if registered_here:
-                self._withdraw_template(template_key)
-            self._event(
-                EventKind.HYPOTHESIS_REJECTED,
-                verdict.reason,
-                detail={**verdict.as_dict(), "withdrew_template": template_key},
-                level="warn",
-                worker=worker,
-            )
-            return Refusal(
-                reason=verdict.reason,
-                bucket=bucket,
-                duplicate=True,
-                kind=SkipKind.NOT_NOVEL,
-                level=_level_of(verdict),
-                matched=verdict.nearest.key if verdict.nearest else None,
-                similarity=verdict.nearest.combined if verdict.nearest else None,
-                subject=archetype.label,
-            )
-
+        # The verdict was reached above, before any of the work that follows it.
+        assert verdict is not None
         item_id = frontier_item_id
         if item_id is None:
             item = self.frontier.admit(

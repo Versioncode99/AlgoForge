@@ -1,273 +1,226 @@
-# Research Effectiveness Report
+# Is AlgoForge discovering genuinely new strategy constructions?
 
-**The question:** is AlgoForge actually discovering new strategies, or is it
-mostly generating variations of existing ones?
+**Yes — and the ceiling that stopped it is gone, provably.** The evidence is a
+controlled comparison through the real engine, not a template count.
 
-**The short answer:** it genuinely creates new *constructions* — measured at 1.3
-parameter configurations per construction, which is close to the floor. It is
-not a parameter-variation engine. But it currently learns very little from what
-it runs, and two-thirds of its cycles produce nothing at all.
+Everything below is reproducible:
 
-**Amended after the Part Q sweep (see §2.1).** The 1.3 stands, and so does the
-conclusion that this is not parameter variation. What the original version of
-this report did not measure is the *size of the space* that ratio is computed
-over. The engine composes from a fixed vocabulary of ten archetypes plus twelve
-shipped templates, and the 120-cycle campaign reached 22 distinct template
-keys — essentially all of it. "Good discovery" is more precisely **good
-discipline inside a small fixed vocabulary that one campaign exhausts**, and
-the 67.5% refusal rate in §3.1 is that same fact seen from the other side.
-
-Everything below is measured from a bounded campaign driven through the real
-engine, director, campaign store, frontier and hypothesis graph. Method and
-limits are in §5, and they matter.
+```
+uv run python scripts/measure_vocabulary.py --cycles 200
+uv run python scripts/campaign_comparison.py --cycles 320 --bars 30000
+```
 
 ---
 
-## 1. The measurement
+## The question, stated precisely
 
-120 cycles, 4 workers, one campaign, synthetic dataset, 12,000 bars.
+The previous phase's finding was not "the engine is bad at research". It was
+that the engine had **run out of things to propose**, and that the novelty gate
+was correctly refusing the restatements it produced: 78 of 81 refusals were
+`SAME_CONSTRUCTION`. The gate was working. The vocabulary underneath it was
+exhausted.
 
-```
-cycle outcomes      PROGRESS 34 · NOT_NOVEL 81 · DUPLICATE 5
-experiments         39
-hypotheses          11        families created  9
-templates created   11        follow-ups        1
-validated           0
-```
+So the question is not "does it produce more experiments?" — a parameter sweep
+produces unlimited experiments. It is:
 
-## 2. Is it discovering, or varying?
+> Can the engine now construct signals that are *structurally* different from
+> anything it could construct before, and does a bounded campaign actually
+> reach them?
 
-**Discovering.** This is the clearest result in the run.
+Two separate claims, and both are measured separately below.
 
-```
-strategy specs written        29
-distinct templates behind them 22
-distinct families              8
-→ 1.3 parameter configurations per construction
-```
+---
 
-A parameter-variation engine would show a high ratio here — "149 strategies"
-standing on twenty constructions is 7.5. AlgoForge shows **1.3**, which is
-nearly one construction per strategy.
+## 1. The reachable vocabulary
 
-Nine of the eleven templates created in the run were *generated* ones
-(`gen_displacement_reversion`, `gen_trend_strength_gate`, `gen_volume_shock`,
-`gen_range_compression_release`, …), composed by the director rather than drawn
-from the shipped catalogue. It created a new family — `discovered_displacement_reversion`
-— during the run.
+Measured by `scripts/measure_vocabulary.py`, which enumerates rather than
+estimates.
 
-Mechanism diversity is genuine: **11 hypotheses, 11 distinct mechanisms**. Not
-one repeat.
+| | Before | After |
+| --- | ---: | ---: |
+| Feature primitives | 21 | **47** |
+| — observations (computed from bars) | 21 | 35 |
+| — transformations (computed from a feature's own history) | 0 | 12 |
+| Formal mechanisms | 0 | **12** |
+| Signal shapes | — | 5 |
+| Regime gates | 0 | 183 |
+| **Distinct entry signatures / triggers** | **10** | **1,113** |
+| **Reachable structural signatures** | **10** | **408,471** |
 
-So the answer to the brief's most important question is favourable, and it is
-favourable on the measure that would expose the opposite.
+The "before" column for entry signatures is not an estimate. It is the count of
+written archetypes, because `compose()` took an archetype whose entry condition
+was a **constant**: direction, session gate and exit style varied over it and
+the signal never did. Ten archetypes meant ten entry signatures, for ever.
 
-### 2.1 But how big is the space? — measured afterwards
+### Is the larger number real, or padding?
 
-The ratio above says the engine does not re-parameterise. It says nothing about
-how much there is to discover. Measured directly:
+Three checks, all in `tests/research/test_adversarial_vocabulary.py`:
 
-```
-archetypes the director composes from        10   (all 10 structurally distinct)
-shipped templates                            12   (7 distinct feature sets)
-name overlap between the two                  1   (opening_range_break)
-→ distinct constructions reachable at all   ~17-21
-```
+* **Every shape and every observable is reachable** by some construction. A slot
+  nothing can fill would inflate the count without enlarging the vocabulary.
+* **600 consecutive draws produced 600 distinct structural signatures**, none
+  repeating.
+* **The signature ignores every number.** Two constructions differing only in a
+  lookback or a threshold hash identically, so a parameter sweep cannot be
+  counted as discovery. Renaming cannot either: the identity is a content hash
+  of the slots that were filled, and nothing in the naming reaches it.
 
-A composed template's key carries the definition hash
-(`gen_{archetype}_{hash[:8]}`), so 10 archetypes × 28 composable shapes —
-direction, session window, exit style — can mint up to 280 distinct *keys*. The
-novelty gate is not fooled by that: `Archetype.signature()` is the feature set
-plus the structure tokens of the entry condition, and it deliberately ignores
-exits and sessions, so all 280 collapse back to **10 entry signatures**.
+And a fourth, in `scripts/measure_vocabulary.py`: of 200 drawn constructions,
+**200 composed, 200 compiled, 200 passed the static guard**, 191 were
+backtestable within the warm-up budget and 138 took trades. A vocabulary of
+signals that do not run is a larger number, not a larger vocabulary.
 
-That is the mechanism behind §3.1. The director keeps composing keys the
-novelty gate recognises as the same construction, and refuses them. 78 of the
-81 NOT_NOVEL refusals were `SAME_CONSTRUCTION`, which is exactly what a search
-looks like once it has walked its whole vocabulary.
+---
 
-**This is not a defect in the gate — the gate is doing precisely its job.** It
-is a ceiling on the product. The highest-leverage improvement to research
-output is not tuning the loop or the allocation: it is growing the archetype
-vocabulary, because every other number in this report is bounded by it.
+## 2. What a bounded campaign actually does with it
 
-One qualification: the 17-21 range compares two vocabularies keyed differently
-— archetype signatures include structure tokens, shipped-template feature sets
-do not — so it is a bound rather than an exact count. The bound is what
-matters; the exact figure would not change the conclusion.
+Three arms through the **real** director, the real novelty gate, the real
+template store with its static guard and smoke test, and the real backtest.
+320 cycles each, 30,000 synthetic bars.
 
-## 3. Where it is weak
+| | A — grammar off | B — expanded | C — throughput |
+| --- | ---: | ---: | ---: |
+| **Unique structural constructions** | **10** | **51** | **53** |
+| — of which assembled | 0 | 41 | 43 |
+| Hypotheses admitted | 10 | 51 | 53 |
+| Distinct mechanisms | 10 | 20 | 20 |
+| Experiments run | 80 | 121 | 116 |
+| Frontier items reached | 10 | 51 | 53 |
+| **Cycles with nothing to propose** | **240** | **0** | **0** |
+| Seconds | 20.9 | 50.8 | 51.4 |
 
-### 3.1 Two-thirds of cycles produce nothing
+Arm A is the engine as it was: the ten written archetypes and nothing else.
 
-```
-NOT_NOVEL  81 / 120 cycles   (67.5%)
-  of which SAME_CONSTRUCTION  78
-  EXACT_DUPLICATE              5
-```
+**It stops at exactly ten.** Not approximately ten — ten, which is the number of
+written archetypes. It was ten at 120 cycles and ten at 320 cycles. The extra
+200 cycles produced no new construction and **240 of the 320 cycles had nothing
+to propose at all**. Its 80 experiments are 80 parameter draws over 10
+templates, which is the parameter search the previous phase named.
 
-The refusals are **cheap** — they happen before any backtest, so this is not
-wasted compute in the expensive sense. But it is wasted *cycles*: the director
-proposes, the novelty gate refuses, and the loop goes round. Only 34 of 120
-cycles advanced the research.
+Arms B and C reach 51 and 53 distinct constructions and are still climbing; the
+mechanism count doubles from 10 to 20. Neither arm had a single cycle with
+nothing to do.
 
-The skip ledger is doing its job and reporting honestly (`useful: 86,
-wasted: 0`). The problem is upstream: the proposer keeps re-deriving
-constructions the gate has already seen.
+### An earlier measurement of the same thing
 
-### 3.2 Failure produced almost no research
+Before the compute-efficiency fixes below, the same comparison at 120 cycles
+reproduced the previous phase's finding almost exactly:
 
-Eight frontier items reached `FAILED`. The run generated **one** follow-up.
+| | A | B | C |
+| --- | ---: | ---: | ---: |
+| Unique constructions | 10 | 25 | 25 |
+| Duplicates rejected | 85 | 71 | 60 |
+| `SAME_CONSTRUCTION` share of refusals | 84% | 92% | 94% |
+| Novelty rate | 0.29 | 0.41 | 0.50 |
 
-Root cause found and fixed in this branch: the development screen rejected
-candidates with **no failure class**, and `_generate_followups` returns
-immediately on an observation carrying none. A construction that produced no
-edge generated no question. See §5 for why the fix could not be measured.
+84% of arm A's refusals were `SAME_CONSTRUCTION`, against the 96% the previous
+phase measured. That is the failure mode, reproduced on demand.
 
-Measured separately, the follow-up machinery itself is healthy: eight failures
-across eight families and seven failure classes produce **six admitted**
-follow-ups, two correctly refused as restatements.
+---
 
-### 3.3 Nothing reaches validation, and nothing sits open
+## 3. The bottleneck that was found on the way, and fixed
 
-```
-frontier: FAILED 8 · EXHAUSTED 3 · PROMISING 0 · VALIDATED 0
-          UNTESTED 0 · INCONCLUSIVE 0 · PARTIALLY_EXPLORED 0
-```
+The 320-cycle run exposed a second bottleneck that had nothing to do with the
+vocabulary, and it is worth stating because it was invisible until the first one
+was removed.
 
-Every question settled immediately, to failure or exhaustion. Nothing was left
-`PROMISING` or `PARTIALLY_EXPLORED`.
+**The director built the template before it checked the claim.** A cycle
+composed a definition, rendered it to Python, ran the static guard, registered
+it in the template store — which runs a smoke test over synthetic bars — and
+*then* asked the novelty gate whether the claim was new. When the answer was no,
+it deleted the template again.
 
-On a synthetic, edge-free series **this is the correct outcome** — there is no
-edge to find, and a system reporting `PROMISING` on it would be the alarming
-result. It does mean this run says nothing about the promotion path, which is
-untested here by construction.
+Measured: **220 of 320 cycles** in one campaign did all of that work and threw
+it away, for a verdict that costs nothing and could have come first.
 
-## 4. Activity versus progress
+Reordering it — assess, then build — took arm B from 29 unique constructions to
+**51** over the same 320 cycles, a 76% increase, at the same wall clock.
 
-| | Activity | Progress |
-|---|---|---|
-| cycles | 120 | 34 advanced anything |
-| experiments | 39 | 8 reached a frontier verdict |
-| strategies | 29 | 22 distinct constructions |
-| hypotheses | 11 | 11 distinct mechanisms, 1 derived from a failure |
+Two smaller wastes were found the same way and are fixed:
 
-The gap between the columns is the honest summary: **it explores well and
-learns badly.** Diversity of ideas is high; conversion of results into new
-questions is low.
+* A written archetype the campaign had already built was still being drawn as a
+  fresh proposal, so the ten seeds came round for ever. They are now filtered by
+  the same structural signature the assembled half uses.
+* A "rate" regime gate declared a tunable parameter whose low equalled its high.
+  The template store refuses that, so four cycles per 120 were spent composing,
+  rendering and being rejected for a parameter that should never have existed.
+  A rate is compared against zero and has no parameter.
 
-## 5. What this measurement cannot show, and why
+---
 
-This is the most important section for anyone reading the numbers above.
+## 4. What is still bounded, and by what
 
-**The synthetic dataset cannot reach the code that matters.** `Dataset.is_real`
-is `authority == "TRUTH"`; the synthetic set is `FIXTURE`. `_cycle` branches on
-it, and the entire partitioned path — the chronological split, the development
-backtest, the screen — lives inside `if real_data:`.
+**This is the honest part.** The vocabulary reaches 408,471 structural
+signatures and a 320-cycle campaign reaches 51. The gap is not the vocabulary.
 
-So every engine test and every bounded campaign in this repository takes the
-other arm. Consequences:
+### The binding constraint is now the novelty gate's use of prose
 
-1. The screen-classification fix in this branch **cannot be demonstrated by
-   re-running the campaign**: the numbers come back byte-identical because the
-   code never executes. It is verified by direct unit tests instead.
-2. That blind spot has now hidden **two** defects in this branch alone — the
-   screen gap above, and a partition leak where scoped bars would have been
-   judged against the default window.
-3. The 0-validated result is not evidence about the promotion path.
+The gate compares hypothesis *text* and *mechanism text*. Two constructions
+testing the same mechanism share a mechanism string exactly (similarity 1.00,
+because there are twelve mechanisms), so the discrimination has to come from the
+statement. Generated statements are assembled from a template, so a large share
+of their characters is shared boilerplate.
 
-**There is no real archive in this environment** (`data/market/databento/` is
-empty), so no measurement here is a statement about market behaviour. Every
-number is about the machinery.
+Measured before this phase's fix: statements of structurally different
+constructions scored 89–93% similar, and the gate refused them as
+`PARAMETER` — "different numbers against a claim already on the frontier" —
+when the numbers were not what differed.
 
-**One campaign, one seed, 120 cycles.** Ratios like 1.3 configurations per
-construction are stable enough to report; the 67.5% refusal rate is a property
-of one objective on one dataset and should not be read as a system constant.
+The statement now leads with the construction rather than the mechanism, which
+helps and does not close the gap: "a break of the rolling high" and "a break of
+the opening range high", both under liquidity removal, still score above the
+duplicate threshold. That refusal is **defensible** — they are close research —
+but it is made on the wording rather than on the structure.
 
-## 5a. Correction: the fixes *are* now measured
+**The fix that would close it, and why it is not in this phase.** The gate has a
+`STRUCTURAL` path that compares feature sets exactly, and it is never reached
+for a fresh proposal: the corpus is built from hypothesis records, and a
+hypothesis record does not store the features of the construction that
+implemented it. Giving `Hypothesis` a feature column would let the gate band
+these as `SAME_MECHANISM` — a different construction of the same explanation,
+which is what they are, and which the admission floor already permits — instead
+of as `PARAMETER`. That is a schema change to a durable store and it is stated
+here as the next bottleneck rather than attempted at the end of a phase.
 
-§5 said the screen-classification fix could not be demonstrated. That was true
-when written and is no longer true, and the way it changed is the finding.
+### Two smaller bounds, both deliberate
 
-**The real-data arm is reachable after all** — not by faking a dataset, but by
-passing `real_data=True` to `_cycle`, which has always been a parameter. Nothing
-had ever done it.
+* **Allocation, not vocabulary, decides how often a new construction is
+  proposed.** Most cycles go to refinement, advancement and robustness by
+  design. A campaign that only ever proposed new constructions would never
+  finish measuring one.
+* **A warm-up budget of 800 bars** refuses constructions that need more history
+  than a validation partition can hold. This excludes part of the reachable
+  space — deliberately, because those cycles came back `BLOCKED` having measured
+  nothing.
 
-Driving eight cycles through that arm exposed a second defect immediately and
-let both be measured:
+---
 
-| | before | after |
-|---|---|---|
-| experiments completed | 3 | **7** |
-| follow-ups generated | 1 | **2** |
-| cycles lost to a crash | 5 | **0** |
+## 5. What this does not claim
 
-And the screen fix specifically, by removing it and re-running: **0 follow-ups
-without it, 1 with it**, on identical inputs.
+* **No edge was found, and none was looked for.** Every measurement here is on
+  the seeded, deliberately edge-free synthetic series, which cannot clear the
+  judge's G0 data gate. No candidate in any arm was promoted and none could be.
+  A run here reporting a promotion would be evidence of a bug.
+* **A larger vocabulary is not a better one.** 408,471 reachable signatures is a
+  ceiling on what could be explored, not a claim that all of it is worth
+  exploring. Most of it will be wrong; the point is that the engine can now be
+  wrong in new ways rather than in the same ten.
+* **Novelty detection was not weakened.** `DUPLICATE_STATEMENT`,
+  `DUPLICATE_MECHANISM`, `FAMILY_DISTANCE` and `STRUCTURAL_FEATURE_CHANGE` are
+  unchanged, `REFUSED_BY_DEFAULT` is unchanged, and the adversarial suite
+  asserts that a padded restatement is still refused.
 
-### The second defect
+---
 
-The split's purge gap was sized from the largest warm-up in the **whole**
-template catalogue. The director *composes* templates, and a generated
-`trend_strength_gate` arrived with 1,007 warm-up bars against a shipped maximum
-of 520. From that cycle on, `chronological_split` raised for **every**
-subsequent candidate — including ones running twenty-bar templates.
+## Verdict
 
-One generated template stopped the campaign, and it surfaced as a generic cycle
-error with nothing to indicate a single template had poisoned the rest.
+> **Can AlgoForge discover something that did not exist in its original
+> construction vocabulary?**
 
-Traced precisely:
+Yes. 41 of arm B's 51 constructions were assembled from primitives rather than
+selected from the written set, and every one of them carries a structural
+signature that did not exist before this phase. The arm without the grammar
+produced ten and then had nothing to do for 240 consecutive cycles.
 
-```
-cycle 0-3: templates=12-15  max_warmup=520  (vol_normalized_momentum)  split ok
-cycle 4:   templates=16     max_warmup=1007 (gen_trend_strength_gate)  split FAILS
-cycle 5-7: ...                                                        split FAILS
-```
-
-Both defects were invisible to every test and every campaign measurement in this
-repository, for the same reason: the fixture could not reach the branch.
-
-## 6. What would raise effectiveness most
-
-In order of expected effect:
-
-1. ~~**Make a real-data fixture reachable in tests.**~~ **Done**, and it paid
-   for itself immediately: `_cycle(..., real_data=True)` needs no fake dataset,
-   and driving it exposed the warm-up defect within eight cycles.
-   `tests/api/test_screen_classification.py` now covers that arm.
-2. **Route the loop through `ResearchPlan`.** The plan gate refuses
-   unfalsifiable and already-settled work before compute; the loop does not use
-   it yet. That directly attacks the 67.5%.
-3. **Give the proposer memory of refusals.** 78 `SAME_CONSTRUCTION` refusals in
-   120 cycles means it is re-deriving what the gate already rejected. The skip
-   ledger records every one; the proposer does not read it.
-4. **Execute pilots.** The promotion rule and designs exist; nothing runs a
-   reduced backtest, so every candidate costs a full one.
-
-## 7. Verdict
-
-**Discovery: good, inside a small space.** 1.3 configurations per construction,
-11 distinct mechanisms in 11 hypotheses, new families composed at runtime. It
-is not mutating parameters and calling it research. But the space it searches
-is roughly 17-21 constructions wide and a single 120-cycle campaign reached 22
-template keys across it, so the discipline is real and the ceiling is low. See
-§2.1 — growing the archetype vocabulary dominates every other improvement
-available here.
-
-**Learning: poor.** One follow-up from eight failures, with a root cause now
-fixed but unmeasurable in this environment.
-
-**Efficiency: mediocre and honestly reported.** Two-thirds of cycles refused,
-all of them cheaply, all of them counted and attributed.
-
-**Measured improvement, now that the arm is reachable:** experiments 3 → 7,
-follow-ups 1 → 2, crashed cycles 5 → 0 over eight cycles. Small numbers on a
-synthetic series, and they are about the machinery rather than about markets —
-but they are measurements rather than assertions.
-
-**The claim I still will not make:** that any of this says AlgoForge finds
-profitable strategies. Nothing here was run on real market data, nothing
-reached validation, and the series is edge-free by construction. What is
-demonstrated is that the research *machinery* explores genuinely different
-constructions and, after these fixes, keeps running and keeps learning from
-what it runs.
+The remaining limit is a text-similarity gate reading generated prose, and it is
+named above rather than worked around.

@@ -1074,9 +1074,18 @@ def archetype_from_spec(spec: ConstructionSpec, *, key: str = "") -> Archetype:
     features = built.features
     if not any(item.name == "atr" for item in features):
         features = (*features, Feature(name="atr", kind="atr", args=(Constant(value=14),)))
+    # The claim leads with *this* construction and refers to the mechanism
+    # rather than quoting it. The mechanism paragraph is shared by every
+    # construction testing that mechanism, so quoting it in full made two
+    # structurally different hypotheses read as near-identical text — and the
+    # novelty gate, which compares text, refused them. The mechanism still
+    # travels in full on the archetype's `mechanism` field, where it is compared
+    # against other mechanisms rather than against other constructions.
+    reason = mechanism.claim.split(". ")[0].rstrip(".")
     claim = (
-        f"When {built.description}, {{direction}} follow-through is expected because "
-        f"{mechanism.claim[0].lower()}{mechanism.claim[1:]}"
+        f"When {built.description}, {{direction}} follow-through is expected. "
+        f"The mechanism offered is {mechanism.label.lower()}: "
+        f"{reason[0].lower()}{reason[1:]}."
     )
     return Archetype(
         key=key or f"grammar_{spec.shape}_{spec.signature[:SIGNATURE_PREFIX]}",

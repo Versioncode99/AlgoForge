@@ -859,13 +859,36 @@ def _choose_mechanism(spec: ConstructionSpec, categories: set[str]) -> Mechanism
 
 
 def _describe(spec: ConstructionSpec, shape: Shape, observable: Observable) -> str:
-    primary = observable.label
+    """The construction in a sentence, specific enough to tell two apart.
+
+    This matters more than it looks. The novelty gate compares hypothesis *text*,
+    and a generated hypothesis whose wording is mostly a shared mechanism
+    paragraph makes two structurally different constructions read as 90%
+    identical — so the gate refuses them, correctly by its own rule and wrongly
+    in fact. Measured before this was fixed: 220 of 232 refusals in a 320-cycle
+    campaign were `SAME_CONSTRUCTION` against a claim whose statement similarity
+    was 89-93% and whose mechanism similarity was 100%, between constructions
+    reading different observables through different shapes.
+
+    The fix is not a looser gate. It is a sentence that says what the strategy
+    does, so that two different strategies produce two different sentences.
+    """
+    primary = observable.label.lower()
     if spec.transform:
-        primary = f"the {primitive(spec.transform).label.lower()} of {observable.label}"
-    partner = OBSERVABLES[spec.partner].label if spec.partner else ""
-    return shape.phrasing.format(
+        primary = f"the {primitive(spec.transform).label.lower()} of {observable.label.lower()}"
+    partner = OBSERVABLES[spec.partner].label.lower() if spec.partner else ""
+    body = shape.phrasing.format(
         primary=primary, partner=partner, threshold="its configured level"
     )
+    if spec.gate_observable:
+        gate = OBSERVABLES[spec.gate_observable].label.lower()
+        if spec.gate_transform:
+            gate = f"the {primitive(spec.gate_transform).label.lower()} of {gate}"
+        if spec.gate_partner:
+            gate = f"{gate} against {OBSERVABLES[spec.gate_partner].label.lower()}"
+        side = "high" if spec.gate_side == "gt" else "low"
+        body += f", and only while {gate} sits in the {side} part of its own range"
+    return body
 
 
 # ── one builder per shape ────────────────────────────────────────────────────

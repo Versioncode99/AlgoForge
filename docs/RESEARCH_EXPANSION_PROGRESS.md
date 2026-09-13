@@ -312,9 +312,118 @@ strongly positive; the 7% is the fingerprint, paid once.
 
 ---
 
+## Phase 5 — external research becomes a research input (complete)
+
+New module `packages/forge/research/leads.py`. Retrieval already worked and
+nothing read it: sources were stored with their provenance and attached to
+frontier items as *references*, while the extracted claims went nowhere.
+
+A lead is produced by **matching**, not generating: the claim's own words are
+scored against the mechanism vocabulary and the observable vocabulary, both
+closed sets, and a claim matching nothing produces nothing with the source
+recorded as retrieved-and-unused. `ResearchDirector._synthesise` turns each lead
+into a frontier question that cites the claim it came from, admitted through the
+same novelty gate as any other question.
+
+External research is now **on by default** (`ResearchLoopSettings`), with source
+categories, freshness and depth configurable.
+
+Defect found and fixed while building it: phrase matching was on raw substrings,
+so `"low"` matched inside `"slower"` and a paper about gradual information
+diffusion cited itself for a rolling-low breakout question. Matching is on word
+boundaries, and observables are ranked by how specific the matched phrase was —
+`"volume weighted average price"` now outranks `"volume"` in a VWAP abstract.
+
+## Phase 6 — model routing and budget (complete)
+
+New module `apps/api/forge_api/model_routing.py`: **21 roles** across the
+workflow half and the research half, three routing modes, per-role fallback and
+critic, and a `Decision` on every selection carrying which model, where the
+choice came from, and whether a substitution happened.
+
+Budget enforcement is a switch; system safety limits are served as data beside
+it. Defects 1–4 from the audit are all fixed:
+
+1. The dead base-URL field is gone; the endpoint is shown as a fact.
+2. The OmniRoute warning is gone.
+3. Role vocabularies meet: `AGENT_ROLE_KEYS` maps every `AgentRole`, and a test
+   asserts the mapping is total in both directions.
+4. `BudgetSettings.enforced`, with `limit()` returning 0 for every dimension
+   while it is off.
+
+**A role was added and removed.** `AgentRole.SYNTHESIS` came out with the same
+bucket preference as `DISCOVERY`, which the engine's own
+`test_no_two_roles_prefer_exactly_the_same_work` refused as one role with two
+names — correctly. The capability is real, deterministic and makes no model
+call, so a role for it would be a settings entry that changes nothing.
+
+9. **The test suite was writing the developer's own settings file.**
+   `create_app` resolves `config/settings.json` from the repository rather than
+   from the isolated workspace, so every test that patched `/settings`
+   overwrote the real one, and every test after the first started from whatever
+   the last had set. Status: **fixed** — `tests/conftest.py` now snapshots,
+   clears and restores it, the same guard the storage pointer already had.
+
+## Phase 7 — campaign measurement and the second bottleneck (complete)
+
+`scripts/campaign_comparison.py` runs three bounded campaigns through the real
+engine and compares them. The first 120-cycle run reproduced the previous
+phase's finding exactly — the baseline arm reached 10 unique constructions and
+84% of its refusals were `SAME_CONSTRUCTION` — and then exposed defects the
+vocabulary work had hidden:
+
+10. **A rate gate declared a parameter nobody can sweep.** `low == high == 0`,
+    which the template store refuses; four cycles per 120 were spent composing,
+    rendering and being rejected. Status: **fixed** — a rate is compared against
+    a constant zero and has no parameter.
+11. **Spent written archetypes were re-proposed for ever.** After the ten seeds
+    were built, `_pick_archetype` kept drawing them as fresh proposals and the
+    gate kept refusing them. Status: **fixed** — filtered by the same structural
+    signature the assembled half uses.
+12. **The director built the template before it checked the claim.** 220 of 320
+    cycles composed a definition, rendered it to Python, ran the static guard,
+    registered it (which runs a smoke test) and then asked the novelty gate — and
+    deleted it again when the answer was no. Status: **fixed** — assess, then
+    build. Arm B went from 29 unique constructions to **51** over the same 320
+    cycles at the same wall clock.
+13. **The baseline arm was not a baseline.** With the archetype filter in place,
+    a share of zero still fell through to assembly. Status: **fixed** — a share
+    of zero means the grammar is off, which is what a baseline needs.
+
+### The measurement, 320 cycles per arm
+
+| | grammar off | expanded | throughput |
+| --- | ---: | ---: | ---: |
+| Unique structural constructions | **10** | **51** | **53** |
+| Distinct mechanisms | 10 | 20 | 20 |
+| Experiments | 80 | 121 | 116 |
+| Cycles with nothing to propose | **240** | 0 | 0 |
+
+## Phase 8 — adversarial and boundary testing (complete)
+
+`tests/research/test_adversarial_vocabulary.py` attacks the vocabulary from the
+other side and passes when each attack fails. `tests/research/test_expansion
+_boundaries.py` asserts structurally that no new module reaches a layer that
+decides, the network, the filesystem or a subprocess; that the lead pipeline
+cannot create a family or reach the promotion queue; that every assembled
+construction passes the same static guard; and that no setting is an input to
+the permission function.
+
+---
+
+## Verified state
+
+* **2,922 backend tests passing** (2,719 at the start; 203 added).
+* **136 frontend tests passing** (121 at the start; 15 added).
+* `ruff check` clean; `mypy --strict` clean across 194 source files.
+* TypeScript clean; production build passes.
+
 ## Open work
 
-External research defaults and pipeline, agent roles and per-role model
-configuration, the budget enforcement switch, settings and frontier UX, the
-bounded campaign comparison, adversarial testing, security regression, and the
-reports.
+The remaining bottleneck is named in
+[`RESEARCH_EFFECTIVENESS_REPORT.md`](RESEARCH_EFFECTIVENESS_REPORT.md): the
+novelty gate compares hypothesis *prose*, and its `STRUCTURAL` path — which
+compares feature sets exactly — is never reached for a fresh proposal because a
+`Hypothesis` record does not store the features of the construction that
+implemented it. Adding that column is a schema change to a durable store and is
+the next thing worth doing.
