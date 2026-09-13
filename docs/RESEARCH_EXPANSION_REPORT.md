@@ -163,6 +163,34 @@ for stated reasons: a *campaign allocator* would duplicate
 *supervisor* would duplicate the director, which cannot be allowed to be talked
 out of a gate.
 
+## 8a. Agent effectiveness
+
+`packages/forge/research/effectiveness.py` joins the two halves that could not
+answer the question separately. The registry counts experiments, findings and
+errors; the skip ledger records every refusal with the agent that made it. An
+agent that proposed forty things and had thirty-eight refused has an experiment
+count that looks like work.
+
+Three figures, deliberately different from each other:
+
+* **Acceptance** — the share of proposals that became an experiment. The
+  cheapest signal that a role is proposing into an exhausted corner.
+* **Efficiency** — experiments per unit of compute. A fast agent producing
+  refusals is not efficient however fast it is. Reported as *not measured* when
+  compute is unmetered, rather than as 0.0, which reads as inefficient.
+* **Effectiveness** — findings and experiments that reached a verdict. The one
+  that matters and the one with the weakest instrument, so it is reported as a
+  count of durable outcomes rather than as a score.
+
+Three restraints, each asserted by a test. A role that has proposed nothing does
+not score a perfect acceptance rate. Cycles with *nothing to propose* are not
+counted against the agent, because an empty frontier is a fact about the
+campaign. And nothing here allocates compute or retires an agent: a measurement
+that changed what it measured would be unreadable, and an agent that could be
+retired for a low score would make "propose nothing" the winning strategy.
+
+Served on the control-centre payload and rendered in the Research Control Center.
+
 ## 9. Model routing
 
 `apps/api/forge_api/model_routing.py`. The old table covered nine workflow roles
@@ -263,6 +291,19 @@ mechanism word. Each attack fails. 600 consecutive draws produced 600 distinct
 signatures, and the signature deliberately excludes every number so a parameter
 sweep cannot be counted as discovery.
 
+## 15a. Temporal reservoir — verified, not rebuilt
+
+`packages/forge/research/timescope.py` already holds the rule this phase would
+otherwise have had to add: **a window is part of the claim**. It supports recent,
+fixed range, full history, rolling, anchored, cross-regime, regime-selected and
+event-selected windows; the scope is chosen before execution with its own
+rationale, content-hashed into the preregistration, and re-derived by G1 at judge
+time so a window that moved after the result was seen fails `CLAIM_MOVED`.
+
+It is consumed rather than shelved: `MarketService` turns a scope into bars,
+`plan.py` gates a plan carrying one, the action registry exposes it, and four
+test files cover it. Nothing in this phase changed it, and nothing needed to.
+
 ## 16. Frontier movement
 
 The expanded arm reached 51 frontier items (36 `FAILED`, 15 `EXHAUSTED`) against
@@ -308,8 +349,8 @@ repository rather than from the isolated workspace.
 
 ## 19. Test and CI results
 
-* **Backend: 2,922 tests passing** (2,719 at the start of the phase; 203 added).
-* **Frontend: 136 tests passing** (121 at the start; 15 added).
+* **Backend: 2,939 tests passing** (2,719 at the start of the phase; 220 added).
+* **Frontend: 141 tests passing** (121 at the start; 20 added).
 * `ruff check` clean.
 * `mypy --strict` clean across 194 source files.
 * TypeScript clean; production build passes.
@@ -318,8 +359,10 @@ repository rather than from the isolated workspace.
   `tests/research/test_adversarial_vocabulary.py`,
   `tests/research/test_expansion_boundaries.py`,
   `tests/data/test_validation_identity.py`,
-  `tests/api/test_model_routing.py`, `tests/api/test_settings_surface.py`,
-  `apps/web/src/views/model-routing.test.tsx`.
+  `tests/research/test_effectiveness.py`, `tests/api/test_model_routing.py`,
+  `tests/api/test_settings_surface.py`,
+  `apps/web/src/views/model-routing.test.tsx`,
+  `apps/web/src/views/agent-effectiveness.test.tsx`.
 
 ## 20. Remaining limitations
 

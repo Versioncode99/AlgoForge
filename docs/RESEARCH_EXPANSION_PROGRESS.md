@@ -409,12 +409,32 @@ cannot create a family or reach the promotion queue; that every assembled
 construction passes the same static guard; and that no setting is an input to
 the permission function.
 
+## Phase 9 — agent effectiveness, and what was verified rather than rebuilt (complete)
+
+`packages/forge/research/effectiveness.py` joins the agent registry and the skip
+ledger. Neither alone can distinguish an agent doing research from one producing
+activity: the registry counts experiments and the ledger counts refusals, and an
+agent that proposed forty things and had thirty-eight refused reports two
+experiments.
+
+Investigated and found **correct, not defective**: a 120-cycle campaign produced
+one follow-up from 61 failures. Tracing `derive()` showed 46 of the 61 were the
+`DATA` failure class — the synthetic dataset failing G0, about which there is
+nothing to learn — and the 15 `NO_TRADES` follow-ups all say the same thing and
+correctly collapse to one. The construction that produced no trades is recorded
+on its frontier item either way.
+
+Verified and unchanged: `forge.research.timescope` already enforces that a
+window is part of the claim, supports every selection method this phase's brief
+lists, and is consumed by `MarketService`, `plan.py` and the action registry with
+four test files behind it.
+
 ---
 
 ## Verified state
 
-* **2,922 backend tests passing** (2,719 at the start; 203 added).
-* **136 frontend tests passing** (121 at the start; 15 added).
+* **2,939 backend tests passing** (2,719 at the start; 220 added).
+* **141 frontend tests passing** (121 at the start; 20 added).
 * `ruff check` clean; `mypy --strict` clean across 194 source files.
 * TypeScript clean; production build passes.
 

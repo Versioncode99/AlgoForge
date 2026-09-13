@@ -28,6 +28,7 @@ from forge.research.agents import (
     capacity_for,
 )
 from forge.research.campaign import CampaignError, CampaignStore
+from forge.research.effectiveness import score as score_agents
 from forge.research.frontier import FrontierState, ResearchFrontier
 from forge.research.grammar import vocabulary_summary
 from forge.research.hypotheses import HypothesisError, HypothesisGraph
@@ -457,6 +458,15 @@ def build_campaign_router(
                 "allocation": service.orchestrator.snapshot(),
                 "agents": service.agents.counts(),
                 "skips": service.skips.counts(),
+                # The registry counts experiments and the skip ledger counts
+                # refusals, and neither alone can tell the difference between an
+                # agent doing research and one producing activity. Joined here
+                # rather than in the interface, so the two halves cannot be
+                # rendered from different reads of different stores.
+                "effectiveness": score_agents(
+                    [agent.as_dict() for agent in service.agents.list()],
+                    service.skips.list(limit=4000),
+                ).as_dict(),
                 "validation": {
                     "attempts": attempts,
                     "passed": outcomes.get("PASS", 0),

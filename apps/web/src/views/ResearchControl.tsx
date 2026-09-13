@@ -11,6 +11,7 @@ import {
   type Campaign, type CampaignRuntime, type ResearchAgent,
 } from '../research'
 import type { EngineStatus } from '../types'
+import { AgentEffectiveness } from './AgentEffectiveness'
 import { VocabularyPanel } from './Vocabulary'
 
 /* The Research Control Center.
@@ -130,6 +131,8 @@ export function ResearchControlView() {
         * proposals refused is a saturated vocabulary or a disciplined gate, and
         * only this panel separates the two. */}
       <VocabularyPanel />
+
+      <AgentEffectiveness data={data?.effectiveness} />
 
       {engine.data?.runtime && !engine.data.runtime.working
         && engine.data.runtime.state !== 'STOPPED' && (
