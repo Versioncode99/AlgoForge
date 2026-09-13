@@ -17,7 +17,20 @@
  */
 
 const { contextBridge, ipcRenderer } = require('electron')
-const { VISIBILITY_CHANNEL } = require('./ipc-contract')
+
+/**
+ * The visibility channel's name, written out rather than imported.
+ *
+ * This preload runs with `sandbox: true`, where `require` resolves only
+ * `electron` and a few polyfilled builtins. Requiring a local module throws,
+ * and because that happens before `exposeInMainWorld`, the failure is not a
+ * missing constant -- it is the whole bridge silently absent, so every window
+ * verb stops working and the interface decides it is running in a browser.
+ *
+ * `ipc-contract.js` owns the name; `ipc-contract.test.js` asserts this copy
+ * still matches it, so the two cannot drift apart unnoticed.
+ */
+const VISIBILITY_CHANNEL = 'workspace:visibility'
 
 const call = (channel, payload) => ipcRenderer.invoke(channel, payload ?? {})
 

@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { CHANNEL_NAMES, validate } from './ipc-contract.js'
+import { CHANNEL_NAMES, VISIBILITY_CHANNEL, validate } from './ipc-contract.js'
 
 /* The boundary between a renderer and the main process.
  *
@@ -99,5 +102,31 @@ describe('payloads', () => {
     expect(validate('workspace:open', 'ws_a').ok).toBe(false)
     expect(validate('workspace:open', ['ws_a']).ok).toBe(false)
     expect(validate('workspace:open', 7).ok).toBe(false)
+  })
+})
+
+describe('the preload under a sandbox', () => {
+  /* `sandbox: true` preloads may require only `electron` and a few polyfilled
+   * builtins. A local require throws *before* exposeInMainWorld runs, so the
+   * symptom is not a missing constant -- it is the whole bridge absent, every
+   * window verb dead, and the interface concluding it is in a browser.
+   *
+   * This shipped once. The unit tests all passed, because none of them runs a
+   * real sandboxed preload; it took launching Electron to see it. These two
+   * assertions are cheap and would have caught it in milliseconds. */
+
+  // Read as text rather than imported: importing it would run it, and a
+  // preload outside Electron has no contextBridge to talk to.
+  const here = dirname(fileURLToPath(import.meta.url))
+  const preload = readFileSync(join(here, 'preload.js'), 'utf8')
+
+  it('requires nothing but electron', () => {
+    const required = [...preload.matchAll(/require\(['"]([^'"]+)['"]\)/g)].map((m) => m[1])
+    expect(required).toEqual(['electron'])
+  })
+
+  it('its copy of the visibility channel still matches the contract', () => {
+    const declared = preload.match(/const VISIBILITY_CHANNEL = '([^']+)'/)
+    expect(declared?.[1]).toBe(VISIBILITY_CHANNEL)
   })
 })

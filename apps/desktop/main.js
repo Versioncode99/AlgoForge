@@ -139,6 +139,15 @@ function rememberSession() {
 }
 
 /** Flush immediately. Called on the way out, where a debounce would lose it. */
+/* Is the whole application going away, as opposed to one window being closed?
+ *
+ * The distinction decides what "restore my last session" means. A window the
+ * operator closed is one they are finished with and must not come back. Every
+ * window open when the app quit is the arrangement they left, and all of it
+ * should. Without the flag both look identical by the time the snapshot is
+ * taken, and the arrangement is lost. */
+let quitting = false
+
 function flushSession() {
   if (sessionTimer) {
     clearTimeout(sessionTimer)
@@ -318,7 +327,12 @@ function createWorkspaceWindow(workspaceId, bounds = null) {
   // disappearing and the operator sees a flash of a workspace and then nothing.
   window.on('close', () => {
     windows.closing(window.id)
-    flushSession()
+    // While quitting, the arrangement was already captured in `before-quit`,
+    // before anything was marked closing. Flushing again here would overwrite
+    // it with a snapshot that omits every window -- which is exactly what used
+    // to happen, so a normal quit always saved an empty session and restore
+    // could only ever work after a crash.
+    if (!quitting) flushSession()
   })
   window.on('closed', () => {
     // Listeners go with the window. Left attached they would fire against a
@@ -447,7 +461,7 @@ async function createWindow() {
   mainWindow.on('resize', recordMain)
   mainWindow.on('close', () => {
     windows.closing(mainWindow.id)
-    flushSession()
+    if (!quitting) flushSession()
   })
   mainWindow.on('closed', () => {
     mainWindow.removeAllListeners('move')
@@ -498,10 +512,16 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.on('window-all-closed', () => {
-    flushSession()
+    if (!quitting) flushSession()
     stopApi()
     app.quit()
   })
-  app.on('before-quit', stopApi)
+  app.on('before-quit', () => {
+    // Order matters: capture the arrangement while every window still counts as
+    // open, then let the close handlers run.
+    quitting = true
+    flushSession()
+    stopApi()
+  })
   process.on('exit', stopApi)
 }
