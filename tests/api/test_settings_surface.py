@@ -92,15 +92,10 @@ def test_the_older_flat_patch_still_works_and_lands_in_both_places(client) -> No
     assert after["ai"]["model_routing"]["roles"]["chat"]["model"] == model
 
 
-def test_a_fallback_and_a_critic_are_stored_per_role(client) -> None:
+def test_a_fallback_is_stored_per_role(client) -> None:
     models = [row["id"] for row in _settings(client)["models"]]
-    after = _patch(
-        client,
-        {"role_routing": {"agent_regime": {"fallback": models[1], "critic": models[0]}}},
-    )
-    entry = after["ai"]["model_routing"]["roles"]["agent_regime"]
-    assert entry["fallback"] == models[1]
-    assert entry["critic"] == models[0]
+    after = _patch(client, {"role_routing": {"agent_regime": {"fallback": models[1]}}})
+    assert after["ai"]["model_routing"]["roles"]["agent_regime"]["fallback"] == models[1]
 
 
 def test_the_routing_mode_is_stored(client) -> None:

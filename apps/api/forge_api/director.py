@@ -327,6 +327,7 @@ class ResearchDirector:
         log: Any = None,
         library: Any = None,
         transport: Any = None,
+        research_policy: Any = None,
     ) -> None:
         self.campaigns = campaigns
         self.frontier = frontier
@@ -337,7 +338,16 @@ class ResearchDirector:
         self.families = families
         self.templates = templates
         self.log = log
+        # How deep to search and what to prefer. A callable rather than a
+        # captured value, because an operator changing it in settings has to
+        # change the *next* retrieval and not the next restart. `None` is the
+        # shipped default, which is what a caller that does not care gets.
+        self.research_policy = research_policy
         self.library = library
+        # How deep to search and what to prefer, read at call time rather than
+        # captured: an operator changing it in settings must change the next
+        # retrieval, not the next restart. `None` means the shipped defaults,
+        # which is what a test that does not care about it gets.
         # Injected in tests so literature retrieval can be exercised without a
         # network. Production leaves it None and httpx uses its own transport.
         self.transport = transport
@@ -1435,24 +1445,6 @@ class ResearchDirector:
         )
         return None
 
-    def _withdraw_template(self, template_key: str) -> None:
-        """Remove a generated template that no admitted hypothesis needs.
-
-        Reverses `_register_template` exactly: out of the shared catalogue, off
-        disk, and out of the attribution record and the campaign's count. A
-        template left behind here would be reachable by the parameter-refinement
-        bucket forever, which would quietly turn a refused duplicate into a
-        thing the engine keeps testing.
-        """
-        TEMPLATES.pop(template_key, None)
-        with self._lock:
-            self._generated.pop(template_key, None)
-        with contextlib.suppress(KeyError):
-            self.templates.delete(template_key)
-        serving = self._serving_id()
-        if serving:
-            self.campaigns.record(serving, templates_created=-1)
-
     def _admit_blocked(
         self, campaign: Campaign, archetype: Archetype, missing: Sequence[str], worker: int
     ) -> None:
@@ -1482,6 +1474,24 @@ class ResearchDirector:
             worker=worker,
         )
 
+    def _retrieval_policy(self) -> tuple[int, str, tuple[str, ...]]:
+        """How many results to keep, what to prefer, and which indexes to search.
+
+        Read at call time from whatever the caller injected. A setting that is
+        stored, shown on a screen and never read is a control that does nothing,
+        which is the defect this phase spent most of its time removing.
+        """
+        default = (LITERATURE_RESULTS, "recent", ())
+        if self.research_policy is None:
+            return default
+        try:
+            policy = self.research_policy()
+        except Exception:
+            return default
+        depth = int(policy.get("results", LITERATURE_RESULTS) or LITERATURE_RESULTS)
+        categories = tuple(str(c) for c in policy.get("categories", ()) or ())
+        return max(1, min(10, depth)), str(policy.get("freshness") or "recent"), categories
+
     def _maybe_retrieve(self, campaign: Campaign, hint: str, worker: int) -> tuple[str, ...]:
         """Search the literature, when the campaign allows it.
 
@@ -1498,7 +1508,14 @@ class ResearchDirector:
             topic = state.topics[state.topic_index % len(state.topics)]
             state.topic_index += 1
 
-        report = retrieve(topic, limit=LITERATURE_RESULTS, transport=self.transport)
+        depth, freshness, categories = self._retrieval_policy()
+        report = retrieve(
+            topic,
+            limit=depth,
+            transport=self.transport,
+            categories=categories,
+            freshness=freshness,
+        )
         stored = self.sources.record(campaign.campaign_id, report)
         self._event(
             EventKind.LITERATURE_SEARCHED,

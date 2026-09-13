@@ -123,9 +123,20 @@ it searches two fixed public indexes (arXiv q-fin, Crossref), follows no
 redirect, caps the response size and the timeout, and records a failure as a
 failure. There is no code path that invents a paper.
 
-The operator can choose source categories, freshness and depth; choosing *no*
+The operator can choose source categories, freshness and depth, and each one
+reaches the retrieval rather than only the screen. **Depth** sets how many
+results a query asks for (3 / 6 / 10). **Categories** select which indexes are
+asked — `CATEGORY_INDEXES` maps preprints to arXiv and journals to Crossref, so
+"preprints only" does not quietly query both. **Freshness** reweights by
+publication year rather than filtering it, because a hard year cut-off on a
+narrow query returns nothing and reads as "retrieval failed". Choosing *no*
 source is kept as the deliberate instruction it is rather than read as "search
 everything".
+
+`tests/research/test_retrieval_policy.py` asserts this against a recording
+transport: it checks which hosts were actually contacted for each category
+choice, that the category map names only indexes that exist, and that freshness
+changes the ordering without dropping older work.
 
 ## 7. From a claim to a question
 
@@ -196,8 +207,8 @@ Served on the control-centre payload and rendered in the Research Control Center
 `apps/api/forge_api/model_routing.py`. The old table covered nine workflow roles
 while the engine ran ten research agents of its own, so choosing "a model per
 role" chose the model for none of the research. It now covers **21 roles across
-both halves**, each with a model, a fallback, an optional critic and — where the
-system can run without it — an enable switch.
+both halves**, each with a model, a fallback and — where the system can run
+without it — an enable switch.
 
 Three modes. **Manual** uses the assigned model and nothing else, because a
 substitution contaminates a comparison between two models. **Hybrid** falls
@@ -221,8 +232,20 @@ that an assignment reaches the store and survives a read, that an unknown model
 or role is refused with its name, and that the endpoint no longer takes a value
 for the base URL at all.
 
-Progressive disclosure: fallback, critic and enable are behind one control, and
-the research agents can be hidden when only the workflow matters.
+Progressive disclosure: fallback and enable are behind one control, and the
+research agents can be hidden when only the workflow matters.
+
+A fourth control was built here and then removed: a per-role **critic** model.
+It was stored, typed and rendered as a dropdown, and no code path ran a second
+opinion through it. Two arguments decided it. The first is this phase's own
+standard — a setting must affect behaviour, which is why the dead base-URL field
+went. The second is that the capability already exists one level up:
+`agent_reviewer` is a first-class role that "critiques lineage and evidence
+quality rather than results", with its own model assignment, its own reasoning
+demand tier and its own enable switch. A per-role critic field would have been a
+second mechanism for a capability the architecture already carries, which is the
+parallel system this phase's brief says to prove necessary before building. It
+was not necessary, so the control is gone rather than half-wired.
 
 ## 11. Budget behaviour
 
@@ -383,8 +406,10 @@ Stated rather than worked around.
    generated strategy modules hold module-level state, so two concurrent
    backtests of one template would share it. Fixing it means changing the module
    protocol every hand-written template also implements.
-5. **The critic model is configurable and not yet consumed.** The field is stored
-   and surfaced; no role currently runs a second opinion through it.
+5. **A second opinion runs only as a role, not as a per-call critic.**
+   `agent_reviewer` critiques lineage and evidence quality on its own cycle;
+   nothing reviews another model's answer inside the same call. The per-role
+   critic control built for that was removed rather than left inert (§10).
 6. **Nothing here was measured on real market data.** Every campaign number is
    from the seeded, deliberately edge-free synthetic series, which cannot clear
    G0. No candidate was promoted in any arm and none could be.

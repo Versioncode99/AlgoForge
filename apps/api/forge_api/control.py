@@ -93,6 +93,7 @@ from forge_api.research_lab import ArtifactStore, LabError, ResearchLab
 from forge_api.settings_store import (
     ACCENTS,
     DENSITIES,
+    DEPTH_RESULTS,
     DEPTHS,
     FRESHNESS,
     KNOWN_MODELS,
@@ -108,6 +109,21 @@ from forge_api.settings_store import (
     Settings,
     SettingsStore,
 )
+
+
+def _research_policy(store: SettingsStore) -> dict[str, Any]:
+    """The retrieval settings, as the director reads them.
+
+    A function rather than a captured dict: the director calls it per retrieval,
+    which is what makes the depth and freshness controls take effect without a
+    restart.
+    """
+    loop = store.load().research_loop
+    return {
+        "results": DEPTH_RESULTS.get(loop.depth, DEPTH_RESULTS["standard"]),
+        "freshness": loop.freshness,
+        "categories": list(loop.categories),
+    }
 
 
 def _one_of_key(value: str | None, options: list[dict[str, str]], current: str) -> str:
@@ -187,8 +203,7 @@ def _apply_routing(
             continue
         existing = updated.roles.get(role, RoleRouting())
         updated.roles[role] = RoleRouting(
-            model=model, fallback=existing.fallback, critic=existing.critic,
-            enabled=existing.enabled,
+            model=model, fallback=existing.fallback, enabled=existing.enabled,
         )
 
     for role, patch in (body.role_routing or {}).items():
@@ -209,9 +224,6 @@ def _apply_routing(
             ),
             fallback=checked(patch.fallback, f"role_routing.{role}.fallback") or (
                 existing.fallback if patch.fallback is None else ""
-            ),
-            critic=checked(patch.critic, f"role_routing.{role}.critic") or (
-                existing.critic if patch.critic is None else ""
             ),
             enabled=enabled,
         )
@@ -247,7 +259,6 @@ class RolePatch(BaseModel):
 
     model: str | None = None
     fallback: str | None = None
-    critic: str | None = None
     enabled: bool | None = None
 
 
@@ -626,6 +637,10 @@ def build_control_router(
         templates=templates,
         log=log,
         library=library,
+        # Read at call time, so an operator changing the research depth or the
+        # freshness preference changes the next retrieval rather than the next
+        # restart.
+        research_policy=lambda: _research_policy(settings_store),
     )
     # The engine asks the director what to research next. With no campaign
     # running the director returns nothing and the engine's original template

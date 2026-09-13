@@ -59,9 +59,9 @@ function payload(overrides: Partial<SettingsPayload> = {}): SettingsPayload {
         fallback_model: 'mid-1',
         allowed: [],
         roles: {
-          chat: { model: 'mid-1', fallback: '', critic: '', enabled: true },
-          agent_discovery: { model: 'big-1', fallback: 'mid-1', critic: '', enabled: true },
-          agent_reviewer: { model: 'big-1', fallback: '', critic: '', enabled: true },
+          chat: { model: 'mid-1', fallback: '', enabled: true },
+          agent_discovery: { model: 'big-1', fallback: 'mid-1', enabled: true },
+          agent_reviewer: { model: 'big-1', fallback: '', enabled: true },
         },
       },
       budget: {
@@ -99,17 +99,17 @@ function payload(overrides: Partial<SettingsPayload> = {}): SettingsPayload {
       {
         role: 'chat', provider: 'opencode_go', model: 'mid-1', source: 'assigned',
         reason: 'Console chat is assigned mid-1 in settings.',
-        substituted: false, considered: [], critic: '',
+        substituted: false, considered: [],
       },
       {
         role: 'agent_discovery', provider: 'opencode_go', model: 'mid-1', source: 'fallback',
         reason: "'big-1' is not served by the opencode_go provider, so the fallback answered.",
-        substituted: true, considered: ['big-1'], critic: '',
+        substituted: true, considered: ['big-1'],
       },
       {
         role: 'agent_reviewer', provider: 'opencode_go', model: 'big-1', source: 'assigned',
         reason: 'Review agent is assigned big-1 in settings.',
-        substituted: false, considered: [], critic: '',
+        substituted: false, considered: [],
       },
     ],
     safety_limits: [
@@ -190,17 +190,16 @@ test('a role using what it was assigned is not reported as a substitution', () =
   expect(within(row).getByText(/assigned big-1/)).toBeInTheDocument()
 })
 
-test('fallback and critic are behind progressive disclosure', () => {
+test('fallback and enable are behind progressive disclosure', () => {
   draw(<ModelRoutingPanel settings={payload()} patch={vi.fn()} />)
   expect(screen.queryByLabelText('Fallback for Discovery agent')).not.toBeInTheDocument()
-  fireEvent.click(screen.getByText('Fallback and critic'))
+  fireEvent.click(screen.getByText('Fallback and enable'))
   expect(screen.getByLabelText('Fallback for Discovery agent')).toBeInTheDocument()
-  expect(screen.getByLabelText('Critic for Discovery agent')).toBeInTheDocument()
 })
 
 test('a role campaigns cannot run without is not offered a switch', () => {
   draw(<ModelRoutingPanel settings={payload()} patch={vi.fn()} />)
-  fireEvent.click(screen.getByText('Fallback and critic'))
+  fireEvent.click(screen.getByText('Fallback and enable'))
   const required = screen.getByText('Discovery agent').closest('tr')!
   expect(within(required).getByText('always on')).toBeInTheDocument()
   const optional = screen.getByText('Review agent').closest('tr')!

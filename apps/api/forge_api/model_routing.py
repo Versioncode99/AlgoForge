@@ -296,10 +296,6 @@ class RoleRouting:
 
     model: str = ""
     fallback: str = ""
-    #: An optional second opinion. Where a role supports it, the critic model
-    #: reviews the primary's output; where it does not, the field is inert and
-    #: the interface says so rather than offering a control that does nothing.
-    critic: str = ""
     enabled: bool = True
 
 
@@ -337,7 +333,6 @@ class Decision:
     substituted: bool = False
     #: Models tried and passed over, in order, with why.
     considered: tuple[str, ...] = ()
-    critic: str = ""
 
     @property
     def available(self) -> bool:
@@ -352,7 +347,6 @@ class Decision:
             "reason": self.reason,
             "substituted": self.substituted,
             "considered": list(self.considered),
-            "critic": self.critic,
         }
 
 
@@ -448,7 +442,6 @@ def resolve(
                 if chosen
                 else "Smart routing had no allowed model left to choose from."
             ),
-            critic=routing.critic,
         )
 
     # manual and hybrid both start from what the operator assigned.
@@ -461,7 +454,6 @@ def resolve(
                 model=routing.model,
                 source="assigned",
                 reason=f"{role.label} is assigned '{routing.model}' in settings.",
-                critic=routing.critic,
             )
         why = (
             "was refused on the last call"
@@ -479,7 +471,6 @@ def resolve(
                     "routing does not substitute, so this call did not run."
                 ),
                 considered=tuple(considered),
-                critic=routing.critic,
             )
         substitute_reason = f"'{routing.model}' {why}"
     else:
@@ -502,7 +493,6 @@ def resolve(
                 reason=f"{substitute_reason}, so {label} '{candidate}' answered instead.",
                 substituted=bool(routing.model),
                 considered=tuple(considered),
-                critic=routing.critic,
             )
 
     chosen = _smart_pick(role.demand, catalogue, settings.allowed)
@@ -519,7 +509,6 @@ def resolve(
             ),
             substituted=bool(routing.model),
             considered=tuple(considered),
-            critic=routing.critic,
         )
     return Decision(
         role=role_key,
@@ -528,7 +517,6 @@ def resolve(
         source="none",
         reason=f"{substitute_reason} and nothing the {provider} provider serves is available.",
         considered=tuple(considered),
-        critic=routing.critic,
     )
 
 
@@ -560,7 +548,6 @@ def normalise(raw: Any, *, known_models: Iterable[str]) -> RoutingSettings:
         roles[key] = RoleRouting(
             model=keep(entry.get("model")),
             fallback=keep(entry.get("fallback")),
-            critic=keep(entry.get("critic")),
             # A role the system cannot run without is always on, whatever a
             # stored file says. A settings file that could switch off hypothesis
             # generation would stop every campaign with no message anywhere.

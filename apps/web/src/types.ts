@@ -279,7 +279,7 @@ export type BudgetSettings = {
 }
 export type ProviderInfo = { id: string; label: string; detail: string }
 export type RoleRouting = {
-  model: string; fallback: string; critic: string; enabled: boolean
+  model: string; fallback: string; enabled: boolean
 }
 export type ModelRouting = {
   mode: string; default_model: string; fallback_model: string
@@ -296,7 +296,7 @@ export type RoutingMode = { key: string; label: string; detail: string }
  *  substitution the operator never sees is the failure this carries. */
 export type RoutingDecision = {
   role: string; provider: string; model: string; source: string
-  reason: string; substituted: boolean; considered: string[]; critic: string
+  reason: string; substituted: boolean; considered: string[]
 }
 export type SafetyLimit = { key: string; label: string; value: string; why: string }
 export type ResearchOption = { key: string; label: string; detail: string }

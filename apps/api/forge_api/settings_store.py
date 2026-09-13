@@ -215,8 +215,8 @@ class AISettings:
     #: callers read. `model_routing` is the richer form on top of it, and
     #: `_sync_routing` keeps the two from disagreeing.
     routing: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ROUTING))
-    #: Mode, defaults, fallbacks, per-role critics, and the research agent roles
-    #: the flat mapping never covered.
+    #: Mode, defaults, per-role fallbacks, and the research agent roles the
+    #: flat mapping never covered.
     model_routing: RoutingSettings = field(default_factory=lambda: default_routing())
     budget: BudgetSettings = field(default_factory=BudgetSettings)
 
@@ -453,7 +453,6 @@ def _merge_routing(routing: RoutingSettings, flat: dict[str, str]) -> RoutingSet
         merged[key] = RoleRouting(
             model=stored.model or flat.get(key, "") or fallback_entry.model,
             fallback=stored.fallback or fallback_entry.fallback,
-            critic=stored.critic,
             enabled=stored.enabled,
         )
     return RoutingSettings(

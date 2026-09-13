@@ -337,9 +337,9 @@ boundaries, and observables are ranked by how specific the matched phrase was �
 ## Phase 6 — model routing and budget (complete)
 
 New module `apps/api/forge_api/model_routing.py`: **21 roles** across the
-workflow half and the research half, three routing modes, per-role fallback and
-critic, and a `Decision` on every selection carrying which model, where the
-choice came from, and whether a substitution happened.
+workflow half and the research half, three routing modes, per-role fallback, and
+a `Decision` on every selection carrying which model, where the choice came
+from, and whether a substitution happened.
 
 Budget enforcement is a switch; system safety limits are served as data beside
 it. Defects 1–4 from the audit are all fixed:
@@ -429,13 +429,45 @@ window is part of the claim, supports every selection method this phase's brief
 lists, and is consumed by `MarketService`, `plan.py` and the action registry with
 four test files behind it.
 
+## Phase 8 — final architecture review (complete)
+
+A pass over this phase's *own* work, looking for the thing it was built to
+remove: a capability that is declared and not reached. A script checked every
+new setting and helper for a reference outside the module that defines it, and
+it found four.
+
+1. **`_withdraw_template` was dead.** Reordering the director to assess novelty
+   before building a template orphaned the rollback path that deleted one after
+   the fact. 18 lines, removed.
+2. **The routed model was resolved twice.** `agent_service._call_model` ran the
+   model `resolve()` had already chosen through `model_for()` again, which is
+   the silent substitution the routing layer exists to report — happening one
+   layer below the layer that reports it. The second resolution is gone; the
+   decision the caller recorded is the model that runs.
+3. **Retrieval depth, freshness and source categories were stored and never
+   read.** The settings screen offered three research controls and the retrieval
+   ignored all three. `literature.search`/`retrieve` now take `categories` and
+   `freshness`; `CATEGORY_INDEXES` maps a chosen category to the index that
+   serves it, so "preprints only" asks arXiv and not Crossref; freshness
+   reweights by publication year rather than filtering, so a narrow query does
+   not come back empty. The director threads a `research_policy` callable from
+   the store, and `tests/research/test_retrieval_policy.py` drives the real
+   `search`/`retrieve` against a recording transport and asserts which hosts
+   were actually asked.
+4. **The per-role critic model was configurable and inert.** Removed rather than
+   half-wired — the reasoning is in
+   [`RESEARCH_EXPANSION_REPORT.md` §10](RESEARCH_EXPANSION_REPORT.md). In short:
+   `agent_reviewer` already is the second opinion, as a first-class role with
+   its own model, demand tier and switch, so the field was a parallel mechanism
+   for a capability the architecture already had.
+
 ---
 
 ## Verified state
 
-* **2,939 backend tests passing** (2,719 at the start; 220 added).
+* **2,950 backend tests passing** (2,719 at the start; 231 added).
 * **141 frontend tests passing** (121 at the start; 20 added).
-* `ruff check` clean; `mypy --strict` clean across 194 source files.
+* `ruff check` clean; `mypy --strict` clean across 195 source files.
 * TypeScript clean; production build passes.
 
 ## Open work

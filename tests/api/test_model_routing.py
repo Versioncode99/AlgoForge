@@ -236,9 +236,7 @@ def test_an_unknown_mode_falls_back_rather_than_failing_the_load() -> None:
 
 def test_routing_survives_a_round_trip_through_storage() -> None:
     settings = _settings()
-    settings.roles["agent_discovery"] = RoleRouting(
-        model="big-1", fallback="small-1", critic="mid-1"
-    )
+    settings.roles["agent_discovery"] = RoleRouting(model="big-1", fallback="small-1")
     restored = normalise(to_dict(settings), known_models=KNOWN)
     entry = restored.for_role("agent_discovery")
-    assert (entry.model, entry.fallback, entry.critic) == ("big-1", "small-1", "mid-1")
+    assert (entry.model, entry.fallback) == ("big-1", "small-1")

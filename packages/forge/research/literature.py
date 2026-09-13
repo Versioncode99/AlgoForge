@@ -390,11 +390,49 @@ def search_crossref(
     return found
 
 
+#: Which indexes each source category reaches. A closed mapping: an operator
+#: chooses among the indexes that exist, and cannot name a site for something to
+#: go and fetch.
+CATEGORY_INDEXES: dict[str, str] = {"preprints": "arxiv", "journals": "crossref"}
+
+#: How much a result's age may move it in the ranking, per freshness preference.
+#:
+#: A *preference*, not a filter. "Prefer recent" must not silently drop the 1987
+#: variance-ratio paper, so age adjusts the score rather than excluding the
+#: result; only ``current`` excludes, and it says so on the settings screen.
+_FRESHNESS_WEIGHT: dict[str, float] = {"any": 0.0, "recent": 0.15, "current": 0.15}
+
+#: Publication year before which ``current`` will not return a result.
+_CURRENT_YEARS = 5
+
+
+def _year_of(published: str) -> int:
+    head = (published or "")[:4]
+    return int(head) if head.isdigit() else 0
+
+
+def _freshness_adjusted(item: Source, preference: str, now_year: int) -> float:
+    """Relevance, moved by age according to the operator's preference.
+
+    A missing publication date is treated as unknown rather than as old: the
+    index did not report one, and penalising a result for that would be ranking
+    on a fact nobody has.
+    """
+    weight = _FRESHNESS_WEIGHT.get(preference, 0.0)
+    year = _year_of(item.published)
+    if not weight or not year:
+        return item.relevance
+    age = max(0, now_year - year)
+    return item.relevance + weight * max(0.0, 1.0 - age / 20.0)
+
+
 def search(
     query: str,
     *,
     limit: int = 8,
     transport: httpx.BaseTransport | None = None,
+    categories: Sequence[str] = (),
+    freshness: str = "any",
 ) -> list[Source]:
     """Both indexes, merged, deduplicated by title, best match first.
 
@@ -402,10 +440,17 @@ def search(
     should not cost the Crossref results. If *both* fail, the error propagates:
     silently returning nothing would be indistinguishable from "the literature
     contains nothing on this", which is a very different fact.
+
+    ``categories`` selects which indexes are searched. An empty tuple means all
+    of them; an explicit empty *selection* is the caller's business, and a
+    caller that means "search nothing" should not call this at all.
     """
+    wanted = {CATEGORY_INDEXES[c] for c in categories if c in CATEGORY_INDEXES}
     results: list[Source] = []
     failures: list[str] = []
     for name, fetcher in (("arxiv", search_arxiv), ("crossref", search_crossref)):
+        if wanted and name not in wanted:
+            continue
         try:
             results.extend(fetcher(query, limit=limit, transport=transport))
         except Exception as exc:  # network, parse, HTTP status
@@ -413,9 +458,21 @@ def search(
     if not results and failures:
         raise LiteratureError("; ".join(failures))
 
+    now_year = datetime.now(UTC).year
+    if freshness == "current":
+        recent = [
+            item
+            for item in results
+            if not _year_of(item.published) or _year_of(item.published) >= now_year - _CURRENT_YEARS
+        ]
+        # Only if it leaves something. Narrowing to nothing and reporting "the
+        # literature has nothing on this" would be a false statement about the
+        # literature rather than about the filter.
+        results = recent or results
+
     seen: set[str] = set()
     unique: list[Source] = []
-    for item in sorted(results, key=lambda s: -s.relevance):
+    for item in sorted(results, key=lambda s: -_freshness_adjusted(s, freshness, now_year)):
         key = re.sub(r"[^a-z0-9]", "", item.title.lower())[:80]
         if key in seen:
             continue
@@ -453,7 +510,12 @@ class RetrievalReport:
 
 
 def retrieve(
-    query: str, *, limit: int = 8, transport: httpx.BaseTransport | None = None
+    query: str,
+    *,
+    limit: int = 8,
+    transport: httpx.BaseTransport | None = None,
+    categories: Sequence[str] = (),
+    freshness: str = "any",
 ) -> RetrievalReport:
     """Search, and report the failure rather than raising it.
 
@@ -464,7 +526,16 @@ def retrieve(
     """
     try:
         return RetrievalReport(
-            query=query, found=tuple(search(query, limit=limit, transport=transport))
+            query=query,
+            found=tuple(
+                search(
+                    query,
+                    limit=limit,
+                    transport=transport,
+                    categories=categories,
+                    freshness=freshness,
+                )
+            ),
         )
     except Exception as exc:
         return RetrievalReport(query=query, error=f"{type(exc).__name__}: {exc}")

@@ -60,7 +60,7 @@ function RoleRow({
   advanced: boolean
 }) {
   const routing = settings.ai.model_routing.roles[role.key] ?? {
-    model: '', fallback: '', critic: '', enabled: true,
+    model: '', fallback: '', enabled: true,
   }
   const send = (change: Record<string, unknown>) =>
     patch({ role_routing: { [role.key]: change } })
@@ -90,15 +90,6 @@ function RoleRow({
               options={settings.models}
               allowNone
               onChange={(fallback) => send({ fallback })}
-            />
-          </td>
-          <td>
-            <ModelSelect
-              label={`Critic for ${role.label}`}
-              value={routing.critic}
-              options={settings.models}
-              allowNone
-              onChange={(critic) => send({ critic })}
             />
           </td>
           <td>
@@ -154,7 +145,7 @@ export function ModelRoutingPanel({
             className={advanced ? 'btn tiny primary' : 'btn tiny'}
             onClick={() => setAdvanced((v) => !v)}
           >
-            {advanced ? 'Fewer columns' : 'Fallback and critic'}
+            {advanced ? 'Fewer columns' : 'Fallback and enable'}
           </button>
         </div>
       </header>
@@ -219,7 +210,6 @@ export function ModelRoutingPanel({
               <th>Role</th>
               <th>Assigned</th>
               {advanced && <th>Fallback</th>}
-              {advanced && <th>Critic</th>}
               {advanced && <th>Enabled</th>}
               <th>Would answer</th>
             </tr>

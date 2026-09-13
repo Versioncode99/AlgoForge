@@ -23,7 +23,7 @@ from forge_api import jsonish
 from forge_api.activity import ActivityLog
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.model_routing import resolve as resolve_route
-from forge_api.providers import catalog_for, client_for, credential_for, model_for
+from forge_api.providers import catalog_for, client_for, credential_for
 from forge_api.settings_store import SettingsStore
 
 # Appended to the second attempt only. Restating the contract on its own line
@@ -365,7 +365,12 @@ class AgentService:
         cheap and recovers most of those replies; a second failure is reported as
         a failure rather than papered over with an invented summary.
         """
-        routed = model_for(provider, model)
+        # No second resolution. `resolve` already chose this model from the
+        # provider's own catalogue and said so in a decision the caller
+        # recorded; running it through `model_for` again would let a silent
+        # substitution happen one layer below the layer that exists to report
+        # substitutions.
+        routed = model
         attempts = (system, system + STRUCTURE_NUDGE)
         for attempt in attempts:
             with self._model_slots:
