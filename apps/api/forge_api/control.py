@@ -370,6 +370,22 @@ class ImportWorkspaceRequest(BaseModel):
     name: str | None = None
 
 
+class SplitPanelRequest(BaseModel):
+    kind: str
+    #: 'row' for side by side, 'column' for one above the other.
+    along: str = "row"
+    title: str = ""
+
+
+class StackPanelRequest(BaseModel):
+    #: The panel whose rectangle this one joins as a tab.
+    onto: str
+
+
+class DetachPanelRequest(BaseModel):
+    along: str = "row"
+
+
 class CollapsePanelRequest(BaseModel):
     collapsed: bool = True
 
@@ -2651,6 +2667,65 @@ def build_control_router(
             data=_action(
                 "duplicate_workspace_version",
                 {"workspace_id": workspace_id, "version": version, "name": body.name},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/split",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def split_panel(
+        workspace_id: str, panel_id: str, body: SplitPanelRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "split_panel",
+                {
+                    "workspace_id": workspace_id,
+                    "panel_id": panel_id,
+                    "kind": body.kind,
+                    "along": body.along,
+                    "title": body.title,
+                },
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/stack",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def stack_panel(
+        workspace_id: str, panel_id: str, body: StackPanelRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "stack_panel",
+                {"workspace_id": workspace_id, "panel_id": panel_id, "onto": body.onto},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/detach",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def detach_panel(
+        workspace_id: str, panel_id: str, body: DetachPanelRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "detach_panel",
+                {"workspace_id": workspace_id, "panel_id": panel_id, "along": body.along},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/show",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def show_panel_tab(workspace_id: str, panel_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "show_panel_tab", {"workspace_id": workspace_id, "panel_id": panel_id}
             )
         )
 

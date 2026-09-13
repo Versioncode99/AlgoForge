@@ -127,6 +127,12 @@ PREPARATORY: frozenset[str] = frozenset(
         "resize_panel",
         "collapse_panel",
         "reorder_panel",
+        # Docking is rearranging panels too: a split, a tab and a detach all
+        # move rectangles around and touch nothing an operator could lose.
+        "split_panel",
+        "stack_panel",
+        "detach_panel",
+        "show_panel_tab",
         "set_panel_setting",
         "add_indicator",
         "link_panels",

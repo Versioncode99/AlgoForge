@@ -106,6 +106,7 @@ from forge.workstation import (
     WorkspaceStore,
     catalogue,
     describe,
+    docking,
     layout_for,
     markets_for,
     new_panel_id,
@@ -2099,6 +2100,54 @@ class Actions:
             mutating=True,
         )
         self._add(
+            "split_panel",
+            "Split a panel's rectangle in two and put a new panel in the freed half. "
+            "Direction is 'row' for side by side or 'column' for one above the other.",
+            {
+                "panel_id": {"type": "string"},
+                "kind": {"type": "string"},
+                "along": {"type": "string", "optional": True},
+                "title": {"type": "string", "optional": True},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.split_panel,
+            mutating=True,
+        )
+        self._add(
+            "stack_panel",
+            "Make one panel a tab of another's rectangle. The moved panel becomes the "
+            "one showing, because asking to stack it is asking to see it.",
+            {
+                "panel_id": {"type": "string"},
+                "onto": {"type": "string"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.stack_panel,
+            mutating=True,
+        )
+        self._add(
+            "detach_panel",
+            "Pull a tab out of its stack into a rectangle of its own, beside the tabs "
+            "it came from.",
+            {
+                "panel_id": {"type": "string"},
+                "along": {"type": "string", "optional": True},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.detach_panel,
+            mutating=True,
+        )
+        self._add(
+            "show_panel_tab",
+            "Bring one tab of a stack to the front.",
+            {
+                "panel_id": {"type": "string"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.show_panel_tab,
+            mutating=True,
+        )
+        self._add(
             "set_panel_setting",
             "Change one setting on a panel - a chart's symbol or timeframe, a table's "
             "filter. Use add_indicator for indicators.",
@@ -2170,6 +2219,11 @@ class Actions:
             "settings": panel.settings,
             "link_group": panel.link_group,
             "collapsed": panel.collapsed,
+            # Docking. Without these the interface cannot draw a tab bar: it
+            # would see two panels claiming one rectangle and no way to tell
+            # which of them is meant to be on top.
+            "stack": panel.stack,
+            "active": panel.active,
         }
 
     def _view(self, workspace: Workspace) -> dict[str, Any]:
@@ -2695,6 +2749,93 @@ class Actions:
             workspace.replacing_panel(moved),
             f"moved {moved.panel_id} to {moved.width}x{moved.height} at ({moved.x}, {moved.y})",
         )
+
+    def _new_panel(self, workspace: Workspace, kind: str, title: str) -> Panel:
+        """A panel to place, with geometry the caller is about to overwrite.
+
+        Split decides where it goes, so the size here is a placeholder that only
+        has to be valid. Kind is validated with the same message `add_panel`
+        gives, because a caller that got it wrong needs the same list either way.
+        """
+        try:
+            panel_kind = PanelKind(_str(kind, "kind", limit=40, lower=True))
+        except ValueError as exc:
+            raise ActionError(
+                f"'{kind}' is not a panel kind. Available: "
+                f"{', '.join(sorted(k.value for k in PanelKind))}."
+            ) from exc
+        return Panel(
+            panel_id=new_panel_id(panel_kind, tuple(p.panel_id for p in workspace.panels)),
+            kind=panel_kind,
+            title=_str(title, "title", limit=80) if title else "",
+            x=0,
+            y=0,
+            width=1,
+            height=1,
+        )
+
+    @staticmethod
+    def _along(value: str | None) -> docking.Along:
+        """'row' or 'column', refused by name rather than defaulted silently."""
+        if value is None or value == "":
+            return docking.Along.ROW
+        wanted = _str(value, "along", limit=10, lower=True)
+        try:
+            return docking.Along(wanted)
+        except ValueError as exc:
+            allowed = ", ".join(a.value for a in docking.Along)
+            raise ActionError(f"'{wanted}' is not a direction. Use one of: {allowed}.") from exc
+
+    def split_panel(
+        self,
+        panel_id: str,
+        kind: str,
+        along: str | None = None,
+        title: str = "",
+        workspace_id: str | None = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        target = self._panel_id(workspace, panel_id)
+        direction = self._along(along)
+        arriving = self._new_panel(workspace, kind, title)
+        try:
+            after = docking.split(workspace, target, direction, arriving)
+        except docking.DockingError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._save_workspace(
+            after, f"split {target} {direction.value}-wise and added {arriving.panel_id}"
+        )
+
+    def stack_panel(
+        self, panel_id: str, onto: str, workspace_id: str | None = None, **_: Any
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        moving = self._panel_id(workspace, panel_id)
+        host = self._panel_id(workspace, onto)
+        try:
+            after = docking.stack(workspace, moving, host)
+        except docking.DockingError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._save_workspace(after, f"stacked {moving} onto {host}")
+
+    def detach_panel(
+        self, panel_id: str, along: str | None = None, workspace_id: str | None = None, **_: Any
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        target = self._panel_id(workspace, panel_id)
+        try:
+            after = docking.detach(workspace, target, self._along(along))
+        except docking.DockingError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._save_workspace(after, f"detached {target} from its stack")
+
+    def show_panel_tab(
+        self, panel_id: str, workspace_id: str | None = None, **_: Any
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        target = self._panel_id(workspace, panel_id)
+        return self._save_workspace(docking.activate(workspace, target), f"showing {target}")
 
     def set_panel_setting(
         self, panel_id: str, key: str, value: str, workspace_id: str | None = None
