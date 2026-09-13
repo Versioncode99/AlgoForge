@@ -160,3 +160,21 @@
   gap: 12px;
   min-width: 0;
 }
+
+/* ── how old the archive is ─────────────────────────────────────────────────
+   Beside the OHLC readout rather than under the chart, because it qualifies
+   the right-hand edge and that is where the eye already is. A label, not an
+   alert: an old archive is a legitimate thing to look at. */
+.chart-age {
+  flex: 0 0 auto;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-nano);
+  white-space: nowrap;
+}
+.chart-age[data-tone='good'] { color: var(--pass); border-color: var(--pass); }
+.chart-age[data-tone='bad'] { color: var(--fail); border-color: var(--fail); }
+.chart-age[data-tone='unknown'] { color: var(--fg-3); border-style: dashed; }

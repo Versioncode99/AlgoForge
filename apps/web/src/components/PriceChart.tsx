@@ -12,6 +12,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { getJson } from '../api'
+import { AGE_TONE, archiveAge } from '../freshness'
 import {
   EMPTY,
   type Bar,
@@ -360,6 +361,11 @@ export function ChartPanel({
     staleTime: 5 * 60_000,
   })
 
+  const age = useMemo(
+    () => archiveAge(query.data?.coverage_end ?? null),
+    [query.data?.coverage_end],
+  )
+
   const readout = useMemo(() => {
     if (!hovered) return null
     const change = hovered.close - hovered.open
@@ -397,6 +403,14 @@ export function ChartPanel({
             </button>
           ))}
         </div>
+
+        {/* How old this archive is, which the chart has always known and never
+            said. A label rather than a gate: looking at an old archive is a
+            legitimate thing to do -- the history is the point -- but reading
+            the right-hand edge as "now" is not. */}
+        <span className="chart-age" data-tone={AGE_TONE[age.currency]} title={age.detail}>
+          {age.label}
+        </span>
 
         <div className="chart-readout mono" aria-live="off">
           {readout ? (
