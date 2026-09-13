@@ -874,6 +874,26 @@ class Actions:
             },
             self.strategy_regimes,
         )
+        self._add(
+            "strategy_resample",
+            "One backtest read as a distribution rather than as a single outcome: the "
+            "strategy's own trades resampled with and without their regime structure, "
+            "and the gap between the two worst-case drawdowns.",
+            {
+                "strategy_id": {"type": "string"},
+                "paths": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "100-20000, default 2000",
+                },
+                "attribution": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "entry | dominant | exit",
+                },
+            },
+            self.strategy_resample,
+        )
 
     # ── implementations ──────────────────────────────────────────────────────
     def search_papers(self, query: str) -> dict[str, Any]:
@@ -1389,6 +1409,23 @@ class Actions:
             raise ActionError("The trade ledger service is not attached to this registry.")
         try:
             report: dict[str, Any] = self.ledger.regime_report(key, attribution=basis)
+        except Exception as exc:
+            raise ActionError(str(exc)) from exc
+        return report
+
+    def strategy_resample(
+        self, strategy_id: str, paths: int | None = None, attribution: str | None = None
+    ) -> dict[str, Any]:
+        key = _str(strategy_id, "strategy_id", limit=120)
+        basis = _str(attribution or "entry", "attribution", limit=16, lower=True)
+        if basis not in ("entry", "dominant", "exit"):
+            raise ActionError("attribution must be one of entry, dominant, exit.")
+        if self.ledger is None:
+            raise ActionError("The trade ledger service is not attached to this registry.")
+        try:
+            report: dict[str, Any] = self.ledger.resample_report(
+                key, paths=int(paths or 2000), attribution=basis
+            )
         except Exception as exc:
             raise ActionError(str(exc)) from exc
         return report

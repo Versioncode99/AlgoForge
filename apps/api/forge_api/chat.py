@@ -69,13 +69,18 @@ _PROVENANCE: dict[str, Provenance] = {
 #: and actually ran -- there is no path here for a reference to be invented.
 _ARTIFACTS: dict[str, tuple[ArtifactKind, tuple[str, ...]]] = {
     "strategy_regimes": (ArtifactKind.REGIME, ("strategy_id", "backtest_id")),
+    "strategy_resample": (ArtifactKind.RESAMPLE, ("strategy_id", "backtest_id")),
     "strategy_trades": (ArtifactKind.BACKTEST, ("strategy_id", "backtest_id")),
     "strategy_dossier": (ArtifactKind.EVIDENCE, ("strategy_id",)),
     "strategy_definition": (ArtifactKind.STRATEGY, ("strategy_id",)),
     "backtest_strategy": (ArtifactKind.BACKTEST, ("strategy_id",)),
     "validate_strategy": (ArtifactKind.VALIDATION, ("strategy_id",)),
     "create_strategy": (ArtifactKind.STRATEGY, ("strategy_id", "template")),
-    "create_strategy_from_blueprint": (ArtifactKind.STRATEGY, ("blueprint_id",)),
+    # `strategy_id` as well as the blueprint: the action mints the id and only
+    # the result carries it, so an artifact naming the blueprint alone had no
+    # way back to the strategy it created -- a card that could only ever say
+    # "no panel yet" about a strategy that certainly exists.
+    "create_strategy_from_blueprint": (ArtifactKind.STRATEGY, ("blueprint_id", "strategy_id")),
     "run_analysis": (ArtifactKind.ANALYSIS, ("strategy_id", "analysis")),
     "parameter_surface": (
         ArtifactKind.PARAMETER_SURFACE,

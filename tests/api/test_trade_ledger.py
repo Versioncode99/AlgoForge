@@ -296,3 +296,50 @@ def test_resampling_refuses_a_sample_too_small_to_resample(client):
         assert response.status_code in (200, 409)
         if response.status_code == 200:
             assert response.json()["data"]["trade_count"] == len(trades)
+
+
+def test_the_route_and_the_action_return_the_same_resample(client):
+    """One study, reachable two ways -- not two studies that could disagree.
+
+    The computation used to live inside the route, so an assistant asking for a
+    resample would have needed a second implementation of it. The action verb
+    and the route now call the same method, and this is what would fail if
+    somebody re-inlined either of them.
+    """
+    strategy_id, _ = _strategy_with_run(client)
+    route = client.get(
+        f"/api/v1/strategies/{strategy_id}/resample", params={"paths": 200, "seed": 20260908}
+    )
+    if route.status_code != 200:
+        pytest.skip("this dataset produced nothing resampleable")
+
+    called = client.post(
+        "/api/v1/actions/strategy_resample",
+        json={"arguments": {"strategy_id": strategy_id, "paths": 200}},
+    )
+    assert called.status_code == 200, called.text
+    from_action = called.json()["data"]
+    from_route = route.json()["data"]
+    assert from_action["iid"] == from_route["iid"]
+    assert from_action["regime_aware"] == from_route["regime_aware"]
+    assert from_action["drawdown_gap"] == from_route["drawdown_gap"]
+    assert from_action["strategy_id"] == strategy_id
+
+
+def test_the_resample_verb_is_read_only(client):
+    """It measures. Nothing it does can advance or alter a strategy."""
+    actions = {item["name"]: item for item in client.get("/api/v1/actions").json()["data"]}
+    assert "strategy_resample" in actions
+    assert actions["strategy_resample"]["mutating"] is False
+    assert actions["strategy_resample"]["risk"] == "safe"
+    assert actions["strategy_resample"]["protected"] is False
+
+
+def test_the_resample_verb_refuses_an_attribution_it_cannot_honour(client):
+    strategy_id, _ = _strategy_with_run(client)
+    response = client.post(
+        "/api/v1/actions/strategy_resample",
+        json={"arguments": {"strategy_id": strategy_id, "attribution": "whenever"}},
+    )
+    assert response.status_code == 422
+    assert "entry, dominant, exit" in str(response.json()["detail"])

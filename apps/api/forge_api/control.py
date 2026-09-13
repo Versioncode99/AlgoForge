@@ -9,8 +9,6 @@ from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from forge.analytics.regime import attribute_at_times as attribute_trades
-from forge.analytics.resample import compare as compare_resamples
 from forge.capabilities import nautilus_capability
 from forge.contracts.models import ApiEnvelope
 from forge.conversation import ContextKind, ConversationError, ConversationStore
@@ -70,7 +68,6 @@ from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.fund import FundService
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.ledger_view import LedgerError, TradeLedgerService
-from forge_api.ledger_view import _TradeShim as _Shim
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
 from forge_api.model_routing import (
     ROLES_BY_KEY,
@@ -2093,28 +2090,17 @@ def build_control_router(
         IID study of a regime-dependent strategy understates its drawdown.
         """
         try:
-            payload = ledger_view.resolve(strategy_id, backtest_id)
-            series, times, _ = ledger_view.classified(payload)
-            trades = _Shim.many(payload)
-            if len(trades) < 2:
-                raise LedgerError("resampling needs at least two trades")
-            marks = attribute_trades(trades, series, times)
-            comparison = compare_resamples(
-                trades,
-                marks,
-                series,
-                paths=max(100, min(int(paths), 20_000)),
-                seed=int(seed),
+            payload = ledger_view.resample_report(
+                strategy_id,
+                backtest_id=backtest_id,
+                paths=paths,
+                seed=seed,
                 attribution=attribution,
             )
         except (LedgerError, ValueError) as exc:
             raise HTTPException(409, {"code": "resample_unavailable", "reason": str(exc)}) from exc
         return ApiEnvelope(
-            data={
-                **comparison.model_dump(mode="json"),
-                "strategy_id": strategy_id,
-                "backtest_id": payload.get("backtest_id"),
-            },
+            data=payload,
             meta={
                 "note": (
                     "Resampling reorders the strategy's own realised trades. No "
@@ -2122,11 +2108,6 @@ def build_control_router(
                 )
             },
         )
-
-    # ── research lab ─────────────────────────────────────────────────────────
-    # Questions asked of a ledger that already exists. Nothing here runs a
-    # strategy, consumes a holdout, or produces a verdict — which is why it is
-    # cheap to ask, and why every stored artifact says it is not evidence.
 
     @router.get("/lab/analyses", response_model=ApiEnvelope[list[dict[str, Any]]])
     def lab_catalogue() -> ApiEnvelope[list[dict[str, Any]]]:

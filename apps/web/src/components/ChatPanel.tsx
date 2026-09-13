@@ -88,6 +88,10 @@ function destination(artifact: Artifact): string {
       return strategy ? format('strategies', { strategy, pane: 'gates' }) : ''
     case 'port':
       return strategy ? format('strategies', { strategy, pane: 'port' }) : ''
+    case 'resample':
+      // A pane of its own, because the comparison is about one backtest read
+      // twice rather than about the strategy's definition.
+      return strategy ? format('strategies', { strategy, pane: 'resample' }) : ''
     case 'parameter_surface':
       // The surface draws under the strategy rather than in a pane of its own,
       // so this opens the strategy it belongs to. Not a pane link pretending to

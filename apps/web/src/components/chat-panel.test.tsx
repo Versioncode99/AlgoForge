@@ -246,7 +246,7 @@ describe('artifacts', () => {
     )
   })
 
-  it('says so when a kind has no panel to open yet', async () => {
+  it('says so when an artifact names nothing a surface can open', async () => {
     conversations.push(conversation({ turn_count: 1 }))
     thread = {
       conversation: conversation(),
@@ -255,15 +255,15 @@ describe('artifacts', () => {
           artifacts: [
             {
               artifact_id: 'a2',
-              // A kind with no surface behind it, which now takes some finding:
-              // `port` was the example until it opened the port pane, and
-              // `parameter_surface` until it opened its strategy. `resample`
-              // is the one left, and when it stops being so this assertion
-              // should be deleted rather than re-pointed a third time -- at
-              // that point every kind resolves and the branch is dead.
-              kind: 'resample',
-              title: 'Resample · s1',
-              refs: { strategy_id: 's1' },
+              // Every *kind* resolves now: `port`, `parameter_surface` and
+              // `resample` were each the example here in turn, and each one
+              // stopped being it when its surface was built. What is left is
+              // the case a kind cannot fix -- an artifact whose references do
+              // not name the thing its destination needs. A strategy card with
+              // no strategy in it has nowhere honest to point.
+              kind: 'strategy',
+              title: 'Strategy · from a blueprint',
+              refs: { blueprint_id: 'bp1' },
               provenance: 'deterministic',
             },
           ],
@@ -273,6 +273,45 @@ describe('artifacts', () => {
     mount()
     // A button that goes nowhere is worse than an honest label.
     expect(await screen.findByText('No panel yet')).toBeInTheDocument()
+  })
+
+  it('opens every artifact kind that names its subject', async () => {
+    /* The counterpart to the assertion above, and the one that would catch a
+       new kind arriving with no destination: each kind here is given the
+       reference its destination needs, and every one of them must produce a
+       link rather than the honest-label fallback. */
+    conversations.push(conversation({ turn_count: 1 }))
+    const kinds: { kind: string; refs: Record<string, string> }[] = [
+      { kind: 'strategy', refs: { strategy_id: 's1' } },
+      { kind: 'backtest', refs: { strategy_id: 's1' } },
+      { kind: 'regime', refs: { strategy_id: 's1' } },
+      { kind: 'resample', refs: { strategy_id: 's1' } },
+      { kind: 'parameter_surface', refs: { strategy_id: 's1' } },
+      { kind: 'validation', refs: { strategy_id: 's1' } },
+      { kind: 'evidence', refs: { strategy_id: 's1' } },
+      { kind: 'port', refs: { strategy_id: 's1' } },
+      { kind: 'prop_simulation', refs: { account_id: 'a1' } },
+      { kind: 'analysis', refs: { strategy_id: 's1' } },
+      { kind: 'workspace', refs: { name: 'Desk' } },
+    ]
+    thread = {
+      conversation: conversation(),
+      turns: [
+        turn({
+          artifacts: kinds.map((item, index) => ({
+            artifact_id: `k${index}`,
+            kind: item.kind as never,
+            title: `${item.kind} artifact`,
+            refs: item.refs,
+            provenance: 'deterministic' as const,
+          })),
+        }),
+      ],
+    }
+    mount()
+    const links = await screen.findAllByText('Open')
+    expect(links).toHaveLength(kinds.length)
+    expect(screen.queryByText('No panel yet')).not.toBeInTheDocument()
   })
 })
 

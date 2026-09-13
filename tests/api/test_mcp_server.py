@@ -73,6 +73,7 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
         "strategy_definition",
         "strategy_dossier",
         "strategy_regimes",
+        "strategy_resample",
         "strategy_trades",
         "workspace_history",
     }

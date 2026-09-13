@@ -137,6 +137,74 @@ export function FanBands({
   )
 }
 
+/** A p05-median-p95 band over a resampled equity curve.
+ *
+ * Three lines rather than the five of `FanBands`, because three is what a
+ * resample comparison actually produces. Padding it out to five by repeating
+ * the outer pair would draw an interquartile band that was never computed --
+ * a shape carrying a claim nothing measured.
+ */
+export function PathBand({
+  p05,
+  median,
+  p95,
+  height = 240,
+}: {
+  p05: number[]
+  median: number[]
+  p95: number[]
+  height?: number
+}) {
+  const span = median.map((_, index) => (p95[index] ?? 0) - (p05[index] ?? 0))
+  return (
+    <ReactECharts
+      style={{ height }}
+      option={{
+        ...base(),
+        grid: { left: 58, right: 18, top: 16, bottom: 32 },
+        xAxis: { type: 'category', data: median.map((_, index) => index), ...axis() },
+        yAxis: { type: 'value', scale: true, ...axis() },
+        series: [
+          {
+            type: 'line' as const,
+            stack: 'band',
+            data: p05,
+            showSymbol: false,
+            silent: true,
+            lineStyle: { width: 0 },
+            areaStyle: { opacity: 0 },
+            tooltip: { show: false },
+          },
+          {
+            type: 'line' as const,
+            stack: 'band',
+            name: 'p05–p95',
+            data: span,
+            showSymbol: false,
+            silent: true,
+            lineStyle: { width: 0 },
+            areaStyle: { color: token('--s3', '#39c5cf'), opacity: 0.2 },
+          },
+          {
+            type: 'line' as const,
+            name: 'median',
+            data: median,
+            showSymbol: false,
+            lineStyle: { width: 1.6, color: token('--chart-up', '#3ddc97') },
+            markLine: {
+              silent: true,
+              symbol: 'none',
+              label: { show: false },
+              lineStyle: { color: token('--chart-axis', '#2a3037'), width: 1 },
+              data: [{ yAxis: 0 }],
+            },
+          },
+        ],
+      }}
+    />
+  )
+}
+
 export function EquityChart({ paths, start = 0 }: { paths: number[][]; start?: number }) {
   const series = paths.slice(0, 48).map((path, index) => ({
     type: 'line' as const,

@@ -9,6 +9,7 @@ import { computeStats, byPeriod, equityFrom, filterSide, type Side, type Stats }
 import { CurveChart, SweepChart } from '../charts'
 import { AnalysisChart, type AnalysisResult } from '../components/AnalysisChart'
 import { PortPanel } from '../components/PortPanel'
+import { ResamplePane } from '../components/ResamplePane'
 import { JobBar } from '../components/JobBar'
 import { Empty, PanelHead, Rolling, Stat, TierPill, VerdictPill } from '../components/ui'
 import { useJob } from '../hooks/useJob'
@@ -19,13 +20,16 @@ import type {
   SweepResult, TemplateInfo, Trade, ValidationEvidence, Verdict,
 } from '../types'
 
-type Pane = 'summary' | 'trades' | 'periods' | 'gates' | 'validation' | 'code' | 'port' | 'hypothesis'
+type Pane =
+  | 'summary' | 'trades' | 'periods' | 'gates' | 'validation' | 'resample' | 'code' | 'port'
+  | 'hypothesis'
 const PANES: { key: Pane; label: string }[] = [
   { key: 'summary', label: 'Summary' },
   { key: 'trades', label: 'Trades' },
   { key: 'periods', label: 'Periods' },
   { key: 'gates', label: 'Gates' },
   { key: 'validation', label: 'Validation' },
+  { key: 'resample', label: 'Resample' },
   { key: 'code', label: 'Code' },
   { key: 'port', label: 'Port' },
   { key: 'hypothesis', label: 'Hypothesis' },
@@ -356,6 +360,7 @@ export function StrategiesView({ open = '', pane: wanted = '' }: Opening = {}) {
                     onSave={(next) => saveSource.mutate(next)}
                   />
                 )}
+                {pane === 'resample' && selected && <ResamplePane strategyId={selected} />}
                 {pane === 'port' && selected && <PortPanel strategyId={selected} />}
                 {pane === 'hypothesis' && <HypothesisPane spec={spec} />}
               </div>
