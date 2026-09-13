@@ -65,6 +65,20 @@ from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.ledger_view import LedgerError, TradeLedgerService
 from forge_api.ledger_view import _TradeShim as _Shim
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
+from forge_api.model_routing import (
+    ROLES_BY_KEY,
+    RoleRouting,
+    RoutingMode,
+    RoutingSettings,
+    mode_rows,
+    role_rows,
+)
+from forge_api.model_routing import (
+    resolve as resolve_route,
+)
+from forge_api.model_routing import (
+    to_dict as routing_to_dict,
+)
 from forge_api.orchestrator import Orchestrator
 from forge_api.propdesk import PropDeskService
 from forge_api.providers import (
@@ -79,9 +93,14 @@ from forge_api.research_lab import ArtifactStore, LabError, ResearchLab
 from forge_api.settings_store import (
     ACCENTS,
     DENSITIES,
+    DEPTH_RESULTS,
+    DEPTHS,
+    FRESHNESS,
     KNOWN_MODELS,
     MOTIONS,
     ROLES,
+    SAFETY_LIMITS,
+    SOURCE_CATEGORIES,
     THEMES,
     AISettings,
     AppearanceSettings,
@@ -90,6 +109,125 @@ from forge_api.settings_store import (
     Settings,
     SettingsStore,
 )
+
+
+def _research_policy(store: SettingsStore) -> dict[str, Any]:
+    """The retrieval settings, as the director reads them.
+
+    A function rather than a captured dict: the director calls it per retrieval,
+    which is what makes the depth and freshness controls take effect without a
+    restart.
+    """
+    loop = store.load().research_loop
+    return {
+        "results": DEPTH_RESULTS.get(loop.depth, DEPTH_RESULTS["standard"]),
+        "freshness": loop.freshness,
+        "categories": list(loop.categories),
+    }
+
+
+def _one_of_key(value: str | None, options: list[dict[str, str]], current: str) -> str:
+    """A patch naming an option that does not exist leaves the value alone."""
+    if value is None:
+        return current
+    keys = {item["key"] for item in options}
+    if value not in keys:
+        raise HTTPException(422, {"code": "unknown_option", "value": value, "known": sorted(keys)})
+    return value
+
+
+def _research_categories(value: list[str] | None, current: list[str]) -> list[str]:
+    if value is None:
+        return list(current)
+    known = {item["key"] for item in SOURCE_CATEGORIES}
+    unknown = sorted(set(value) - known)
+    if unknown:
+        raise HTTPException(
+            422, {"code": "unknown_source_category", "categories": unknown, "known": sorted(known)}
+        )
+    # An empty list is a real choice — "search nothing" — and is kept rather
+    # than being treated as "search everything", which is the opposite.
+    return list(dict.fromkeys(value))
+
+
+def _apply_routing(
+    current: RoutingSettings, body: Any, valid: set[str]
+) -> RoutingSettings:
+    """Fold a patch into the routing settings, refusing anything that does not exist.
+
+    A model id or role key that is not real is refused with its name rather than
+    stored: a saved assignment nothing can serve is a settings screen showing a
+    choice that will never be honoured.
+    """
+    updated = RoutingSettings(
+        mode=current.mode,
+        default_model=current.default_model,
+        fallback_model=current.fallback_model,
+        allowed=list(current.allowed),
+        roles=dict(current.roles),
+    )
+    if body.routing_mode is not None:
+        if body.routing_mode not in set(RoutingMode):
+            raise HTTPException(
+                422,
+                {
+                    "code": "unknown_routing_mode",
+                    "mode": body.routing_mode,
+                    "known": sorted(RoutingMode),
+                },
+            )
+        updated.mode = body.routing_mode
+
+    def checked(model: str | None, field: str) -> str | None:
+        if model is None:
+            return None
+        if model and model not in valid:
+            raise HTTPException(422, {"code": "unknown_model", "model": model, "field": field})
+        return model
+
+    default = checked(body.routing_default_model, "routing_default_model")
+    if default is not None:
+        updated.default_model = default
+    fallback = checked(body.routing_fallback_model, "routing_fallback_model")
+    if fallback is not None:
+        updated.fallback_model = fallback
+    if body.routing_allowed is not None:
+        unknown = sorted(set(body.routing_allowed) - valid)
+        if unknown:
+            raise HTTPException(422, {"code": "unknown_model", "models": unknown})
+        updated.allowed = list(dict.fromkeys(body.routing_allowed))
+
+    # The flat `routing` patch stays supported and lands on the same roles.
+    for role, model in (body.routing or {}).items():
+        if role not in ROLES_BY_KEY:
+            continue
+        existing = updated.roles.get(role, RoleRouting())
+        updated.roles[role] = RoleRouting(
+            model=model, fallback=existing.fallback, enabled=existing.enabled,
+        )
+
+    for role, patch in (body.role_routing or {}).items():
+        spec = ROLES_BY_KEY.get(role)
+        if spec is None:
+            raise HTTPException(422, {"code": "unknown_role", "role": role})
+        existing = updated.roles.get(role, RoleRouting())
+        enabled = existing.enabled if patch.enabled is None else bool(patch.enabled)
+        if not spec.optional:
+            # A role the system cannot run without stays on whatever is asked.
+            # Silently accepting the switch and ignoring it would be worse than
+            # refusing it, so the interface never offers it and this is the
+            # backstop rather than the message.
+            enabled = True
+        updated.roles[role] = RoleRouting(
+            model=checked(patch.model, f"role_routing.{role}.model") or (
+                existing.model if patch.model is None else ""
+            ),
+            fallback=checked(patch.fallback, f"role_routing.{role}.fallback") or (
+                existing.fallback if patch.fallback is None else ""
+            ),
+            enabled=enabled,
+        )
+    return updated
 
 
 class StartEngineRequest(BaseModel):
@@ -116,12 +254,25 @@ class WorkerControlRequest(BaseModel):
     paused: bool
 
 
+class RolePatch(BaseModel):
+    """One role's model assignment. Every field optional; absent means unchanged."""
+
+    model: str | None = None
+    fallback: str | None = None
+    enabled: bool | None = None
+
+
 class SettingsPatch(BaseModel):
     ai_enabled: bool | None = None
     ai_provider: str | None = None
-    ai_base_url: str | None = None
     routing: dict[str, str] | None = None
+    routing_mode: str | None = None
+    routing_default_model: str | None = None
+    routing_fallback_model: str | None = None
+    routing_allowed: list[str] | None = None
+    role_routing: dict[str, RolePatch] | None = None
     budget: dict[str, float] | None = None
+    budget_enforced: bool | None = None
     default_dataset: str | None = None
     engine_cycle_seconds: float | None = Field(default=None, ge=1.0, le=300.0)
     engine_max_strategies: int | None = Field(default=None, ge=1, le=500)
@@ -129,6 +280,9 @@ class SettingsPatch(BaseModel):
     research_loop_enabled: bool | None = None
     research_interval_minutes: int | None = Field(default=None, ge=5, le=1440)
     research_topics: list[str] | None = Field(default=None, min_length=1, max_length=12)
+    research_categories: list[str] | None = None
+    research_freshness: str | None = None
+    research_depth: str | None = None
 
 
 class AskRequest(BaseModel):
@@ -483,6 +637,10 @@ def build_control_router(
         templates=templates,
         log=log,
         library=library,
+        # Read at call time, so an operator changing the research depth or the
+        # freshness preference changes the next retrieval rather than the next
+        # restart.
+        research_policy=lambda: _research_policy(settings_store),
     )
     # The engine asks the director what to research next. With no campaign
     # running the director returns nothing and the engine's original template
@@ -690,8 +848,13 @@ def build_control_router(
                 "ai": {
                     "enabled": current.ai.enabled,
                     "provider": current.ai.provider,
+                    # Derived from the provider id and not operator-editable.
+                    # Returned so the interface can *show* where calls go; it is
+                    # rendered as a fact rather than as a field somebody can type
+                    # into, because typing into it did nothing.
                     "base_url": current.ai.base_url,
                     "routing": current.ai.routing,
+                    "model_routing": routing_to_dict(current.ai.model_routing),
                     "budget": vars(current.ai.budget),
                     "gateway": gateway_status,
                 },
@@ -703,6 +866,29 @@ def build_control_router(
                 "models": catalog_for(current.ai.provider),
                 "providers": list(PROVIDERS),
                 "roles": ROLES,
+                "routing_roles": role_rows(),
+                "routing_modes": mode_rows(),
+                # What turning budget enforcement off does *not* turn off.
+                # Data rather than prose, so the screen cannot drift from the
+                # limits that are actually in force.
+                "safety_limits": SAFETY_LIMITS,
+                "research_options": {
+                    "categories": SOURCE_CATEGORIES,
+                    "freshness": FRESHNESS,
+                    "depths": DEPTHS,
+                },
+                # Every role resolved under the current settings, so the screen
+                # shows which model would actually answer and why — including a
+                # substitution the operator would otherwise never see.
+                "routing_preview": [
+                    resolve_route(
+                        role["key"],
+                        current.ai.model_routing,
+                        provider=current.ai.provider,
+                        catalogue=catalog_for(current.ai.provider),
+                    ).as_dict()
+                    for role in role_rows()
+                ],
                 "credentials": SettingsStore.credential_status(),
                 "appearance": vars(current.appearance),
                 # The options travel with the value, so the interface never has
@@ -752,7 +938,23 @@ def build_control_router(
         if provider != current.ai.provider:
             routing = {role: model_for(provider, model) for role, model in routing.items()}
 
-        budget = BudgetSettings(**{**vars(current.ai.budget), **(body.budget or {})})
+        budget_changes: dict[str, Any] = dict(body.budget or {})
+        known_budget = set(vars(current.ai.budget))
+        unknown = sorted(set(budget_changes) - known_budget)
+        if unknown:
+            raise HTTPException(422, {"code": "unknown_budget_field", "fields": unknown})
+        if body.budget_enforced is not None:
+            budget_changes["enforced"] = body.budget_enforced
+        budget = BudgetSettings(**{**vars(current.ai.budget), **budget_changes})
+
+        model_routing = _apply_routing(current.ai.model_routing, body, valid)
+        # The flat mapping is what the existing callers read, so a change made
+        # through the richer form has to reach it too. Two tables that can
+        # disagree are two tables, one of which is wrong.
+        routing = {
+            role: model_routing.for_role(role).model or routing.get(role, "")
+            for role in routing
+        }
         updated = Settings(
             # Carried through explicitly: `Settings` is rebuilt wholesale here,
             # so anything not named would silently revert to its default.
@@ -762,6 +964,7 @@ def build_control_router(
                 provider=provider,
                 base_url=proposed_url,
                 routing=routing,
+                model_routing=model_routing,
                 budget=budget,
             ),
             research_loop=ResearchLoopSettings(
@@ -770,6 +973,13 @@ def build_control_router(
                 else body.research_loop_enabled,
                 interval_minutes=body.research_interval_minutes
                 or current.research_loop.interval_minutes,
+                categories=_research_categories(
+                    body.research_categories, current.research_loop.categories
+                ),
+                freshness=_one_of_key(
+                    body.research_freshness, FRESHNESS, current.research_loop.freshness
+                ),
+                depth=_one_of_key(body.research_depth, DEPTHS, current.research_loop.depth),
                 topics=(
                     [topic.strip()[:240] for topic in body.research_topics if topic.strip()]
                     or current.research_loop.topics

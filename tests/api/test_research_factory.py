@@ -32,10 +32,13 @@ from forge.memory.research import FailureClass
 from forge.research import ResearchLedger
 from forge.research.allocation import Bucket
 from forge.research.frontier import FrontierState, SearchKind
+from forge.research.grammar import OBSERVABLES, SHAPES
 from forge.research.journal import EventKind
+from forge.research.mechanisms import MECHANISMS
 from forge.research.promotion import PromotionOutcome, outcome_from_verdict
 from forge.research.synthesis import ARCHETYPES
 from forge.strategy import TEMPLATES, FamilyRegistry, StrategyLibrary, TemplateStore
+from forge.strategy.primitives import SERIES_KINDS
 from forge.vault import Workspace
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.campaigns import CampaignService
@@ -406,9 +409,27 @@ def test_web_research_is_absent_rather_than_invented_when_disabled(factory) -> N
         assert node.sources == ()
 
 
-def test_the_archetype_vocabulary_is_bounded_and_inspectable(factory) -> None:
-    """An agent may compose from a menu; it may not invent an indicator."""
+def test_the_construction_vocabulary_is_closed_and_inspectable(factory) -> None:
+    """An agent may compose from a menu; it may not invent an indicator.
+
+    The menu has two halves now. A construction is either one of the written
+    archetypes or one the grammar assembled, and an assembled one carries the
+    record of every slot it filled — shape, observable, transformation, stance,
+    gate — plus the structural signature the novelty gate compares. What is
+    asserted is that there is no third kind: nothing reaches the template
+    catalogue without one of those two provenances.
+    """
     engine, service = factory
     run_campaign(engine, service)
-    for record in service.director.generated_templates().values():
-        assert record["archetype"] in ARCHETYPES
+    records = service.director.generated_templates().values()
+    assert records
+    for record in records:
+        if record["archetype"] in ARCHETYPES:
+            continue
+        construction = record.get("construction")
+        assert construction, record["archetype"]
+        assert construction["shape"] in SHAPES
+        assert construction["observable"] in OBSERVABLES
+        assert not construction["transform"] or construction["transform"] in SERIES_KINDS
+        assert construction["signature"] == record["structural_signature"]
+        assert record["mechanism"] in MECHANISMS

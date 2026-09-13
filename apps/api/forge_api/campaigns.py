@@ -28,14 +28,19 @@ from forge.research.agents import (
     capacity_for,
 )
 from forge.research.campaign import CampaignError, CampaignStore
+from forge.research.effectiveness import score as score_agents
 from forge.research.frontier import FrontierState, ResearchFrontier
+from forge.research.grammar import vocabulary_summary
 from forge.research.hypotheses import HypothesisError, HypothesisGraph
 from forge.research.journal import ResearchJournal
 from forge.research.literature import SourceStore
+from forge.research.mechanisms import catalogue_rows as mechanism_rows
 from forge.research.orchestration import ResearchOrchestrator
 from forge.research.promotion import PromotionQueue
 from forge.research.skips import SkipKind, SkipLedger
 from forge.research.synthesis import ARCHETYPES
+from forge.strategy.primitives import CATALOGUE, SERIES_KINDS
+from forge.strategy.primitives import catalogue_rows as primitive_rows
 from pydantic import BaseModel, Field
 
 from forge_api.director import ResearchDirector
@@ -267,6 +272,13 @@ class CampaignService:
         }
 
 
+def _primitives_by_category() -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in CATALOGUE.values():
+        counts[item.category] = counts.get(item.category, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _frontier_totals(service: CampaignService, campaigns: Any) -> dict[str, int]:
     """Frontier states summed across campaigns, with every state present.
 
@@ -341,6 +353,43 @@ def build_campaign_router(
             ]
         )
 
+    @router.get("/vocabulary")
+    def construction_vocabulary() -> ApiEnvelope[dict[str, Any]]:
+        """Everything the research engine can build a signal out of.
+
+        "How large is the construction vocabulary?" was the question the last
+        audit could only answer by reading the source, and the answer it found
+        was the bottleneck: ten fixed signals, whatever else varied. So the
+        number is computed from the vocabulary itself and returned, and the
+        interface shows it rather than a claim about it.
+
+        Counted, not asserted: `distinct_triggers` is the number of structurally
+        different signals the grammar can assemble, and `reachable_signatures`
+        multiplies that by the regime gates each can carry. Neither is a promise
+        that they are all worth running.
+        """
+        summary = vocabulary_summary()
+        return ApiEnvelope(
+            data={
+                "primitives": {
+                    "total": len(CATALOGUE),
+                    "observations": len(CATALOGUE) - len(SERIES_KINDS),
+                    "transformations": len(SERIES_KINDS),
+                    "by_category": _primitives_by_category(),
+                    "rows": primitive_rows(),
+                },
+                "mechanisms": mechanism_rows(),
+                "grammar": summary,
+                "written_archetypes": len(ARCHETYPES),
+                "note": (
+                    "A construction is either one of the written archetypes or one the "
+                    "grammar assembled from these primitives. There is no third kind, and "
+                    "nothing here can express a computation the catalogue does not "
+                    "already implement and test."
+                ),
+            }
+        )
+
     @router.get("/active")
     def active_campaign() -> ApiEnvelope[dict[str, Any] | None]:
         """The highest-priority running campaign.
@@ -409,6 +458,15 @@ def build_campaign_router(
                 "allocation": service.orchestrator.snapshot(),
                 "agents": service.agents.counts(),
                 "skips": service.skips.counts(),
+                # The registry counts experiments and the skip ledger counts
+                # refusals, and neither alone can tell the difference between an
+                # agent doing research and one producing activity. Joined here
+                # rather than in the interface, so the two halves cannot be
+                # rendered from different reads of different stores.
+                "effectiveness": score_agents(
+                    [agent.as_dict() for agent in service.agents.list()],
+                    service.skips.list(limit=4000),
+                ).as_dict(),
                 "validation": {
                     "attempts": attempts,
                     "passed": outcomes.get("PASS", 0),

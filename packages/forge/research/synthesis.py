@@ -38,6 +38,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from forge.research.grammar import (
+    OBSERVABLES,
+    SIGNATURE_PREFIX,
+    ConstructionSpec,
+    build,
+)
 from forge.strategy.ir import (
     Arithmetic,
     Combine,
@@ -56,6 +62,7 @@ from forge.strategy.ir import (
     StrategyDefinition,
 )
 from forge.strategy.models import ParameterSpec
+from forge.strategy.primitives import primitive
 
 #: The reference instant stamped on generated definitions' provenance. Fixed so
 #: that the same composition hashes identically across processes — a discovery
@@ -122,6 +129,13 @@ class Archetype:
     #: True when the effect is claimed to persist rather than revert, which
     #: decides whether a trailing exit or a fixed target is coherent with it.
     continuation: bool = True
+    #: Set when this archetype was *assembled* by `forge.research.grammar`
+    #: rather than written out below. Carries the grammar's structural
+    #: signature, so an assembled construction has an identity the novelty gate
+    #: can compare without anybody re-deriving it from the rendered condition.
+    construction: dict[str, Any] | None = None
+    #: The mechanism key, when one was chosen from the mechanism vocabulary.
+    mechanism_key: str = ""
 
     def feature_names(self) -> frozenset[str]:
         return frozenset(f.kind for f in self.features)
@@ -789,7 +803,15 @@ def archetypes_for(family: str) -> list[Archetype]:
 
 @dataclass(frozen=True)
 class Composition:
-    """A generated definition and the record of how it was put together."""
+    """A generated definition and the record of how it was put together.
+
+    ``construction`` is present when the signal was *assembled* by
+    :mod:`forge.research.grammar` rather than selected from the fixed archetype
+    vocabulary. It carries the grammar's own structural signature, which is what
+    the novelty gate compares — two assemblies that landed on the same shape,
+    observable, transformation and stance are the same construction however
+    differently their hypotheses are worded.
+    """
 
     definition: StrategyDefinition
     archetype: str
@@ -798,9 +820,23 @@ class Composition:
     exit_style: str
     seed: int
     features: frozenset[str] = field(default_factory=frozenset)
+    construction: dict[str, Any] | None = None
+    mechanism: str = ""
+
+    @property
+    def structural_signature(self) -> str:
+        """What this construction *is*, ignoring its numbers.
+
+        An assembled construction has the grammar's signature; a fixed archetype
+        is its own signature. Either way this is the identity two proposals are
+        compared on, and it deliberately excludes every lookback and threshold.
+        """
+        if self.construction:
+            return str(self.construction.get("signature") or self.archetype)
+        return self.archetype
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "definition_id": self.definition.definition_id,
             "definition_hash": self.definition.definition_hash,
             "archetype": self.archetype,
@@ -809,7 +845,13 @@ class Composition:
             "exit_style": self.exit_style,
             "seed": self.seed,
             "features": sorted(self.features),
+            "structural_signature": self.structural_signature,
         }
+        if self.construction:
+            payload["construction"] = self.construction
+        if self.mechanism:
+            payload["mechanism"] = self.mechanism
+        return payload
 
 
 #: How a trade is left. Each is coherent with a different claim about the effect:
@@ -962,6 +1004,8 @@ def compose(
         exit_style=exit_style,
         seed=seed,
         features=frozenset(f.kind for f in arch.features),
+        construction=arch.construction,
+        mechanism=arch.mechanism_key,
     )
 
 
@@ -1000,3 +1044,160 @@ def required_data(archetypes: Sequence[Archetype | str]) -> tuple[str, ...]:
         arch = ARCHETYPES[item] if isinstance(item, str) else item
         needed.update(arch.required_data)
     return tuple(sorted(needed))
+
+
+# ── assembled constructions ──────────────────────────────────────────────────
+# The archetype vocabulary above is ten fixed signals. Everything below composes
+# one instead, from `forge.research.grammar`. The two share this module's exits,
+# sessions and provenance on purpose: an assembled construction is a strategy
+# by exactly the same route a selected one is, and there is no second pipeline
+# for it to take.
+
+
+def archetype_from_spec(spec: ConstructionSpec, *, key: str = "") -> Archetype:
+    """An assembled construction, wearing the archetype shape the pipeline uses.
+
+    This is the join between the two halves of the vocabulary, and it is
+    deliberately a *conversion* rather than a second route. An assembled
+    construction becomes a real :class:`Archetype`, so everything downstream —
+    ``compose``, the template store, the novelty gate, the frontier, the
+    campaign record — runs exactly the code it already ran. There is no parallel
+    pipeline for an assembled strategy to take, and therefore no second set of
+    protections to keep in step.
+
+    Risk is sized in ATR whatever the signal reads, so a construction that
+    observes no volatility still has a stop in a unit that means something. The
+    feature is added here under the name the exits already expect.
+    """
+    built = build(spec)
+    mechanism = built.mechanism
+    features = built.features
+    if not any(item.name == "atr" for item in features):
+        features = (*features, Feature(name="atr", kind="atr", args=(Constant(value=14),)))
+    # The claim leads with *this* construction and refers to the mechanism
+    # rather than quoting it. The mechanism paragraph is shared by every
+    # construction testing that mechanism, so quoting it in full made two
+    # structurally different hypotheses read as near-identical text — and the
+    # novelty gate, which compares text, refused them. The mechanism still
+    # travels in full on the archetype's `mechanism` field, where it is compared
+    # against other mechanisms rather than against other constructions.
+    reason = mechanism.claim.split(". ")[0].rstrip(".")
+    claim = (
+        f"When {built.description}, {{direction}} follow-through is expected. "
+        f"The mechanism offered is {mechanism.label.lower()}: "
+        f"{reason[0].lower()}{reason[1:]}."
+    )
+    return Archetype(
+        key=key or f"grammar_{spec.shape}_{spec.signature[:SIGNATURE_PREFIX]}",
+        label=spec.label[:110],
+        family=_family_for(built),
+        mechanism=mechanism.claim,
+        claim=claim,
+        prediction=mechanism.describe(OBSERVABLES[spec.observable].label.lower()),
+        features=features,
+        parameters=built.parameters,
+        long_condition=built.long,
+        short_condition=built.short,
+        required_data=tuple(sorted({primitive(f.kind).data_requirement for f in features})),
+        risk_feature="atr",
+        continuation=mechanism.stance == "continuation",
+        construction={**spec.as_dict(), "signature": spec.signature, "label": spec.label},
+        mechanism_key=mechanism.key,
+    )
+
+
+def compose_construction(
+    spec: ConstructionSpec,
+    *,
+    family: str | None = None,
+    symbol: str = "NQ",
+    timeframe: str = "1m",
+    seed: int = 0,
+    direction: str | None = None,
+    session: str | None = None,
+    exit_style: str | None = None,
+    derived_from: str = "grammar",
+    note: str = "",
+) -> Composition:
+    """Compose an executable definition from an assembled construction.
+
+    A thin wrapper on :func:`compose`, and that is the point: the exit choice,
+    the session gate, the parameter merge and the provenance are the same code
+    whether the signal was selected or assembled.
+    """
+    return compose(
+        archetype=archetype_from_spec(spec),
+        family=family,
+        symbol=symbol,
+        timeframe=timeframe,
+        seed=seed,
+        direction=direction,
+        session=session,
+        exit_style=exit_style,
+        derived_from=derived_from,
+        note=note,
+    )
+
+
+#: Feature categories mapped onto the family vocabulary the rest of the system
+#: already uses. A construction reading volatility belongs in the volatility
+#: family whether it was selected or assembled, so the two halves of the
+#: vocabulary land in the same catalogue rather than beside it.
+#:
+#: Every value here is a key in `forge.strategy.families.BUILTIN_FAMILIES`, and
+#: a test asserts it. A family the registry has never heard of does not fail at
+#: composition — it fails later, when the template store refuses the write, and
+#: the campaign records a cycle error for a construction that was fine.
+_FAMILY_BY_CATEGORY: tuple[tuple[str, str], ...] = (
+    ("session", "session_structure"),
+    ("volatility", "volatility"),
+    ("momentum", "momentum"),
+    ("trend", "momentum"),
+    ("volume", "liquidity"),
+    ("microstructure", "microstructure"),
+    ("oscillator", "mean_reversion"),
+    ("range", "breakout"),
+    ("price", "breakout"),
+)
+
+#: Where a construction lands when nothing else matches. Breakout rather than a
+#: new name, because inventing a family here would put a key in the catalogue
+#: that the registry refuses.
+_DEFAULT_FAMILY = "breakout"
+
+
+def _family_for(built: Any) -> str:
+    if built.mechanism.stance == "reversion" and "session" in built.categories:
+        return "mean_reversion"
+    for category, family in _FAMILY_BY_CATEGORY:
+        if category in built.categories:
+            return family
+    return _DEFAULT_FAMILY
+
+
+#: Where an assembled archetype's key starts. Used to recover the structural
+#: signature from a generated template's key after a restart, so a campaign
+#: resumed later does not re-propose constructions it already built.
+GRAMMAR_KEY_PREFIX = "grammar_"
+
+
+def signature_from_key(key: str) -> str:
+    """The structural signature prefix inside an assembled archetype's key, if any.
+
+    A generated template is named for the archetype it came from, and an
+    assembled archetype is named for its own signature. That makes the template
+    catalogue on disk a durable record of which constructions a campaign has
+    already built — which is the only record that survives a restart, and
+    therefore the only one that can stop a resumed campaign proposing its own
+    earlier work and being refused for it.
+    """
+    marker = key.find(GRAMMAR_KEY_PREFIX)
+    if marker < 0:
+        return ""
+    parts = key[marker + len(GRAMMAR_KEY_PREFIX) :].split("_")
+    # shape names contain underscores, so the signature is the last part that
+    # looks like one: hex, and exactly the prefix length.
+    for part in reversed(parts):
+        if len(part) == SIGNATURE_PREFIX and all(c in "0123456789abcdef" for c in part):
+            return part
+    return ""

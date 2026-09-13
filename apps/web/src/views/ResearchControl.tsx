@@ -11,6 +11,8 @@ import {
   type Campaign, type CampaignRuntime, type ResearchAgent,
 } from '../research'
 import type { EngineStatus } from '../types'
+import { AgentEffectiveness } from './AgentEffectiveness'
+import { VocabularyPanel } from './Vocabulary'
 
 /* The Research Control Center.
  *
@@ -123,6 +125,14 @@ export function ResearchControlView() {
           </p>
         </section>
       </div>
+
+      {/* What the refusals above are refusals *against*. A duplicate rate means
+        * nothing without knowing how large the space being searched is: 94% of
+        * proposals refused is a saturated vocabulary or a disciplined gate, and
+        * only this panel separates the two. */}
+      <VocabularyPanel />
+
+      <AgentEffectiveness data={data?.effectiveness} />
 
       {engine.data?.runtime && !engine.data.runtime.working
         && engine.data.runtime.state !== 'STOPPED' && (

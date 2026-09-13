@@ -31,6 +31,15 @@ an agent may compose a strategy, not invent an indicator with unknown
 semantics. Adding a feature is a code change with an implementation and a test
 behind it, which is what stops the IR from ever describing something that cannot
 be computed or exported.
+
+**A feature may read another feature's history.** :mod:`forge.strategy.primitives`
+splits the closed set in two: observations computed from the bars, and
+transformations computed from a named source feature's own past values. That is
+what turns a list of indicators into a vocabulary — "ATR" and "how unusual this
+ATR is against its own last hundred" are different observations, and only the
+second one can state a regime. The source is a declared feature name, so the
+dependency is data the validator can check and the evaluator can order; it is
+not arithmetic somebody generated.
 """
 
 from __future__ import annotations
@@ -44,43 +53,28 @@ from pydantic import Field
 from forge.contracts.hashing import content_hash, stable_id
 from forge.contracts.models import FrozenModel
 from forge.strategy.models import ParameterSpec, ParamValue
+from forge.strategy.primitives import (
+    ARITY as FEATURE_ARITY,
+)
+from forge.strategy.primitives import (
+    SERIES_KINDS,
+    apply_transform,
+    primitive,
+    window_length,
+)
 
 IR_SCHEMA_VERSION = "1"
 
-#: Every feature the IR can compute, and how many arguments it takes. Closed on
-#: purpose: see the module docstring.
-FEATURE_ARITY: dict[str, int] = {
-    "close": 0,
-    "open": 0,
-    "high": 0,
-    "low": 0,
-    "volume": 0,
-    "sma": 1,
-    # A signal about liquidity has to be able to say "compared with usual". The
-    # raw `volume` feature is an absolute count, and comparing it to a price
-    # average — the only other average the vocabulary had — is a category
-    # error that silently never fires. This is the baseline that makes the
-    # `liquidity` family reachable at all.
-    "volume_sma": 1,
-    "ema": 1,
-    "atr": 1,
-    "adx": 1,
-    "rsi": 1,
-    "highest": 1,
-    "lowest": 1,
-    "realised_vol": 1,
-    "roc": 1,
-    "session_vwap": 0,
-    "session_vwap_sd": 0,
-    "opening_range_high": 1,
-    "opening_range_low": 1,
-    "bars_since_session_open": 0,
-    "minute_of_day": 0,
-}
+#: How deep a chain of transformations may go. A transformation of a
+#: transformation is a real construction — the percentile rank of a rolling
+#: slope says something neither says alone — but the chain has to terminate, and
+#: a depth nobody bounded is a warmup nobody can compute.
+MAX_SOURCE_DEPTH = 3
 
-#: Features needing more history than their length argument implies. Used to
-#: derive a warmup that is sufficient rather than hopeful.
-_WARMUP_MULTIPLIER: dict[str, int] = {"adx": 3, "atr": 2, "rsi": 4, "ema": 5, "realised_vol": 2}
+#: Extra source history retained beyond what a transformation's own length
+#: requires. `Cross` reads its operands one bar back, so a transformation used
+#: in a cross needs one more value than its length implies; the rest is margin.
+_SERIES_MARGIN = 8
 
 
 class IRError(ValueError):
@@ -128,12 +122,19 @@ class Feature(FrozenModel):
     `shift` is how many closed bars back the value is read from. It is bounded
     below at zero: a negative shift is the only way this language could express
     a future bar, so it is not representable rather than merely discouraged.
+
+    `source` names another declared feature when `kind` is a transformation —
+    a z-score, a percentile rank, a slope. It is empty for every observation
+    computed straight from the bars, and the validator refuses either half of
+    that being wrong, because a transformation with no source has nothing to
+    transform and an observation with one is reading something it ignores.
     """
 
     name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")
     kind: str
     args: tuple[Operand, ...] = ()
     shift: int = Field(default=0, ge=0, le=500)
+    source: str = Field(default="", pattern=r"^([a-z][a-z0-9_]{0,31})?$")
     description: str = ""
 
 
@@ -301,19 +302,77 @@ class StrategyDefinition(FrozenModel):
         small does not fail — it silently produces NaN comparisons that read as
         "no signal", and a strategy that never trades looks like a strategy with
         no edge.
+
+        A transformation adds its own window on top of its source's, all the way
+        down the chain: the percentile rank of a 100-bar ATR over 200 values
+        needs both, not the larger of the two.
         """
+        by_name = {item.name: item for item in self.features}
         need = 1
         for item in self.features:
+            need = max(need, _feature_depth(item, by_name, self) + 2)
+        return max(self.warmup_bars, need + 5)
+
+    def source_history(self) -> dict[str, int]:
+        """How many past values of each feature the evaluator has to retain.
+
+        Only features that something else transforms appear here: an
+        observation nobody reads the history of is computed and discarded. The
+        number is what bounds the evaluator's memory, so it is derived from the
+        definition rather than guessed at with a constant.
+        """
+        by_name = {item.name: item for item in self.features}
+        retained: dict[str, int] = {}
+        for item in self.features:
+            if item.kind not in SERIES_KINDS or not item.source:
+                continue
             length = 1
             for arg in item.args:
                 length = max(length, int(_static_upper_bound(arg, self)))
-            need = max(need, length * _WARMUP_MULTIPLIER.get(item.kind, 1) + item.shift + 2)
-        return max(self.warmup_bars, need + 5)
+            span = window_length(item.kind, length) + item.shift + _SERIES_MARGIN
+            chain: str | None = item.source
+            depth = 0
+            while chain and depth <= MAX_SOURCE_DEPTH:
+                retained[chain] = max(retained.get(chain, 0), span)
+                parent = by_name.get(chain)
+                if parent is None or parent.kind not in SERIES_KINDS:
+                    break
+                inner = 1
+                for arg in parent.args:
+                    inner = max(inner, int(_static_upper_bound(arg, self)))
+                span += window_length(parent.kind, inner) + parent.shift
+                chain = parent.source or None
+                depth += 1
+        return retained
 
 
 Arithmetic.model_rebuild()
 Combine.model_rebuild()
 StrategyDefinition.model_rebuild()
+
+
+def _feature_depth(
+    item: Feature, by_name: dict[str, Feature], defn: StrategyDefinition, seen: int = 0
+) -> int:
+    """Bars of history one feature reads, following its source chain.
+
+    ``seen`` bounds the recursion independently of the validator, so this stays
+    total even if it is called on a definition that has not been validated yet —
+    which is exactly what `required_warmup` does when a caller sizes a dataset
+    before compiling.
+    """
+    length = 1
+    for arg in item.args:
+        length = max(length, int(_static_upper_bound(arg, defn)))
+    if item.kind in SERIES_KINDS:
+        own = window_length(item.kind, length) + item.shift
+        parent = by_name.get(item.source) if item.source else None
+        if parent is None or seen >= MAX_SOURCE_DEPTH:
+            return own
+        return own + _feature_depth(parent, by_name, defn, seen + 1)
+    spec = primitive(item.kind) if item.kind in FEATURE_ARITY else None
+    multiplier = spec.warmup_multiplier if spec else 1
+    return length * multiplier + item.shift
 
 
 def _static_upper_bound(operand: Any, defn: StrategyDefinition) -> float:
@@ -361,6 +420,7 @@ def validate_definition(defn: StrategyDefinition) -> StrategyDefinition:
     known_params = {p.name for p in defn.parameters}
     known_features = set(names)
 
+    by_name = {item.name: item for item in defn.features}
     for item in defn.features:
         arity = FEATURE_ARITY.get(item.kind)
         if arity is None:
@@ -375,6 +435,7 @@ def validate_definition(defn: StrategyDefinition) -> StrategyDefinition:
             )
         for arg in item.args:
             _check_operand(arg, known_params, known_features, f"feature '{item.name}'")
+        _check_source(item, by_name, defn)
 
     if not defn.entry.entered_anywhere():
         raise IRError("a strategy with no long and no short entry never takes a trade")
@@ -420,6 +481,79 @@ def validate_definition(defn: StrategyDefinition) -> StrategyDefinition:
     return defn
 
 
+def _check_source(item: Feature, by_name: dict[str, Feature], defn: StrategyDefinition) -> None:
+    """A transformation's source must exist, terminate, and be precomputable.
+
+    Three separate refusals, because they are three separate mistakes:
+
+    * a transformation with no source, or an observation carrying one, is a
+      declaration that contradicts its own kind;
+    * a chain that revisits a name never terminates, and the evaluator that
+      walks it would not either;
+    * a source whose *length* depends on another feature cannot be given a
+      fixed history window, so its own history cannot be retained — and a
+      transformation over a source the evaluator cannot keep is a value that
+      would silently be NaN for the whole run.
+    """
+    is_transform = item.kind in SERIES_KINDS
+    if is_transform and not item.source:
+        raise IRError(
+            f"feature '{item.name}' ({item.kind}) transforms a source series but names none. "
+            "Set `source` to another declared feature."
+        )
+    if not is_transform and item.source:
+        raise IRError(
+            f"feature '{item.name}' ({item.kind}) is computed from the bars and must not "
+            f"name a source, but names '{item.source}'."
+        )
+    if not is_transform:
+        return
+
+    seen = [item.name]
+    cursor: str | None = item.source
+    depth = 0
+    while cursor:
+        if cursor in seen:
+            raise IRError(
+                "transformation chain loops back on itself: " + " -> ".join([*seen, cursor])
+            )
+        parent = by_name.get(cursor)
+        if parent is None:
+            raise IRError(
+                f"feature '{item.name}' transforms '{cursor}', which is not declared. "
+                f"Declared: {', '.join(sorted(by_name)) or 'none'}"
+            )
+        if any(_has_feature_ref(arg) for arg in parent.args):
+            raise IRError(
+                f"feature '{item.name}' transforms '{parent.name}', whose length is itself a "
+                "feature. A transformation needs a source with a fixed window, so its history "
+                "can be retained."
+            )
+        seen.append(cursor)
+        depth += 1
+        if depth > MAX_SOURCE_DEPTH:
+            raise IRError(
+                f"transformation chain is deeper than {MAX_SOURCE_DEPTH}: "
+                + " -> ".join(seen)
+                + ". A longer chain needs more warmup than it explains."
+            )
+        cursor = parent.source or None
+    if any(_has_feature_ref(arg) for arg in item.args):
+        raise IRError(
+            f"feature '{item.name}' is a transformation whose length is itself a feature. "
+            "Transformation windows must be a constant or a parameter."
+        )
+    _ = defn
+
+
+def _has_feature_ref(operand: Any) -> bool:
+    if isinstance(operand, FeatureRef):
+        return True
+    if isinstance(operand, Arithmetic):
+        return _has_feature_ref(operand.left) or _has_feature_ref(operand.right)
+    return False
+
+
 def _check_operand(operand: Any, params: set[str], features: set[str], where: str) -> None:
     if isinstance(operand, ParamRef):
         if operand.name not in params:
@@ -451,29 +585,66 @@ def _check_condition(condition: Any, params: set[str], features: set[str], where
 
 
 class _Frame:
-    """The arrays a definition is evaluated against.
+    """The arrays a definition is evaluated against, as of one bar.
 
     Constructed from the `Window` the runtime hands the strategy, so it inherits
     the window's right bound: the last element is the last closed bar and
     nothing past it exists in the arrays.
+
+    ``end`` moves that bound *earlier*, never later. A frame at ``end`` is the
+    window as it stood when bar ``end`` closed, which is what makes a feature's
+    value at a past bar a fixed number rather than something that changes as
+    the run advances. That property is what lets the evaluator compute a value
+    once and keep it — and a value that could change later would be a value
+    that had seen later bars.
+
+    The bound is carried as ``stop`` rather than by slicing. Slicing five arrays
+    to build a frame is cheap but not free, and a frame is built for every
+    distinct offset a condition reads; `stop` gives the same guarantee — nothing
+    reads past it — for the cost of an integer.
     """
 
-    __slots__ = ("c", "h", "index", "l", "o", "session_start", "v", "window")
+    __slots__ = ("_session", "c", "h", "index", "l", "o", "offset", "stop", "v", "window")
 
-    def __init__(self, window: Any) -> None:
+    def __init__(self, window: Any, end: int | None = None) -> None:
         self.window = window
+        index = window.index if end is None else min(int(end), window.index)
         self.o = window.opens
         self.h = window.highs
         self.l = window.lows
         self.c = window.closes
         self.v = window.volumes
-        self.index = window.index
-        self.session_start = window.session_start_index()
+        self.index = index
+        self.stop = index + 1
+        #: How far this frame sits behind the window's own last bar, so
+        #: timestamp lookups resolve against this bar rather than that one.
+        self.offset = window.index - index
+        self._session = -1
+
+    @property
+    def session_start(self) -> int:
+        """First bar of this bar's session. Resolved once, and only if asked.
+
+        Most features never touch the session, and the lookup is a search over
+        the timestamps — paying for it on every frame made session-blind
+        strategies slower for nothing.
+        """
+        if self._session < 0:
+            self._session = int(self.window.session_start_index(self.index))
+        return self._session
+
+    def time_at(self, back: int) -> Any:
+        return self.window.time_at(self.offset + back)
 
 
-def _tail(array: np.ndarray, shift: int, length: int) -> np.ndarray:
-    """The `length` values ending `shift` bars before the last closed bar."""
-    stop = array.size - shift
+def _tail(array: np.ndarray, bound: int, shift: int, length: int) -> np.ndarray:
+    """The `length` values ending `shift` bars before bar ``bound - 1``.
+
+    ``bound`` is the frame's right edge rather than the array's, so a frame at
+    an earlier bar reads an earlier slice of the same array without anybody
+    having to copy it.
+    """
+    stop = bound - shift
     start = stop - length
     if start < 0 or stop <= 0:
         return np.empty(0, dtype=np.float64)
@@ -493,18 +664,76 @@ def _feature_value(frame: _Frame, item: Feature, args: list[float], shift: int) 
             "low": frame.l,
             "volume": frame.v,
         }[kind]
-        idx = source.size - 1 - total
+        idx = frame.stop - 1 - total
         return float(source[idx]) if idx >= 0 else nan
 
+    if kind == "typical_price":
+        idx = frame.stop - 1 - total
+        if idx < 0:
+            return nan
+        return float((frame.h[idx] + frame.l[idx] + frame.c[idx]) / 3.0)
+
+    if kind == "bar_range":
+        idx = frame.stop - 1 - total
+        return float(frame.h[idx] - frame.l[idx]) if idx >= 0 else nan
+
+    if kind == "true_range":
+        idx = frame.stop - 1 - total
+        if idx < 1:
+            return nan
+        prior_close = float(frame.c[idx - 1])
+        bar_high, bar_low = float(frame.h[idx]), float(frame.l[idx])
+        return float(
+            max(
+                bar_high - bar_low,
+                abs(bar_high - prior_close),
+                abs(bar_low - prior_close),
+            )
+        )
+
+    if kind == "gap":
+        idx = frame.stop - 1 - total
+        if idx < 1:
+            return nan
+        return float(frame.o[idx] - frame.c[idx - 1])
+
+    if kind in ("clv", "signed_volume"):
+        idx = frame.stop - 1 - total
+        if idx < 0:
+            return nan
+        bar_high = float(frame.h[idx])
+        bar_low = float(frame.l[idx])
+        bar_close = float(frame.c[idx])
+        span = bar_high - bar_low
+        if span <= 0:
+            return nan
+        location = ((bar_close - bar_low) - (bar_high - bar_close)) / span
+        return location if kind == "clv" else location * float(frame.v[idx])
+
+    if kind in ("session_high", "session_low", "session_range_position"):
+        stop = frame.stop - total
+        start = frame.session_start
+        if stop <= start:
+            return nan
+        session_high = float(frame.h[start:stop].max())
+        session_low = float(frame.l[start:stop].min())
+        if kind == "session_high":
+            return session_high
+        if kind == "session_low":
+            return session_low
+        if session_high <= session_low:
+            return nan
+        return float((frame.c[stop - 1] - session_low) / (session_high - session_low))
+
     if kind == "minute_of_day":
-        stamp = frame.window.time_at(total)
+        stamp = frame.time_at(total)
         return nan if stamp is None else float(stamp.hour * 60 + stamp.minute)
 
     if kind == "bars_since_session_open":
         return float(max(0, frame.index - total - frame.session_start))
 
     if kind in ("session_vwap", "session_vwap_sd"):
-        stop = frame.c.size - total
+        stop = frame.stop - total
         start = frame.session_start
         if stop <= start:
             return nan
@@ -523,7 +752,7 @@ def _feature_value(frame: _Frame, item: Feature, args: list[float], shift: int) 
     if kind in ("opening_range_high", "opening_range_low"):
         bars = max(1, int(args[0]))
         start = frame.session_start
-        stop = min(start + bars, frame.c.size - total)
+        stop = min(start + bars, frame.stop - total)
         if stop <= start:
             return nan
         return (
@@ -535,17 +764,17 @@ def _feature_value(frame: _Frame, item: Feature, args: list[float], shift: int) 
     length = max(1, int(args[0])) if args else 1
 
     if kind == "sma":
-        values = _tail(frame.c, total, length)
+        values = _tail(frame.c, frame.stop, total, length)
         return float(values.mean()) if values.size == length else nan
 
     if kind == "volume_sma":
-        values = _tail(frame.v, total, length)
+        values = _tail(frame.v, frame.stop, total, length)
         return float(values.mean()) if values.size == length else nan
 
     if kind == "ema":
         span = max(2, length)
         depth = span * 5
-        values = _tail(frame.c, total, depth)
+        values = _tail(frame.c, frame.stop, total, depth)
         if values.size < depth:
             return nan
         alpha = 2.0 / (span + 1.0)
@@ -553,37 +782,88 @@ def _feature_value(frame: _Frame, item: Feature, args: list[float], shift: int) 
         return float((values * weights).sum() / weights.sum())
 
     if kind == "highest":
-        values = _tail(frame.h, total, length)
+        values = _tail(frame.h, frame.stop, total, length)
         return float(values.max()) if values.size == length else nan
 
     if kind == "lowest":
-        values = _tail(frame.l, total, length)
+        values = _tail(frame.l, frame.stop, total, length)
         return float(values.min()) if values.size == length else nan
 
     if kind == "atr":
-        high = _tail(frame.h, total, length)
-        low = _tail(frame.l, total, length)
-        prev = _tail(frame.c, total + 1, length)
-        if high.size != length or prev.size != length:
+        highs = _tail(frame.h, frame.stop, total, length)
+        lows = _tail(frame.l, frame.stop, total, length)
+        prev = _tail(frame.c, frame.stop, total + 1, length)
+        if highs.size != length or prev.size != length:
             return nan
-        true_range = np.maximum(high - low, np.maximum(np.abs(high - prev), np.abs(low - prev)))
+        true_range = np.maximum(highs - lows, np.maximum(np.abs(highs - prev), np.abs(lows - prev)))
         return float(true_range.mean())
 
     if kind == "realised_vol":
-        values = _tail(frame.c, total, length + 1)
+        values = _tail(frame.c, frame.stop, total, length + 1)
         if values.size != length + 1 or bool((values <= 0).any()):
             return nan
         return float(np.diff(np.log(values)).std(ddof=1))
 
+    if kind in ("upside_vol", "downside_vol"):
+        values = _tail(frame.c, frame.stop, total, length + 1)
+        if values.size != length + 1 or bool((values <= 0).any()):
+            return nan
+        returns = np.diff(np.log(values))
+        side = returns[returns > 0] if kind == "upside_vol" else returns[returns < 0]
+        # Two observations is the minimum a sample deviation is defined on.
+        # Reporting zero for one observation would say "no volatility on this
+        # side" when what happened is that there was one move.
+        return float(side.std(ddof=1)) if side.size >= 2 else nan
+
     if kind == "roc":
-        values = _tail(frame.c, total, length + 1)
+        values = _tail(frame.c, frame.stop, total, length + 1)
         if values.size != length + 1 or values[0] == 0:
             return nan
         return float((values[-1] - values[0]) / values[0])
 
+    if kind == "efficiency_ratio":
+        values = _tail(frame.c, frame.stop, total, length + 1)
+        if values.size != length + 1:
+            return nan
+        path = float(np.abs(np.diff(values)).sum())
+        if path <= 0:
+            return nan
+        return float(abs(values[-1] - values[0]) / path)
+
+    if kind == "variance_ratio":
+        # Overlapping q-period returns against q times the one-period variance,
+        # over a window long enough for both estimates to mean something. The
+        # multiplier is stated in `primitives.window_length`, so the warmup
+        # this needs is derived from the same number.
+        depth = length * 5
+        values = _tail(frame.c, frame.stop, total, depth + 1)
+        if values.size != depth + 1 or bool((values <= 0).any()) or length < 2:
+            return nan
+        logs = np.log(values)
+        single = np.diff(logs)
+        multi = logs[length:] - logs[:-length]
+        if single.size < 2 or multi.size < 2:
+            return nan
+        base = float(single.var(ddof=1))
+        if base <= 0:
+            return nan
+        return float(multi.var(ddof=1) / (length * base))
+
+    if kind == "return_autocorr":
+        values = _tail(frame.c, frame.stop, total, length + 2)
+        if values.size != length + 2 or bool((values <= 0).any()) or length < 3:
+            return nan
+        returns = np.diff(np.log(values))
+        first, second = returns[:-1], returns[1:]
+        spread = float(first.std(ddof=1)) * float(second.std(ddof=1))
+        if spread <= 0:
+            return nan
+        covariance = float(((first - first.mean()) * (second - second.mean())).sum())
+        return float(covariance / ((first.size - 1) * spread))
+
     if kind == "rsi":
         depth = length * 4
-        values = _tail(frame.c, total, depth)
+        values = _tail(frame.c, frame.stop, total, depth)
         if values.size < depth:
             return nan
         delta = np.diff(values)
@@ -595,9 +875,9 @@ def _feature_value(frame: _Frame, item: Feature, args: list[float], shift: int) 
 
     if kind == "adx":
         span = length * 3
-        high = _tail(frame.h, total, span)
-        low = _tail(frame.l, total, span)
-        close = _tail(frame.c, total, span)
+        high = _tail(frame.h, frame.stop, total, span)
+        low = _tail(frame.l, frame.stop, total, span)
+        close = _tail(frame.c, frame.stop, total, span)
         if high.size != span:
             return nan
         up, down = high[1:] - high[:-1], low[:-1] - low[1:]
@@ -618,15 +898,131 @@ def _feature_value(frame: _Frame, item: Feature, args: list[float], shift: int) 
     raise IRError(f"unknown feature kind '{kind}'")
 
 
-class _Evaluator:
-    """Resolves operands and conditions against one frame."""
+class _History:
+    """The past values of every feature something else transforms.
 
-    def __init__(self, defn: StrategyDefinition, frame: _Frame, params: dict[str, float]) -> None:
+    A transformation reads its source's own history, and recomputing that
+    history from the bars on every bar is quadratic: a twenty-value z-score
+    would evaluate its source twenty times per bar, for ever. So each source is
+    computed once per bar and kept.
+
+    Two properties make keeping it sound rather than merely fast.
+
+    **A stored value cannot have seen a later bar.** Values are computed from a
+    frame bounded at the bar they belong to, so the value at bar *j* is the same
+    number whether it is computed when *j* closes or during a backfill a
+    thousand bars later. If that were not true, caching would be a lookahead.
+
+    **A different run gets a different cache.** The parameters and the bars are
+    both part of the identity: a changed lookback or a different dataset resets
+    the store rather than answering from values computed under the old one.
+    """
+
+    __slots__ = ("_anchor", "_key", "_order", "_retain", "_span", "_start", "filled_to", "values")
+
+    def __init__(self, retain: dict[str, int], order: tuple[str, ...]) -> None:
+        self._retain = retain
+        self._order = order
+        self._span = max(retain.values(), default=0)
+        self.values: dict[str, list[float]] = {name: [] for name in order}
+        self._start = 0
+        self.filled_to = -1
+        self._key: tuple[tuple[str, float], ...] | None = None
+        self._anchor: float | None = None
+
+    @property
+    def span(self) -> int:
+        return self._span
+
+    def reset(self) -> None:
+        for values in self.values.values():
+            values.clear()
+        self._start = 0
+        self.filled_to = -1
+        self._anchor = None
+
+    def stale(self, window: Any, key: tuple[tuple[str, float], ...]) -> bool:
+        """Is what is stored about a different run?
+
+        Three ways it can be: nothing stored yet, a parameter changed, or the
+        bars underneath moved. The last is checked by re-reading the close at
+        the last filled bar — a dataset that agrees there and disagrees earlier
+        would have to be a different series that coincides at exactly that
+        index, and the run's own data receipt is what rules that out.
+        """
+        if self._key != key or self.filled_to < 0:
+            return True
+        if window.index < self.filled_to:
+            return True
+        return self._anchor != float(window.closes[self.filled_to])
+
+    def begin(self, window: Any, key: tuple[tuple[str, float], ...]) -> int:
+        """Prepare for a fill and return the first index that needs computing."""
+        if self.stale(window, key):
+            self.reset()
+            self._key = key
+            self._start = max(0, window.index - self._span - 1)
+            return self._start
+        return self.filled_to + 1
+
+    def append(self, name: str, value: float) -> None:
+        self.values[name].append(value)
+
+    def close(self, window: Any, index: int) -> None:
+        self.filled_to = index
+        self._anchor = float(window.closes[index])
+        limit = 2 * self._span + 64
+        first = next(iter(self.values.values()), None)
+        if first is None or len(first) <= limit:
+            return
+        drop = len(first) - (self._span + 32)
+        for values in self.values.values():
+            del values[:drop]
+        self._start += drop
+
+    def series(self, name: str, end: int, count: int) -> np.ndarray:
+        """``count`` values of ``name`` ending at window index ``end``.
+
+        Returns fewer than asked for — often nothing — when the history does not
+        reach back that far. The transformations treat a short array as "not
+        computable yet" and answer NaN, which is the only honest answer.
+        """
+        stored = self.values.get(name)
+        if stored is None:
+            return np.empty(0, dtype=np.float64)
+        stop = end - self._start + 1
+        start = stop - count
+        if start < 0 or stop <= 0 or stop > len(stored):
+            return np.empty(0, dtype=np.float64)
+        return np.asarray(stored[start:stop], dtype=np.float64)
+
+
+class _Evaluator:
+    """Resolves operands and conditions against a window, as of a given bar."""
+
+    __slots__ = ("_cache", "_features", "_frames", "defn", "history", "params", "window")
+
+    def __init__(
+        self,
+        defn: StrategyDefinition,
+        window: Any,
+        params: dict[str, float],
+        history: _History | None = None,
+    ) -> None:
         self.defn = defn
-        self.frame = frame
+        self.window = window
         self.params = params
+        self.history = history
         self._features = {f.name: f for f in defn.features}
         self._cache: dict[tuple[str, int], float] = {}
+        self._frames: dict[int, _Frame] = {}
+
+    def frame(self, end: int) -> _Frame:
+        existing = self._frames.get(end)
+        if existing is None:
+            existing = _Frame(self.window, end)
+            self._frames[end] = existing
+        return existing
 
     def operand(self, operand: Any, shift: int = 0) -> float:
         if isinstance(operand, Constant):
@@ -650,10 +1046,30 @@ class _Evaluator:
         if key in self._cache:
             return self._cache[key]
         item = self._features[name]
-        args = [self.operand(arg, shift) for arg in item.args]
-        value = _feature_value(self.frame, item, args, shift)
+        value = self.evaluate(item, self.window.index - shift)
         self._cache[key] = value
         return value
+
+    def evaluate(self, item: Feature, index: int) -> float:
+        """One feature's value as of window index ``index``.
+
+        The two halves of the catalogue are answered differently and that is the
+        whole of it: an observation is computed from a frame bounded at the bar,
+        a transformation is computed from its source's stored history ending at
+        the same bar.
+        """
+        if item.kind in SERIES_KINDS:
+            if self.history is None:
+                return float("nan")
+            length = max(1, int(self.operand(item.args[0]))) if item.args else 1
+            need = window_length(item.kind, length)
+            values = self.history.series(item.source, index - item.shift, need)
+            if values.size != need:
+                return float("nan")
+            return apply_transform(item.kind, values, length)
+        frame = self.frame(index)
+        args = [self.operand(arg) for arg in item.args]
+        return _feature_value(frame, item, args, 0)
 
     def condition(self, condition: Any, shift: int = 0) -> bool:
         if isinstance(condition, Always):
@@ -683,7 +1099,7 @@ class _Evaluator:
                 return was_left <= was_right and now_left > now_right
             return was_left >= was_right and now_left < now_right
         if isinstance(condition, SessionWindow):
-            stamp = self.frame.window.time_at(shift)
+            stamp = self.window.time_at(shift)
             if stamp is None:
                 return False
             minute = int(stamp.hour) * 60 + int(stamp.minute)
@@ -696,6 +1112,32 @@ class _Evaluator:
         if condition.kind == "any":
             return any(self.condition(child, shift) for child in condition.of)
         return not self.condition(condition.of[0], shift)
+
+
+def _fill_order(defn: StrategyDefinition, retain: dict[str, int]) -> tuple[str, ...]:
+    """The retained features, sources before the transformations that read them.
+
+    Order is not a nicety here. A transformation is computed from its source's
+    stored history, so computing it before the source has been stored for this
+    bar would read one value short — silently, and only at the newest bar, which
+    is the worst kind of wrong.
+    """
+    by_name = {item.name: item for item in defn.features}
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def visit(name: str, depth: int = 0) -> None:
+        if name in seen or name not in by_name or depth > MAX_SOURCE_DEPTH + 1:
+            return
+        item = by_name[name]
+        if item.kind in SERIES_KINDS and item.source:
+            visit(item.source, depth + 1)
+        seen.add(name)
+        ordered.append(name)
+
+    for name in retain:
+        visit(name)
+    return tuple(ordered)
 
 
 # ── compilation ──────────────────────────────────────────────────────────────
@@ -716,11 +1158,36 @@ class CompiledStrategy:
         self._levels: dict[str, float] = {}
         self._trail: float | None = None
         self._context: dict[str, float] = {}
+        self._by_name = {item.name: item for item in self.definition.features}
+        retain = self.definition.source_history()
+        self._history = _History(retain, _fill_order(self.definition, retain))
+
+    # -- evaluation -----------------------------------------------------------
+    def _evaluator(self, w: Any, params: dict[str, float]) -> _Evaluator:
+        """An evaluator for this bar, with every transformed source up to date.
+
+        The fill loop normally runs once — one new bar, one new value per
+        source — because `run_backtest` walks forward. It runs many times on the
+        first call of a run, which is the backfill that makes the earliest
+        transformation defined rather than NaN for its first window.
+        """
+        history = self._history
+        if history.span:
+            key = tuple(sorted(params.items()))
+            index = w.index
+            start = history.begin(w, key)
+            if start <= index:
+                filler = _Evaluator(self.definition, w, params, history)
+                for step in range(start, index + 1):
+                    for name in history.values:
+                        history.append(name, filler.evaluate(self._by_name[name], step))
+                    history.close(w, step)
+        return _Evaluator(self.definition, w, params, history)
 
     # -- protocol -------------------------------------------------------------
     def entry_signal(self, w: Any, p: dict[str, ParamValue]) -> int | None:
         params = {k: float(v) for k, v in p.items()}
-        ev = _Evaluator(self.definition, _Frame(w), params)
+        ev = self._evaluator(w, params)
         entry = self.definition.entry
         if entry.session is not None and not ev.condition(entry.session):
             return None
@@ -734,7 +1201,7 @@ class CompiledStrategy:
 
     def exit_signal(self, w: Any, p: dict[str, ParamValue], pos: Any) -> str | None:
         params = {k: float(v) for k, v in p.items()}
-        ev = _Evaluator(self.definition, _Frame(w), params)
+        ev = self._evaluator(w, params)
         rules = self.definition.exit
 
         if self._entry_index != pos.entry_index:
