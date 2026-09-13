@@ -49,6 +49,8 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
         "list_workspace_templates",
         "list_workspaces",
         "pending_approvals",
+        "port_strategy",
+        "port_targets",
         "prop_account_status",
         "propdesk_activity",
         "propdesk_allocation",

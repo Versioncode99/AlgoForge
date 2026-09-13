@@ -319,3 +319,76 @@ def test_a_conversation_cannot_reach_another_conversations_context(client) -> No
     assert payload["conversation"]["context"] == []
     body = str(payload)
     assert "secret-account" not in body
+
+
+# ── porting, over HTTP ───────────────────────────────────────────────────────
+#
+# The route's job is not to produce a file. It is to say, per element, what
+# crossed and what did not, and to refuse to claim more than was checked. A
+# translator that emits plausible code and calls it faithful is how somebody
+# ends up trading a strategy that is not the one they validated.
+
+
+def test_the_port_targets_say_what_each_can_ever_claim(client) -> None:
+    payload = data(client.get("/api/v1/strategies/port-targets"))
+    targets = {item["key"]: item for item in payload["targets"]}
+    assert set(targets) == {"python", "pine", "ninjascript", "mql5"}
+    # A target this machine cannot execute can never be verified, whatever the
+    # strategy, and the catalogue says so before anybody ports anything.
+    assert targets["python"]["ceiling"] == "verified"
+    for key in ("pine", "ninjascript", "mql5"):
+        assert targets[key]["ceiling"] != "verified"
+    # Generating and analysing are different offers and are labelled apart.
+    assert targets["pine"]["generates"] is True
+    assert targets["ninjascript"]["generates"] is False
+
+
+def test_porting_a_definition_reports_element_by_element(client) -> None:
+    created = client.post("/api/v1/strategies", json={"template": "momentum_breakout"})
+    assert created.status_code == 201, created.text
+    strategy_id = created.json()["data"]["strategy_id"]
+
+    response = client.get(f"/api/v1/strategies/{strategy_id}/port/pine")
+    if response.status_code == 404:
+        # A hand-written strategy has no canonical definition to carry, and the
+        # route says that rather than emitting something.
+        assert response.json()["detail"]["code"] == "no_definition"
+        return
+    payload = data(response)
+    assert payload["status"] in {"structural", "approximate", "incomplete"}
+    assert payload["elements"], "a port with no elements has analysed nothing"
+    assert payload["counts"]["equivalent"] >= 1
+    # Every element that did not cross cleanly carries its reason.
+    for element in payload["elements"]:
+        if element["fidelity"] != "equivalent":
+            assert element["detail"].strip()
+
+
+def test_a_port_never_claims_the_logic_survived_over_http(client) -> None:
+    created = client.post("/api/v1/strategies", json={"template": "momentum_breakout"})
+    strategy_id = created.json()["data"]["strategy_id"]
+    response = client.get(f"/api/v1/strategies/{strategy_id}/port/pine")
+    if response.status_code == 404:
+        return
+    body = response.text.lower()
+    assert "logic preserved" not in body
+    assert "semantically equivalent" not in body
+
+
+def test_an_unknown_port_target_is_refused_with_the_valid_set(client) -> None:
+    created = client.post("/api/v1/strategies", json={"template": "momentum_breakout"})
+    strategy_id = created.json()["data"]["strategy_id"]
+    response = client.get(f"/api/v1/strategies/{strategy_id}/port/metatrader4")
+    assert response.status_code in (404, 422)
+    if response.status_code == 422:
+        assert "pine" in response.json()["detail"]["detail"]
+
+
+def test_the_targets_route_is_not_shadowed_by_the_strategy_route(client) -> None:
+    """Declaration order decides which one answers.
+
+    Registered after `/strategies/{strategy_id}` this would be read as a
+    strategy called "port-targets" and answer 404 -- a route that works in
+    isolation and disappears when a sibling moves.
+    """
+    assert client.get("/api/v1/strategies/port-targets").status_code == 200

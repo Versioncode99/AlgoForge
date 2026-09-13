@@ -92,6 +92,8 @@ from forge.strategy.blueprints import blueprint as ir_blueprint
 from forge.strategy.blueprints import catalogue as blueprint_catalogue
 from forge.strategy.ir import IRError
 from forge.strategy.ir import SessionWindow as IRSessionWindow
+from forge.strategy.porting import TARGETS as PORT_TARGETS
+from forge.strategy.porting import port as port_definition
 from forge.vault import VaultMirror
 from forge.workstation import (
     GRID_COLUMNS,
@@ -817,6 +819,29 @@ class Actions:
             self.export_strategy,
         )
         self._add(
+            "port_strategy",
+            "Carry a strategy to another platform and account for the crossing: every "
+            "feature, condition, exit and execution assumption classified equivalent, "
+            "approximated or unsupported, with the reason. The status is the worst "
+            "element's, and only Python can reach 'verified' because Python is the "
+            "only target this machine can execute.",
+            {
+                "strategy_id": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "python | pine | ninjascript | mql5",
+                },
+            },
+            self.port_strategy,
+        )
+        self._add(
+            "port_targets",
+            "The platforms a strategy can be carried to, which of them this machine "
+            "generates code for, and the strongest claim each can ever support.",
+            {},
+            self.port_targets,
+        )
+        self._add(
             "strategy_trades",
             "The historical trades of a strategy's most recent run, with the regime "
             "each was taken in and the excursion each reached. Read from the backtest "
@@ -1304,6 +1329,32 @@ class Actions:
                 f"{', '.join(DESCRIBED_TARGETS)}."
             )
         return report.as_dict()
+
+    def port_strategy(self, strategy_id: str, target: str) -> dict[str, Any]:
+        key = _str(strategy_id, "strategy_id", limit=120)
+        want = _str(target, "target", limit=32, lower=True)
+        try:
+            definition = self.library.get_definition(key)
+        except KeyError as exc:
+            raise ActionError(
+                f"Porting renders the Strategy IR, and '{key}' is hand-written Python. "
+                "There is no canonical definition to carry across."
+            ) from exc
+        try:
+            return port_definition(definition, want).as_dict()
+        except ValueError as exc:
+            raise ActionError(str(exc)) from exc
+
+    def port_targets(self) -> dict[str, Any]:
+        return {
+            "targets": [item.model_dump(mode="json") for item in PORT_TARGETS],
+            "note": (
+                "A target that does not generate is analysed rather than emitted: "
+                "the report says what would and would not carry, and no file is "
+                "produced, because a generator nobody can check is one nobody "
+                "should trade from."
+            ),
+        }
 
     def strategy_trades(
         self,

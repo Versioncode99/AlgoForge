@@ -38,6 +38,8 @@ from forge.strategy import (
     to_python,
 )
 from forge.strategy.ir import IRError, SessionWindow, StrategyDefinition
+from forge.strategy.porting import TARGETS as PORT_TARGETS
+from forge.strategy.porting import port as port_definition
 from pydantic import BaseModel, Field
 from pydantic import ValidationError as PydanticValidationError
 
@@ -743,6 +745,70 @@ def build_router(
                     "An export preserves the strategy and its limitations. It is "
                     "not a claim that the strategy is profitable."
                 ),
+            },
+        )
+
+    # ── porting ──────────────────────────────────────────────────────────────
+    # Registered before `/strategies/{strategy_id}` so the literal path segment
+    # wins: FastAPI matches in declaration order, and a route added after the
+    # parameterised one would be shadowed by it and answer 404 for a strategy
+    # called "port-targets".
+
+    @router.get("/strategies/port-targets", response_model=ApiEnvelope[dict[str, Any]])
+    def port_targets() -> ApiEnvelope[dict[str, Any]]:
+        """Where a strategy can be carried, and how strong a claim each allows."""
+        return ApiEnvelope(
+            data={"targets": [item.model_dump(mode="json") for item in PORT_TARGETS]},
+            meta={
+                "note": (
+                    "A target that does not generate is analysed rather than "
+                    "emitted. No file is produced, because a generator nobody can "
+                    "check is one nobody should trade from."
+                )
+            },
+        )
+
+    @router.get(
+        "/strategies/{strategy_id}/port/{target}",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def port_strategy(strategy_id: str, target: str) -> ApiEnvelope[dict[str, Any]]:
+        """Carry a strategy to another platform, and account for the crossing.
+
+        Every feature, condition, exit and execution assumption is classified
+        equivalent, approximated or unsupported, with the reason, and the
+        status is the worst of them. Only Python can reach `verified`, and only
+        by an actual run: this route reports `structural` at best for it,
+        because inspecting a definition is not executing one.
+        """
+        try:
+            definition = library.get_definition(strategy_id)
+        except KeyError as exc:
+            raise HTTPException(
+                404,
+                {
+                    "code": "no_definition",
+                    "detail": (
+                        "porting renders the Strategy IR, and this strategy is "
+                        "hand-written Python. There is no canonical definition to "
+                        "carry across."
+                    ),
+                },
+            ) from exc
+        try:
+            report = port_definition(definition, target)
+        except ValueError as exc:
+            raise HTTPException(
+                422, {"code": "unknown_target", "detail": str(exc)}
+            ) from exc
+        return ApiEnvelope(
+            data=report.as_dict(),
+            meta={
+                "warranty": (
+                    "A port is a rendering, not an endorsement. Nothing here "
+                    "claims the logic survived unless the status says verified, "
+                    "which requires a run on both sides with matching ledgers."
+                )
             },
         )
 
