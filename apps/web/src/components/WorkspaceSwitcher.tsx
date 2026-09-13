@@ -1,5 +1,6 @@
-import { Check, Layers, Pin, Plus, X } from 'lucide-react'
+import { Check, Layers, Pin, Plus, SquareArrowOutUpRight, X } from 'lucide-react'
 import { useState } from 'react'
+import { canOpenWindows, openWorkspaceWindow } from '../desktop'
 import {
   useActiveWorkspace, useCreateWorkspace, useOpenWorkspace, usePinWorkspace, useWorkspaces,
   useSidebarDestinations, byGroup,
@@ -63,6 +64,17 @@ export function WorkspaceSwitcher({ onOpened, onLeaveMode }: {
               </span>
               {row.workspace_id === activeId && <Check className="ws-current" aria-hidden="true" />}
             </button>
+            {/* Only inside the desktop shell. In a browser a workspace cannot
+                have its own OS window, and a button that silently does nothing
+                is worse than one that is not there. */}
+            {canOpenWindows() && (
+              <button
+                className="ws-window"
+                aria-label={`Open ${row.name} in a new window`}
+                title="Open in a new window. Workspaces can sit side by side."
+                onClick={() => { void openWorkspaceWindow(row.workspace_id) }}
+              ><SquareArrowOutUpRight aria-hidden="true" /></button>
+            )}
             <button
               className="ws-pin"
               aria-label={row.pinned ? `Unpin ${row.name}` : `Pin ${row.name}`}

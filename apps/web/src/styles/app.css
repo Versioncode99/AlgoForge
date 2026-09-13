@@ -1034,3 +1034,12 @@ code {
   border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-0);
   font-size: var(--fs-nano); line-height: var(--lh);
 }
+
+/* Only rendered inside the desktop shell: a browser cannot give a workspace its
+   own OS window, and a button that silently does nothing is worse than absent. */
+.ws-window {
+  border: 0; background: transparent; color: var(--fg-3); cursor: pointer;
+  padding: var(--sp-1); display: flex; align-items: center;
+}
+.ws-window:hover { color: var(--fg-0); }
+.ws-window svg { width: 13px; height: 13px; }
