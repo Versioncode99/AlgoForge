@@ -50,8 +50,8 @@ plan: the chat wraps the existing loop rather than building a second one.
 
 | Suite | Result |
 | --- | --- |
-| Backend (`pytest`) | **2838 passed**, 0 failed |
-| Frontend (`vitest`) | **248 passed** in 24 files, 0 failed |
+| Backend (`pytest`) | **2843 passed**, 0 failed |
+| Frontend (`vitest`) | **252 passed** in 24 files, 0 failed |
 | `ruff check .` | clean |
 | `mypy` (strict) | clean, 195 source files |
 | `tsc --noEmit` | clean |
@@ -61,7 +61,7 @@ plan: the chat wraps the existing loop rather than building a second one.
 | CI — web | **success** |
 | E2E (Playwright, real browser) | 43 passed, 1 skipped, **8 failed — all environmental** |
 
-Backend was 2719 at the start of this branch; 2838 now.
+Backend was 2719 at the start of this branch; 2843 now.
 
 New coverage, by area:
 
@@ -133,6 +133,51 @@ sufficient days, a screenshot capture needing both).
 ---
 
 ## E. Security
+
+A security review was run over the whole branch diff, looking for
+newly-introduced exploitable vulnerabilities. **It found none above its
+reporting bar.**
+
+What it verified, rather than what it assumed:
+
+- The Electron preload exposes named closures only; the channel string is fixed
+  inside the call and is never a renderer-supplied value, so there is no
+  generic-invoke smuggling path.
+- `validate()` fails closed on an unknown channel, rejects non-object payloads,
+  rejects undeclared keys rather than ignoring them, and returns a **rebuilt**
+  payload — a handler cannot read an unvalidated field. Handlers are registered
+  by iterating the contract's own channel list, so a handler for an undeclared
+  channel is not expressible.
+- The session file is a fixed path; no renderer-controlled path component. The
+  workspace id reaches `loadURL` only after `encodeURIComponent` and only in the
+  fragment, so it cannot alter origin or scheme.
+- The conversation search binds its term as a parameter, and `_escape` applies
+  the backslash substitution before `%` and `_` — correct ordering, no
+  double-escape bug.
+- The chart cursors reach `pandas.Timestamp` and a vectorised comparison. No
+  `query()`/`eval()` path, no SQL.
+- The permission change is a lateral move: still exactly one configuration
+  reaches the book, behind two explicit opt-ins; every default resolves to the
+  cautious stance, including a missing or unparseable stored row and the
+  no-mode posture; `AUTOMATION` narrowed from two modes to one; and a stale
+  `hedge_fund` row degrades to "no mode" rather than to a permissive default.
+- Conversation context is read strictly by conversation id, and the subject
+  passed to a model carries `{kind, ref, label}` only — no resolved account or
+  strategy state.
+
+Two sub-threshold items were fixed anyway, both introduced by this branch:
+
+1. **A newline in a strategy name produced broken Pine.** The name is written
+   into a `//` comment as well as a string literal, and `_escape` was applied
+   only to the literal. Self-injection only — nobody but the local operator can
+   set that field — but it breaks the porting module's own rule, which is that
+   a port must not emit something that looks like code and is not the strategy.
+2. **`shell.openExternal` took any scheme.** Pre-existing on the main window and
+   copied onto the new per-workspace one. Now http/https only on both, plus a
+   `will-navigate` guard — a renderer that navigates itself bypasses the
+   open-handler entirely, since nothing is "opened".
+
+### The invariants, as assertions
 
 No new action surface. The chat calls the same `forge_api.actions` registry as
 `Actor.AI`, through the same `forge.modes.permissions` pure function of actor,
