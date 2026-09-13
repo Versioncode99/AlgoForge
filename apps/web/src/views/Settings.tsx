@@ -6,7 +6,12 @@ import { AppearancePanel } from '../components/AppearancePanel'
 import { ChatPanel, type ChatOpening } from '../components/ChatPanel'
 import { StoragePanel } from '../components/StoragePanel'
 import { PanelHead, Stat } from '../components/ui'
-import { BudgetPanel, ModelRoutingPanel, ResearchPanel } from './ModelRouting'
+import {
+  BudgetPanel,
+  ModelRoutingPanel,
+  ResearchPanel,
+  RoutingEvidencePanel,
+} from './ModelRouting'
 import type { Evolution, OracleInfo, SettingsPayload } from '../types'
 
 export function SettingsView() {
@@ -105,6 +110,9 @@ export function SettingsView() {
       </div>
 
       <ModelRoutingPanel settings={s} patch={(body) => patch.mutate(body)} />
+
+      {/* Directly under the assignments it is evidence about. */}
+      <RoutingEvidencePanel patch={(body) => patch.mutate(body)} />
 
       <BudgetPanel settings={s} patch={(body) => patch.mutate(body)} />
 

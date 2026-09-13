@@ -1043,3 +1043,20 @@ code {
 }
 .ws-window:hover { color: var(--fg-0); }
 .ws-window svg { width: 13px; height: 13px; }
+
+/* ── routing recommendations ────────────────────────────────────────────────
+   A row that suggests a change looks different from one that says there is not
+   enough evidence yet, because they are opposite statements and a uniform list
+   makes the second read as the first. */
+.routing-advice {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 2px solid var(--line);
+  background: var(--bg-1);
+}
+.routing-advice[data-actionable='yes'] { border-left-color: var(--accent); background: var(--bg-2); }
+.routing-advice-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+.routing-advice-head strong { color: var(--fg-0); font-size: var(--fs-xs); }
+.routing-advice-head .mono { color: var(--fg-2); font-size: var(--fs-nano); }
+.routing-advice-head .suggested { color: var(--fg-0); }

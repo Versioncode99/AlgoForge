@@ -94,6 +94,14 @@ from forge_api.providers import (
     status_for,
 )
 from forge_api.research_lab import ArtifactStore, LabError, ResearchLab
+from forge_api.routing_observations import (
+    FIELDS as OBSERVED_FIELDS,
+)
+from forge_api.routing_observations import (
+    MATERIAL_MARGIN,
+    MINIMUM_OBSERVATIONS,
+    recommend,
+)
 from forge_api.settings_store import (
     ACCENTS,
     DENSITIES,
@@ -1808,6 +1816,61 @@ def build_control_router(
                     "Double bootstrap: the observed days are resampled before each batch of "
                     "accounts, so the interval carries sample-size uncertainty, not just path "
                     "noise. Blocks of 5 days preserve losing streaks."
+                ),
+            },
+        )
+
+    # ── what the models actually did, and what that suggests ────────────────
+    @router.get("/routing/observations", response_model=ApiEnvelope[dict[str, Any]])
+    def routing_observations(role: str = "", limit: int = 200) -> ApiEnvelope[dict[str, Any]]:
+        """Every recorded model call, and the per-role summary over them.
+
+        Read-only by construction: there is no route that writes one. An
+        observation is caused by a call happening, so a route able to post one
+        would let the evidence say a model did work it never did.
+        """
+        store = agents.observations
+        return ApiEnvelope(
+            data={
+                "rows": store.rows(role=role, limit=limit),
+                "summary": store.summary(),
+                "fields": list(OBSERVED_FIELDS),
+            },
+            meta={
+                "minimum_observations": MINIMUM_OBSERVATIONS,
+                "note": (
+                    "Quality and downstream outcome are empty where they are not known. "
+                    "They arrive after the call and often not at all, and a neutral default "
+                    "would put an unmeasured number into the comparison."
+                ),
+            },
+        )
+
+    @router.get("/routing/recommendations", response_model=ApiEnvelope[dict[str, Any]])
+    def routing_recommendations() -> ApiEnvelope[dict[str, Any]]:
+        """What the observations suggest. Applies nothing, ever.
+
+        The directive is explicit that routing must be learnable and must not
+        silently learn, so this returns rows an operator reads and a button they
+        press. There is no code path from here to a setting.
+        """
+        current = settings_store.load()
+        assigned = {
+            role["key"]: current.ai.model_routing.for_role(role["key"]).model
+            for role in role_rows()
+        }
+        found = recommend(agents.observations.summary(), assigned)
+        return ApiEnvelope(
+            data={
+                "recommendations": [item.as_dict() for item in found],
+                "actionable": sum(1 for item in found if item.actionable),
+            },
+            meta={
+                "minimum_observations": MINIMUM_OBSERVATIONS,
+                "material_margin": MATERIAL_MARGIN,
+                "note": (
+                    "Nothing here changes routing. Applying a recommendation is a settings "
+                    "edit the operator makes."
                 ),
             },
         )

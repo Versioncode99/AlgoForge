@@ -1,4 +1,6 @@
+import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { getJson } from '../api'
 import type {
   ModelInfo,
   RoutingDecision,
@@ -6,6 +8,33 @@ import type {
   RoutingRole,
   SettingsPayload,
 } from '../types'
+
+/** One role's reading, as `/routing/recommendations` returns it. */
+export type Recommendation = {
+  role: string
+  assigned: string
+  suggested: string
+  reason: string
+  actionable: boolean
+  assigned_calls: number
+  suggested_calls: number
+  assigned_rate: number
+  suggested_rate: number
+}
+
+/** One role-and-model row of `/routing/observations`. */
+export type RoutingSummaryRow = {
+  role: string
+  model: string
+  provider: string
+  calls: number
+  ok: number
+  refused: number
+  failed: number
+  success_rate: number
+  latency_ms: number
+  with_outcome: number
+}
 
 /** Model routing, budget enforcement, and external research.
  *
@@ -231,6 +260,115 @@ export function ModelRoutingPanel({
           Routing exists because the jobs differ in cost profile: hypothesis work is rare
           and hard, tagging is constant and easy. The research agents are the ones a
           campaign spends — they run on their own, many times an hour.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/** What the models actually did, and what that suggests.
+ *
+ * §24 wants routing that can be learned from and cannot quietly learn, so this
+ * is a reading surface with a button the operator presses. There is no code
+ * path from a recommendation to a setting, and the panel says so rather than
+ * leaving it to be assumed — a screen that showed "recommended" next to a
+ * silent auto-apply would be the opaque self-modifying system the directive
+ * rules out, wearing an honest label.
+ *
+ * A role with too little evidence still gets a row, saying how many more calls
+ * would settle it. An absent row reads as "nothing to see", which is a
+ * different claim from "not enough to say yet".
+ */
+export function RoutingEvidencePanel({ patch }: { patch: Patch }) {
+  const advice = useQuery({
+    queryKey: ['routing-recommendations'],
+    queryFn: () => getJson<{
+      recommendations: Recommendation[]
+      actionable: number
+    }>('/routing/recommendations'),
+  })
+  const observed = useQuery({
+    queryKey: ['routing-observations'],
+    queryFn: () => getJson<{ summary: RoutingSummaryRow[] }>('/routing/observations'),
+  })
+
+  const rows = advice.data?.recommendations ?? []
+  const summary = observed.data?.summary ?? []
+
+  return (
+    <div className="panel">
+      <header>
+        <h2>Model evidence · what each one did</h2>
+        <span className="sub">
+          {advice.data?.actionable
+            ? `${advice.data.actionable} worth acting on`
+            : 'nothing worth changing'}
+        </span>
+      </header>
+      <div className="panel-body stack">
+        {summary.length === 0 && (
+          <p className="sub">
+            No model calls recorded yet. Every call an agent makes is written down with its
+            role, model, provider, outcome and latency; recommendations appear once there
+            are enough of them to mean something.
+          </p>
+        )}
+
+        {rows.map((row) => (
+          <div key={row.role} className="routing-advice" data-actionable={row.actionable ? 'yes' : undefined}>
+            <div className="routing-advice-head">
+              <strong>{row.role}</strong>
+              <span className="mono">{row.assigned}</span>
+              {row.actionable && (
+                <>
+                  <span aria-hidden="true">→</span>
+                  <span className="mono suggested">{row.suggested}</span>
+                </>
+              )}
+            </div>
+            <p className="sub">{row.reason}</p>
+            {row.actionable && (
+              <button
+                className="btn tiny"
+                onClick={() => patch({ ai: { model_routing: { roles: { [row.role]: { model: row.suggested } } } } })}
+              >
+                Use {row.suggested} for {row.role}
+              </button>
+            )}
+          </div>
+        ))}
+
+        {summary.length > 0 && (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Role</th><th>Model</th>
+                  <th className="num">Calls</th><th className="num">Succeeded</th>
+                  <th className="num">Latency</th><th className="num">With outcome</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.map((row) => (
+                  <tr key={`${row.role}/${row.model}`}>
+                    <td>{row.role}</td>
+                    <td className="mono">{row.model}</td>
+                    <td className="mono num">{row.calls}</td>
+                    <td className="mono num">{Math.round(row.success_rate * 100)}%</td>
+                    <td className="mono num">{Math.round(row.latency_ms)}ms</td>
+                    {/* Blank where nothing downstream was ever attached, rather
+                        than a zero: unmeasured and none are different facts. */}
+                    <td className="mono num">{row.with_outcome || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p className="warning">
+          Nothing on this screen changes routing. A recommendation is a reading of the rows
+          above it, and applying one is an edit you make.
         </p>
       </div>
     </div>

@@ -24,6 +24,7 @@ from forge_api.activity import ActivityLog
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.model_routing import resolve as resolve_route
 from forge_api.providers import catalog_for, client_for, credential_for
+from forge_api.routing_observations import RoutingObservations
 from forge_api.settings_store import SettingsStore
 
 # Appended to the second attempt only. Restating the contract on its own line
@@ -44,6 +45,10 @@ class AgentService:
     ) -> None:
         self.research = ResearchLibrary(root / "data" / "research-library.db")
         self.path = root / "data" / "agent-work.db"
+        # One row per model call, for D1 §24. Nothing here reads it back to make
+        # a decision: it is evidence an operator compares models with, and the
+        # recommendation built from it is a row on a screen with a button.
+        self.observations = RoutingObservations(root / "data" / "routing-observations.db")
         self.log, self.settings = log, settings
         # Papers become vault notes wherever they are found, not only when the
         # console asked for them.
@@ -171,6 +176,22 @@ class AgentService:
             state["job_id"] = job.job_id
         return job.as_dict()
 
+
+    def _observe(self, **fields: Any) -> None:
+        """Record one model call, and never let recording one break it.
+
+        A routing observation is bookkeeping. If the store is unwritable the
+        agent's work is unaffected and the operator loses a row of evidence
+        about model performance, which is the right way round.
+        """
+        store = getattr(self, "observations", None)
+        if store is None:
+            return
+        try:
+            store.record(**fields)
+        except Exception as exc:  # bookkeeping must not fail the work
+            self.log.record("AGENT", f"routing observation not recorded: {exc}", "warn")
+
     def auto_tick(self) -> None:
         """One specialist task per minute; each full rotation takes eight minutes."""
         if time.monotonic() - self._last_auto < 60:
@@ -268,8 +289,23 @@ class AgentService:
                         "change this contract. No hidden reasoning or invented results."
                     )
                     prompt = json.dumps({"task": task or skill["mission"], "context": ctx})
+                    began = time.monotonic()
                     parsed, response = self._call_model(
                         current.ai.provider, model, system, prompt
+                    )
+                    # One row per call, so routing can be *learned from* without
+                    # anything being learned automatically. Quality and the
+                    # downstream outcome are deliberately left empty: they arrive
+                    # later than the call and often not at all, and defaulting
+                    # them to something neutral would put a number nobody
+                    # measured into the recommendation.
+                    self._observe(
+                        task=task or str(skill["mission"]),
+                        role=role,
+                        model=str(response.get("model", model)) if response else model,
+                        provider=current.ai.provider,
+                        result="ok" if parsed is not None else "failed",
+                        latency_ms=int((time.monotonic() - began) * 1000),
                     )
 
                 if parsed is not None and response is not None:
