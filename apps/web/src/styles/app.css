@@ -951,3 +951,86 @@ code {
 @media (max-width: 900px) {
   .appearance-row { grid-template-columns: 1fr; gap: 4px; }
 }
+
+/* ── cross-platform porting ───────────────────────────────────────────────────
+   The differences lead and the code follows. A panel that put a Generate button
+   first would be the shape of the problem it exists to prevent: somebody pastes
+   a file that compiles and trades a strategy that is not the one they
+   validated. What did not cross is three lines, and it is the part that decides
+   whether the port is usable. */
+.port-panel { display: grid; gap: var(--sp-3); }
+
+.port-targets { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.port-target {
+  display: grid; gap: 1px; text-align: left; cursor: pointer;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-2); color: var(--fg-1);
+}
+.port-target.active { border-color: var(--accent); background: var(--bg-raised); }
+.port-target strong { font-size: var(--fs-micro); color: var(--fg-0); }
+/* Whether a target is generated or only analysed is a different offer, so it
+   is on the chooser rather than discovered after picking one. */
+.port-target span {
+  font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .04em; color: var(--fg-3);
+}
+
+.port-note, .port-status-note, .port-caveat, .port-nocode {
+  margin: 0; font-size: var(--fs-micro); line-height: var(--lh); color: var(--fg-2);
+}
+.port-caveat { color: var(--fg-3); }
+
+.port-head { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
+
+/* Four states, four colours. Structural and verified rendered as adjacent green
+   badges would be read as the same claim, and the gap between "the pieces line
+   up" and "somebody ran both and compared the trades" is the whole panel. */
+.port-status {
+  padding: 2px var(--sp-2); border-radius: var(--r-round);
+  border: 1px solid var(--line-strong);
+  font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .06em; text-transform: uppercase; cursor: help;
+}
+.port-status.verified { border-color: var(--verdict-pass); color: var(--verdict-pass); }
+.port-status.structural { border-color: var(--info); color: var(--info); }
+.port-status.approximate { border-color: var(--verdict-unknown); color: var(--verdict-unknown); }
+.port-status.incomplete { border-color: var(--verdict-fail); color: var(--verdict-fail); }
+.port-counts { font-size: var(--fs-nano); color: var(--fg-3); }
+
+.port-elements ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.port-elements li {
+  display: grid; gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line); border-left-width: 2px; border-radius: var(--r-sm);
+  background: var(--bg-2);
+}
+.port-elements li.equivalent { border-left-color: var(--verdict-pass); }
+.port-elements li.approximated { border-left-color: var(--verdict-unknown); }
+.port-elements li.unsupported { border-left-color: var(--verdict-fail); }
+.pe-fidelity, .pe-part {
+  font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3);
+}
+.port-elements li strong { font-size: var(--fs-micro); color: var(--fg-0); }
+.pe-detail { margin: 0; font-size: var(--fs-nano); line-height: var(--lh); color: var(--fg-2); }
+
+.port-clean { margin: 0; font-size: var(--fs-micro); color: var(--fg-2); }
+.port-toggle {
+  justify-self: start; padding: 0; border: 0; background: transparent;
+  color: var(--fg-2); cursor: pointer;
+  font-family: var(--font-label); font-size: var(--fs-nano); letter-spacing: .04em;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.port-toggle:hover { color: var(--fg-0); }
+
+.port-code summary {
+  cursor: pointer; font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--fg-2);
+}
+.port-code pre {
+  margin: var(--sp-2) 0 0; padding: var(--sp-3); overflow: auto;
+  max-height: 40vh;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-0);
+  font-size: var(--fs-nano); line-height: var(--lh);
+}
