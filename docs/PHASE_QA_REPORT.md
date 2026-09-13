@@ -50,18 +50,22 @@ plan: the chat wraps the existing loop rather than building a second one.
 
 | Suite | Result |
 | --- | --- |
-| Backend (`pytest`) | **2843 passed**, 0 failed |
-| Frontend (`vitest`) | **252 passed** in 24 files, 0 failed |
+| Backend (`pytest`) | **3074 passed**, 0 failed |
+| Frontend (`vitest`) | **272 passed** in 26 files, 0 failed |
 | `ruff check .` | clean |
-| `mypy` (strict) | clean, 195 source files |
+| `mypy` (strict) | clean, 201 source files |
 | `tsc --noEmit` | clean |
 | `vite build` | clean |
-| CI — ubuntu 3.13 | **success** |
-| CI — **windows** 3.13 | **success** |
-| CI — web | **success** |
+| CI — ubuntu 3.13 | **success** on the merge head |
+| CI — **windows** 3.13 | success pre-merge; **re-running** on the merge head |
+| CI — web | **success** on the merge head |
 | E2E (Playwright, real browser) | 43 passed, 1 skipped, **8 failed — all environmental** |
 
-Backend was 2719 at the start of this branch; 2843 now.
+Backend was 2719 at the start of this branch and 2843 before main was merged in.
+Merging #9 brought its suites with it: 3074 now, across 201 source files. The
+figures in this table are the post-merge re-run, not the pre-merge ones carried
+forward -- a merge that changes `Settings.tsx` and the strategy IR is exactly the
+kind that can invalidate an earlier green.
 
 New coverage, by area:
 
