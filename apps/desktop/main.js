@@ -277,10 +277,8 @@ function createWorkspaceWindow(workspaceId, bounds = null) {
   })
 
   windows.register(window.id, workspaceId)
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
-    return { action: 'deny' }
-  })
+  window.webContents.setWindowOpenHandler(({ url }) => openExternally(url))
+  holdOrigin(window, DEV_URL || APP_URL)
   window.once('ready-to-show', () => window.show())
 
   // Geometry is recorded through the debounced path: `move` and `resize` fire
@@ -311,6 +309,46 @@ function createWorkspaceWindow(workspaceId, bounds = null) {
   const target = DEV_URL || APP_URL
   window.loadURL(`${target}#workspace?workspace=${encodeURIComponent(workspaceId)}`)
   return window
+}
+
+/**
+ * Hand a link to the operating system, or refuse it.
+ *
+ * `shell.openExternal` will hand anything to the OS handler for its scheme,
+ * and a page is what supplies the URL. On a local, first-party page that is a
+ * small surface; it is not one worth leaving open, because the cost of closing
+ * it is four lines and the cost of it being wrong is an arbitrary protocol
+ * handler invoked from a renderer.
+ *
+ * http and https only. Everything else is dropped rather than passed on --
+ * silently, because a page that just tried `file://` is not a page to put a
+ * dialog in front of the operator about.
+ */
+const EXTERNAL_SCHEMES = new Set(['http:', 'https:'])
+
+function openExternally(url) {
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch {
+    return { action: 'deny' }
+  }
+  if (EXTERNAL_SCHEMES.has(parsed.protocol)) shell.openExternal(parsed.toString())
+  return { action: 'deny' }
+}
+
+/**
+ * Keep a window on the page it was given.
+ *
+ * A renderer that navigates the window itself bypasses the open-handler above
+ * entirely: nothing is "opened", the existing window simply becomes something
+ * else, with the preload still attached. The app is served from one origin, so
+ * anything leaving it is refused.
+ */
+function holdOrigin(window, allowed) {
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith(allowed)) event.preventDefault()
+  })
 }
 
 function buildMenu() {
@@ -373,11 +411,10 @@ async function createWindow() {
   })
   windows.register(mainWindow.id, null)
 
-  // External links open in the real browser, never inside the app shell.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
-    return { action: 'deny' }
-  })
+  // External links open in the real browser, never inside the app shell — and
+  // only http(s), so a page cannot reach an arbitrary OS protocol handler.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => openExternally(url))
+  holdOrigin(mainWindow, DEV_URL || APP_URL)
 
   mainWindow.once('ready-to-show', () => mainWindow.show())
   const recordMain = () => {

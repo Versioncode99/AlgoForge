@@ -759,7 +759,9 @@ def to_pine(defn: StrategyDefinition, elements: tuple[Element, ...] | None = Non
     found = elements if elements is not None else analyse(defn, "pine")
     lines: list[str] = ["// @version=6"]
 
-    lines.append(f"// {defn.name} — ported from AlgoForge")
+    # Through the escape, like the string literal below: this is a `//`
+    # comment, and a newline in the name ends it.
+    lines.append(f"// {_escape(defn.name)} — ported from AlgoForge")
     lines.append(f"// definition {defn.definition_id} ({defn.definition_hash[:16]})")
     lines.append("//")
     lines.append("// This is a PORT, not the strategy AlgoForge validated. It was generated")
@@ -895,7 +897,23 @@ def to_pine(defn: StrategyDefinition, elements: tuple[Element, ...] | None = Non
 
 
 def _escape(value: str) -> str:
-    return value.replace('"', "'")
+    """Make a string safe to sit inside emitted Pine.
+
+    Quotes become apostrophes so a name cannot close the string literal it is
+    written into. Control characters -- newlines above all -- are collapsed to
+    spaces, because the name is also written into a `//` comment, and a newline
+    there ends the comment and turns whatever follows into a line of Pine.
+
+    Nobody but the local operator can set a strategy's name today, so this is
+    not a boundary being crossed. It is the module's own rule: a port must not
+    emit something that looks like code and is not the strategy. A name with a
+    line break in it produced a script that would not compile, or worse, one
+    that would.
+    """
+    cleaned = "".join(
+        " " if character < " " or character == "\x7f" else character for character in value
+    )
+    return cleaned.replace('"', "'").replace("\\", "/")
 
 
 def _wrap(text: str, width: int) -> list[str]:

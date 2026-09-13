@@ -539,3 +539,34 @@ def test_the_port_names_the_definition_it_came_from() -> None:
     report = port(clean, "pine")
     assert report.definition_hash == clean.definition_hash
     assert clean.definition_id in report.code
+
+
+def test_a_name_with_a_line_break_cannot_end_the_comment_it_sits_in() -> None:
+    """The name is written into a `//` comment and into a string literal.
+
+    A newline ends the comment, and whatever followed becomes a line of Pine in
+    a file somebody is about to paste into TradingView. Nobody but the local
+    operator can set a strategy's name today, so this is not a boundary being
+    crossed -- it is this module's own rule: a port must not emit something
+    that looks like code and is not the strategy.
+    """
+    hostile = definition(name="NQ Breakout\nstrategy.close_all()\n// ")
+    code = to_pine(hostile)
+    header = code.split("strategy(")[0]
+    # The property is not that the text is absent -- it is inert comment text
+    # either way. It is that nothing in the header is a *line* of Pine: every
+    # line before the strategy() call is still a comment.
+    for line in header.splitlines():
+        assert not line.strip() or line.lstrip().startswith("//"), line
+    # The name survives as a name, collapsed onto one line.
+    assert "NQ Breakout strategy.close_all()" in header
+
+
+def test_a_quote_in_a_name_cannot_close_the_string_it_is_written_into() -> None:
+    quoted = definition(name='The "Best" Breakout')
+    code = to_pine(quoted)
+    call = next(line for line in code.splitlines() if line.startswith("strategy("))
+    # Exactly two double quotes on the line: the ones this emitter opened and
+    # closed around the name.
+    assert call.count('"') == 2
+    assert "The 'Best' Breakout" in call
