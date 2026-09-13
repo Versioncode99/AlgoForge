@@ -1,29 +1,29 @@
 {
   "note": "Measured by apps/web/tests/electron/performance.spec.ts on one container. A starting point for comparison, not a budget: see docs/PERFORMANCE_BASELINE.md.",
-  "measured_at": "2026-09-13T17:27:45.839Z",
+  "measured_at": "2026-09-13T18:16:23.922Z",
   "platform": "linux x64",
   "node": "v22.22.2",
-  "cold_start_ms": 275,
-  "shutdown_ms": 143,
+  "cold_start_ms": 283,
+  "shutdown_ms": 58,
   "window_open_ms": [
-    210,
-    30,
-    45
+    38,
+    234,
+    89
   ],
-  "resident_mb_base": 445,
+  "resident_mb_base": 424,
   "resident_mb_growth": [
-    222,
-    317,
-    431
+    86,
+    372,
+    473
   ],
   "resident_mb_after_four_cycles": {
-    "base": 435,
-    "after": 542,
-    "delta": 107
+    "base": 432,
+    "after": 544,
+    "delta": 112
   },
-  "restore_two_windows_ms": 183,
+  "restore_two_windows_ms": 315,
   "requests_in_6s": {
-    "active": 10,
+    "active": 11,
     "background": 4,
     "obscured": 0
   }
