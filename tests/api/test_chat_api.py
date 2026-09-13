@@ -392,3 +392,59 @@ def test_the_targets_route_is_not_shadowed_by_the_strategy_route(client) -> None
     isolation and disappears when a sibling moves.
     """
     assert client.get("/api/v1/strategies/port-targets").status_code == 200
+
+
+def test_an_artifact_reference_never_carries_a_fragment_of_a_result() -> None:
+    """Identifiers only, whatever shape the action returned.
+
+    A key whose value is a dict or a list would otherwise be stringified into
+    the reference, putting part of a result inside an artifact that is supposed
+    to carry identifiers and nothing else. That is the copied-number problem in
+    a different shape: a figure stored outside the system that computed it,
+    indistinguishable later from one that was looked up.
+    """
+    from forge_api.chat import _artifacts
+
+    built = _artifacts(
+        [
+            {
+                "action": "strategy_regimes",
+                "ok": True,
+                "arguments": {"strategy_id": "s1", "backtest_id": {"nested": "value"}},
+                "result": {},
+            }
+        ]
+    )
+    assert len(built) == 1
+    assert built[0].refs == {"strategy_id": "s1"}
+    assert all(isinstance(value, str) for value in built[0].refs.values())
+    assert "nested" not in str(built[0].refs)
+
+
+def test_a_refused_action_produces_no_artifact() -> None:
+    """A link to a result that does not exist reads as the work having been done."""
+    from forge_api.chat import _artifacts
+
+    assert _artifacts(
+        [
+            {
+                "action": "backtest_strategy",
+                "ok": False,
+                "error": "'backtest_strategy' needs a person",
+                "arguments": {"strategy_id": "s1"},
+            }
+        ]
+    ) == ()
+
+
+def test_the_same_subject_twice_produces_one_artifact() -> None:
+    """Two calls about one strategy are one way back to it, not two."""
+    from forge_api.chat import _artifacts
+
+    built = _artifacts(
+        [
+            {"action": "strategy_regimes", "ok": True, "arguments": {"strategy_id": "s1"}},
+            {"action": "strategy_regimes", "ok": True, "arguments": {"strategy_id": "s1"}},
+        ]
+    )
+    assert len(built) == 1

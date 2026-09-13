@@ -267,7 +267,16 @@ def _artifacts(entries: list[dict[str, Any]]) -> tuple[Artifact, ...]:
             # The result is consulted only for identifiers the caller could not
             # have supplied -- a strategy id minted by `create_strategy`, say.
             # Never for values.
-            if (value := arguments.get(key) or result.get(key)) not in (None, "")
+            #
+            # Scalars only. A key whose value is a dict or a list would be
+            # stringified into the reference, putting a fragment of a result
+            # inside an artifact that is supposed to carry identifiers and
+            # nothing else -- which is the copied-number problem wearing a
+            # different shape.
+            if isinstance(
+                value := arguments.get(key) or result.get(key), str | int | float
+            )
+            and str(value) != ""
         }
         if not refs:
             continue
