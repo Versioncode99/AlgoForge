@@ -1172,6 +1172,7 @@ def build_router(
             f"{x_param.name} x {y_param.name} — {total} backtests",
             total,
             work,
+            refs={"strategy_id": strategy_id},
         )
         return ApiEnvelope(
             data=job.as_dict(),
@@ -1222,6 +1223,7 @@ def build_router(
             f"{spec.name} · {requested:,} bars · {body.dataset}",
             requested,
             work,
+            refs={"strategy_id": strategy_id},
         )
         log.record(
             "BACKTEST",

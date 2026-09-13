@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  Activity, Grid2x2, LockKeyhole, Menu, PanelBottomOpen, RotateCw, ScrollText, Search,
+  Activity, Grid2x2, Inbox, LockKeyhole, Menu, PanelBottomOpen, RotateCw, ScrollText, Search,
   ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
@@ -8,6 +8,7 @@ import { getJson } from './api'
 import { parse, routeOf } from './route'
 import { CommandPalette } from './components/CommandPalette'
 import { ContextBar } from './components/ContextBar'
+import { InboxDrawer, useInbox } from './components/InboxDrawer'
 import { Wordmark } from './components/Logo'
 import { ViewErrorBoundary } from './components/ViewErrorBoundary'
 import { sectionIcon } from './components/icons'
@@ -167,6 +168,7 @@ export function App() {
   const [railOpen, setRailOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [eventsOpen, setEventsOpen] = useState(false)
+  const [inboxOpen, setInboxOpen] = useState(false)
   const [switcherOpen, setSwitcherOpen] = useState(false)
   /* The active workspace, for its rail. Fetched here rather than inside the
    * sidebar so the shell can decide *which* rail to draw before drawing one —
@@ -174,6 +176,9 @@ export function App() {
    * page load. */
   const activeWorkspace = useActiveWorkspace()
   const railWorkspace = activeWorkspace.data ?? null
+  // Read in the shell rather than in the drawer: the count is on the badge,
+  // and a drawer that has never been opened cannot report one.
+  const unread = useInbox().data?.unread ?? 0
 
   const sections = useMemo<Section[]>(() => session.data?.descriptor.sections ?? [], [session.data])
   const groups = useMemo(() => {
@@ -361,6 +366,19 @@ export function App() {
         <span>OOS <b className={!counted ? 'unknown' : oos ? 'good' : undefined}>{counted ? oos : '—'}</b></span>
         <span><LockKeyhole /> PAPER ONLY</span>
       </div>
+      {/* Global, and in every mode: "did that finish?" is a question that
+        * arrives while you are in the middle of something else, so answering it
+        * must not cost you the screen you are on. */}
+      <button
+        className="context-inbox"
+        aria-expanded={inboxOpen}
+        aria-label={unread ? `Finished work, ${unread} unread` : 'Finished work'}
+        onClick={() => setInboxOpen(value => !value)}
+      >
+        <Inbox aria-hidden="true" />
+        <span>Finished</span>
+        {unread > 0 && <b className="context-inbox-count">{unread > 99 ? '99+' : unread}</b>}
+      </button>
       <button className="context-search" onClick={() => setPaletteOpen(true)}><Search /><span>Find</span><kbd>Ctrl K</kbd></button>
     </header>
 
@@ -390,6 +408,7 @@ export function App() {
       </div>
     )}
     <EventDrawer events={events.data ?? []} open={eventsOpen} onClose={() => setEventsOpen(false)} />
+    <InboxDrawer open={inboxOpen} onClose={() => setInboxOpen(false)} />
     <CommandPalette open={paletteOpen} routes={paletteRoutes} strategies={list} onClose={() => setPaletteOpen(false)} onRoute={navigate} />
   </div>
 }

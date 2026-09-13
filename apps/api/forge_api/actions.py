@@ -1570,7 +1570,9 @@ class Actions:
                 "reached_validation": True,
             }
 
-        job = REGISTRY.submit("backtest", f"{spec.name} on {key}", 3, work)
+        job = REGISTRY.submit(
+            "backtest", f"{spec.name} on {key}", 3, work, refs={"strategy_id": sid}
+        )
         return {
             "job_id": job.job_id,
             "strategy_id": sid,
@@ -2993,7 +2995,11 @@ class Actions:
             }
 
         job = REGISTRY.submit(
-            "surface", f"{spec.name}: {x_param.name} x {y_param.name}", len(xs) * len(ys), work
+            "surface",
+            f"{spec.name}: {x_param.name} x {y_param.name}",
+            len(xs) * len(ys),
+            work,
+            refs={"strategy_id": sid},
         )
         return {
             "job_id": job.job_id,
