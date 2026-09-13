@@ -89,9 +89,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from forge.research.grammar import OBSERVABLES, SHAPES
-from forge.research.mechanisms import MECHANISMS
-
 #: Length of the hex digests below. Full SHA-256 is 64 characters and none of
 #: this is adversarial -- the digest distinguishes configurations, it does not
 #: authenticate them -- so it is truncated to stay readable in a row and a log.
@@ -113,7 +110,19 @@ def vocabulary_version() -> str:
     Keys only, not definitions. Retuning a parameter bound inside an existing
     observable does not make previously explored constructions unexplored, but
     adding or removing one changes what "we have already tried that" means.
+
+    The grammar is imported here rather than at module scope, and that is load
+    bearing. `forge.research.grammar` imports the strategy IR, and
+    `forge.strategy.models` imports `forge.research.models` -- so a module-scope
+    import pulls the two packages into each other's initialisation and the
+    result works or explodes depending on which one the process touches first.
+    `forge.research.synthesis` is kept out of the package `__init__` for exactly
+    this reason; this is the same hazard reached from a different direction,
+    because `campaign` *is* re-exported and so drags whatever it imports along.
     """
+    from forge.research.grammar import OBSERVABLES, SHAPES
+    from forge.research.mechanisms import MECHANISMS
+
     parts = (
         ",".join(sorted(OBSERVABLES)),
         ",".join(sorted(SHAPES)),
