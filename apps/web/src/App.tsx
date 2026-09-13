@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { getJson } from './api'
+import { parse, routeOf } from './route'
 import { CommandPalette } from './components/CommandPalette'
 import { ContextBar } from './components/ContextBar'
 import { Wordmark } from './components/Logo'
@@ -82,7 +83,10 @@ export const MAIN_LANDMARK_ID = 'main-content'
  * what keeps Strategies, Validation and Evidence a single implementation in all
  * three.
  */
-function viewFor(mode: ModeKey, route: string): React.ReactNode {
+function viewFor(mode: ModeKey, hash: string): React.ReactNode {
+  /* The section, without whatever the link asked it to open. A view keyed by
+   * the whole hash would miss on every deep link and render nothing. */
+  const { path: route, params } = parse(hash)
   const perMode: Record<string, React.ReactNode> = {
     'prop_firm/account': <PropAccountView section="account" />,
     'prop_firm/rules': <PropAccountView section="rules" />,
@@ -121,7 +125,7 @@ function viewFor(mode: ModeKey, route: string): React.ReactNode {
     workspace: <WorkspaceView />,
     charts: <ChartsView />,
     trades: <StrategyChartView />,
-    strategies: <StrategiesView />,
+    strategies: <StrategiesView open={params.strategy ?? ''} pane={params.pane ?? ''} />,
     runs: <RunsView />,
     validation: <ValidationLabView />,
     evidence: <EvidenceView />,
@@ -207,10 +211,15 @@ export function App() {
      * manifest does not list — that is the entire purpose of it. Correcting
      * against the manifest would bounce somebody straight back out of the
      * research screen they just added to their prop workspace. */
+    /* Compared without its parameters. `#strategies?strategy=abc` names the
+     * same section as `#strategies`, and treating the whole hash as the route
+     * is what made every deep link redirect to the mode's first section --
+     * which looked deliberate and explained nothing. */
+    const here = routeOf(route)
     const inRail = railWorkspace?.sidebar?.groups?.some(
-      (group) => group.items.some((item) => item.route === route),
+      (group) => group.items.some((item) => item.route === here),
     )
-    const known = inRail || sections.some((section) => section.route === route)
+    const known = inRail || sections.some((section) => section.route === here)
     if (!known) {
       const first = sections[0].route
       window.history.replaceState(null, '', `#${first}`)

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, MessageSquarePlus, Search, Trash2, X } from 'lucide-react'
+import { format } from '../route'
 import { useWorkstationContext } from '../workstation'
 import {
   STANDING,
@@ -60,19 +61,35 @@ const CONTEXT_LABEL: Record<ContextKind, string> = {
   campaign: 'Campaign',
 }
 
-/** Where an artifact reopens. Empty when the surface takes no deep link yet —
- *  in which case the artifact still lists its references, because a reference
- *  somebody can copy beats a button that goes nowhere. */
+/** Where an artifact reopens, and on which pane once it gets there.
+ *
+ * Built with `format` rather than by hand. These links used to be assembled as
+ * strings and carried a query the shell could not read: the whole hash was
+ * compared against the section manifest, `#strategies?strategy=abc` matched
+ * nothing, and the correction effect replaced it with the mode's first section.
+ * So every one of them silently went to Overview -- worse than a dead link,
+ * because a dead link at least leaves you where you were.
+ *
+ * Empty is still a real answer: an artifact whose surface takes no link lists
+ * its references instead, because a reference somebody can copy beats a button
+ * that goes nowhere. */
 function destination(artifact: Artifact): string {
-  const strategy = artifact.refs.strategy_id
+  const strategy = artifact.refs.strategy_id ?? ''
+  const account = artifact.refs.account_id ?? ''
   switch (artifact.kind) {
     case 'regime':
     case 'backtest':
-      return strategy ? `#trades?strategy=${encodeURIComponent(strategy)}` : ''
+      return strategy ? format('trades', { strategy }) : ''
     case 'strategy':
     case 'evidence':
+      return strategy ? format('strategies', { strategy }) : ''
     case 'validation':
-      return strategy ? `#strategies?strategy=${encodeURIComponent(strategy)}` : ''
+      // Straight to the gates, which is the pane the validation is about.
+      return strategy ? format('strategies', { strategy, pane: 'gates' }) : ''
+    case 'port':
+      return strategy ? format('strategies', { strategy, pane: 'port' }) : ''
+    case 'prop_simulation':
+      return account ? format('desk', { account }) : '#desk'
     case 'workspace':
       return '#workspace'
     case 'analysis':

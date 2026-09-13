@@ -31,10 +31,20 @@ const PANES: { key: Pane; label: string }[] = [
   { key: 'hypothesis', label: 'Hypothesis' },
 ]
 
-export function StrategiesView() {
+/** What a link asked this view to open. Empty strings mean "nothing asked". */
+type Opening = { open?: string; pane?: string }
+
+export function StrategiesView({ open = '', pane: wanted = '' }: Opening = {}) {
   const qc = useQueryClient()
-  const [selected, setSelected] = useState<string | null>(null)
-  const [pane, setPane] = useState<Pane>('summary')
+  /* Seeded from the link rather than set by an effect afterwards.
+   *
+   * An effect would render the list first and then jump, which reads as the
+   * interface changing its mind -- and worse, would fight the operator the
+   * moment they clicked something else, because the link is still in the URL. */
+  const [selected, setSelected] = useState<string | null>(open || null)
+  const [pane, setPane] = useState<Pane>(
+    PANES.some((p) => p.key === wanted) ? (wanted as Pane) : 'summary',
+  )
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
   const [dataset, setDataset] = useState('')

@@ -255,9 +255,12 @@ describe('artifacts', () => {
           artifacts: [
             {
               artifact_id: 'a2',
-              kind: 'port',
-              title: 'Ported strategy · s1',
-              refs: { strategy_id: 's1', target: 'pine' },
+              // A kind with no surface behind it. `port` used to be the
+              // example here and now opens the port pane, so the honest-label
+              // behaviour needs a kind that genuinely has nowhere to go.
+              kind: 'parameter_surface',
+              title: 'Parameter surface · s1',
+              refs: { strategy_id: 's1' },
               provenance: 'deterministic',
             },
           ],
