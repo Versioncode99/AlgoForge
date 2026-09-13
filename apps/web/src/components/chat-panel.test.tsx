@@ -20,6 +20,8 @@ import { ChatPanel } from './ChatPanel'
 const conversations: Conversation[] = []
 let thread: Thread | null = null
 const sent: { path: string; message: string }[] = []
+const attached: { path: string; body: unknown }[] = []
+let workspaceContext = { instrument: '', timeframe: '', dataset: '', campaign: '', strategy: '', account: '' }
 let sendFails = false
 
 function turn(over: Partial<Turn> = {}): Turn {
@@ -58,12 +60,20 @@ vi.mock('../api', () => ({
     return null
   }),
   postJson: vi.fn(async (path: string, body: unknown) => {
+    // The workstation context is read through the action registry, the same
+    // way every other surface reads it.
+    if (path === '/actions/describe_context') {
+      return { context: workspaceContext, groups: {}, panel_groups: [], panels: [] }
+    }
     if (path.endsWith('/messages')) {
       if (sendFails) throw new Error('the model provider timed out')
       sent.push({ path, message: (body as { message: string }).message })
       return { turn: turn({ text: 'Understood.' }), conversation: conversation(), note: null }
     }
-    if (path.endsWith('/context')) return { ...(body as object), attached_at: 'now' }
+    if (path.endsWith('/context')) {
+      attached.push({ path, body })
+      return { ...(body as object), attached_at: 'now' }
+    }
     if (path === '/conversations') {
       const created = conversation({ conversation_id: 'c-new', title: 'New conversation' })
       conversations.unshift(created)
@@ -87,8 +97,17 @@ function mount(props: Parameters<typeof ChatPanel>[0] = {}) {
 beforeEach(() => {
   conversations.length = 0
   sent.length = 0
+  attached.length = 0
   sendFails = false
   thread = null
+  workspaceContext = {
+    instrument: '',
+    timeframe: '',
+    dataset: '',
+    campaign: '',
+    strategy: '',
+    account: '',
+  }
 })
 
 afterEach(() => vi.clearAllMocks())
@@ -378,5 +397,73 @@ describe('attached context', () => {
     const { container } = mount()
     await screen.findByText('An answer.')
     expect(container.querySelector('.chat-context')).toBeNull()
+  })
+})
+
+// ── what a new thread starts knowing ─────────────────────────────────────────
+
+/** The workspace context arrives from its own request. Clicking before it
+ *  lands is a real state -- the component handles it by reading the freshest
+ *  value at mutation time -- but it is not the state these cases are about. */
+async function contextLoaded() {
+  const { postJson } = await import('../api')
+  await waitFor(() =>
+    expect(vi.mocked(postJson).mock.calls.some(([path]) => path === '/actions/describe_context')).toBe(
+      true,
+    ),
+  )
+}
+
+describe('opening context', () => {
+  it('inherits what the workspace is pointed at', async () => {
+    /* The workstation already tracks the instrument, strategy and account the
+     * operator is looking at. A conversation opened there should start knowing
+     * the same things rather than making somebody type them again. */
+    workspaceContext = { ...workspaceContext, instrument: 'NQ', strategy: 's1' }
+    thread = { conversation: conversation(), turns: [] }
+    mount()
+    await contextLoaded()
+    fireEvent.click((await screen.findAllByRole('button', { name: /New/ }))[0])
+    await waitFor(() => expect(attached).toHaveLength(2))
+    expect(attached.map((a) => (a.body as { kind: string }).kind).sort()).toEqual([
+      'dataset',
+      'strategy',
+    ])
+  })
+
+  it('attaches to the conversation it just created', async () => {
+    /* Same stale-closure trap as the first message: `activeId` is a render
+     * behind, so the id has to come from the create call. */
+    workspaceContext = { ...workspaceContext, instrument: 'NQ' }
+    thread = { conversation: conversation(), turns: [] }
+    mount()
+    await contextLoaded()
+    fireEvent.click((await screen.findAllByRole('button', { name: /New/ }))[0])
+    await waitFor(() => expect(attached).toHaveLength(1))
+    expect(attached[0].path).toBe('/conversations/c-new/context')
+    expect(attached[0].path).not.toContain('null')
+  })
+
+  it('attaches nothing when the workspace is pointed at nothing', async () => {
+    // An empty instrument would be a chip on screen naming nothing.
+    thread = { conversation: conversation(), turns: [] }
+    mount()
+    fireEvent.click((await screen.findAllByRole('button', { name: /New/ }))[0])
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(attached).toEqual([])
+  })
+
+  it('prefers the context the panel was opened against', async () => {
+    workspaceContext = { ...workspaceContext, instrument: 'NQ', account: 'acct-1' }
+    thread = { conversation: conversation(), turns: [] }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <ChatPanel opening={{ kind: 'strategy', ref: 's_explicit', label: 'NQ ORB' }} />
+      </QueryClientProvider>,
+    )
+    fireEvent.click((await screen.findAllByRole('button', { name: /New/ }))[0])
+    await waitFor(() => expect(attached).toHaveLength(1))
+    expect((attached[0].body as { ref: string }).ref).toBe('s_explicit')
   })
 })

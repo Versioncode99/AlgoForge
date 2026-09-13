@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, MessageSquarePlus, Search, Trash2, X } from 'lucide-react'
+import { useWorkstationContext } from '../workstation'
 import {
   STANDING,
   type Artifact,
@@ -260,10 +261,39 @@ function History({
   )
 }
 
+/** What the workspace is currently pointed at, as conversation attachments.
+ *
+ * The workstation already tracks the instrument, strategy and account the
+ * operator is looking at, and link groups already propagate it between panels.
+ * A conversation opened in that workspace should start knowing the same things
+ * rather than making somebody type them again -- and it should show what it
+ * knows, which is why these become visible chips rather than hidden prompt
+ * text.
+ *
+ * Only facets that are actually set. Attaching an empty instrument would put a
+ * chip on screen that names nothing.
+ */
+function openingContext(facets: {
+  instrument: string
+  strategy: string
+  account: string
+}): { kind: ContextKind; ref: string; label: string }[] {
+  const wanted: [ContextKind, string][] = [
+    ['dataset', facets.instrument],
+    ['strategy', facets.strategy],
+    ['account', facets.account],
+  ]
+  return wanted
+    .filter(([, ref]) => Boolean(ref))
+    .map(([kind, ref]) => ({ kind, ref, label: ref }))
+}
+
 export function ChatPanel({
   /** Context the panel was opened against — a strategy, a chart's instrument.
    *  Attached to a new conversation on creation so the thread starts knowing
-   *  what it is about, rather than the operator having to say it again. */
+   *  what it is about, rather than the operator having to say it again.
+   *
+   *  Omitted, the panel falls back to whatever the workspace is pointed at. */
   opening,
   compact = false,
 }: {
@@ -275,14 +305,15 @@ export function ChatPanel({
   const [draft, setDraft] = useState('')
   const [showHistory, setShowHistory] = useState(!compact)
 
+  const workspace = useWorkstationContext()
   const conversations = useConversations(query)
   const thread = useThread(activeId)
   const create = useCreateConversation()
   const send = useSendMessage()
   const archive = useArchiveConversation()
   const remove = useDeleteConversation()
-  const attach = useAttachContext(activeId)
-  const detach = useDetachContext(activeId)
+  const attach = useAttachContext()
+  const detach = useDetachContext()
 
   const rows = useMemo(() => conversations.data ?? [], [conversations.data])
 
@@ -304,16 +335,29 @@ export function ChatPanel({
     }
   }, [thread.data?.turns.length, send.isPending])
 
+  /* What a new thread starts knowing: whatever the panel was opened against,
+   * or failing that whatever the workspace is pointed at.
+   *
+   * Held in a ref and read inside the callback rather than captured at click
+   * time. The context arrives from its own query, and a click that lands
+   * before it resolves would otherwise start a thread knowing nothing --
+   * silently, and only sometimes, which is the worst version of that bug. */
+  const inherited = opening?.ref
+    ? [{ kind: opening.kind, ref: opening.ref, label: opening.label ?? opening.ref }]
+    : openingContext(
+        workspace.data?.context ?? { instrument: '', strategy: '', account: '' },
+      )
+  const latestContext = useRef(inherited)
+  latestContext.current = inherited
+
   const start = () => {
     create.mutate('', {
       onSuccess: (conversation) => {
         setActiveId(conversation.conversation_id)
-        if (opening?.ref) {
-          attach.mutate({
-            kind: opening.kind,
-            ref: opening.ref,
-            label: opening.label ?? opening.ref,
-          })
+        for (const item of latestContext.current) {
+          // The id from the create call, for the same reason `send` takes one:
+          // `activeId` is a render behind here.
+          attach.mutate({ conversationId: conversation.conversation_id, ...item })
         }
       },
     })
@@ -387,7 +431,9 @@ export function ChatPanel({
 
         <ContextChips
           context={context}
-          onDetach={(item) => detach.mutate({ kind: item.kind, ref: item.ref })}
+          onDetach={(item) =>
+            activeId && detach.mutate({ conversationId: activeId, kind: item.kind, ref: item.ref })
+          }
         />
 
         <div className="chat-thread" role="log" aria-label="Conversation">

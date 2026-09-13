@@ -198,22 +198,44 @@ export function useDeleteConversation() {
   })
 }
 
-export function useAttachContext(conversationId: string | null) {
+/* Both of these take the conversation in their variables rather than closing
+ * over component state, for the reason `useSendMessage` does: a thread created
+ * and immediately given context would otherwise attach to the id from the
+ * previous render. */
+
+export function useAttachContext() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (item: { kind: ContextKind; ref: string; label?: string }) =>
-      postJson<AttachedContext>(`/conversations/${conversationId}/context`, item),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['conversation', conversationId] }),
+    mutationFn: ({
+      conversationId,
+      ...item
+    }: {
+      conversationId: string
+      kind: ContextKind
+      ref: string
+      label?: string
+    }) => postJson<AttachedContext>(`/conversations/${conversationId}/context`, item),
+    onSuccess: (_result, { conversationId }) =>
+      client.invalidateQueries({ queryKey: ['conversation', conversationId] }),
   })
 }
 
-export function useDetachContext(conversationId: string | null) {
+export function useDetachContext() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: ({ kind, ref }: { kind: ContextKind; ref: string }) =>
+    mutationFn: ({
+      conversationId,
+      kind,
+      ref,
+    }: {
+      conversationId: string
+      kind: ContextKind
+      ref: string
+    }) =>
       deleteJson<unknown>(
         `/conversations/${conversationId}/context/${kind}/${encodeURIComponent(ref)}`,
       ),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['conversation', conversationId] }),
+    onSuccess: (_result, { conversationId }) =>
+      client.invalidateQueries({ queryKey: ['conversation', conversationId] }),
   })
 }
