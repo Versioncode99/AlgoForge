@@ -94,6 +94,7 @@ COLOUR_PREFIXES = (
     "--verdict-",
     "--tier-",
     "--chart-",
+    "--heat-",
 )
 
 
