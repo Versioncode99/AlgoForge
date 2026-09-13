@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from forge.research.frontier import SearchKind
+from forge.strategy.primitives import CATALOGUE
 
 #: Length of the character shingles compared. Four is the usual compromise for
 #: short technical English: long enough that common words do not dominate, short
@@ -535,33 +536,18 @@ def subjects_from_hypotheses(hypotheses: Iterable[Any]) -> list[Subject]:
     ]
 
 
-#: What a signal can read. The IR's feature vocabulary, plus the raw window
-#: attributes a hand-written template uses. Kept as a literal set rather than
-#: imported from `forge.strategy.ir` so this module has no strategy dependency
-#: and can be tested on its own.
-KNOWN_FEATURES = frozenset(
-    [
-        "sma",
-        "ema",
-        "atr",
-        "adx",
-        "rsi",
-        "highest",
-        "lowest",
-        "realised_vol",
-        "roc",
-        "session_vwap",
-        "session_vwap_sd",
-        "opening_range_high",
-        "opening_range_low",
-        "bars_since_session_open",
-        "minute_of_day",
-        "closes",
-        "highs",
-        "lows",
-        "opens",
-        "volumes",
-    ]
+#: What a signal can read: the IR's own feature vocabulary, plus the raw window
+#: attributes a hand-written template reaches for directly.
+#:
+#: This used to be a literal list, kept separate so this module had no strategy
+#: dependency. That independence cost more than it bought the moment the
+#: vocabulary grew: a feature the IR could compute and this set did not name was
+#: a feature the novelty gate could not see, so two constructions built from
+#: different new primitives compared as reading *nothing* — and two empty sets
+#: score 0.0 against each other, which reads as maximally different. Deriving it
+#: means the gate always knows the whole vocabulary.
+KNOWN_FEATURES = frozenset(CATALOGUE) | frozenset(
+    ["closes", "highs", "lows", "opens", "volumes"]
 )
 
 

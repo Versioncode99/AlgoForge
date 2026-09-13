@@ -76,6 +76,14 @@ class AgentRole(StrEnum):
     #: Search for genuinely new mechanisms.
     DISCOVERY = "DISCOVERY"
     #: Retrieve academic and industry evidence, with citations kept.
+    #:
+    #: Turning what it retrieves into research questions is not a separate role.
+    #: A SYNTHESIS role was added here and removed: its bucket preference came
+    #: out identical to DISCOVERY's, which `test_no_two_roles_prefer_exactly_the
+    #: _same_work` correctly refused as one role with two names. The capability
+    #: is real and lives in `forge.research.leads`, called deterministically by
+    #: whichever role triggered the retrieval — it makes no model call, so a
+    #: role for it would also be a routing entry that changes nothing.
     LITERATURE = "LITERATURE"
     #: Investigate feature and signal constructions.
     FEATURE = "FEATURE"
@@ -114,7 +122,10 @@ ELIGIBLE = frozenset({AgentState.STARTING, AgentState.RUNNING, AgentState.IDLE, 
 #: enum so a role added without an explanation is obvious in review.
 ROLE_PURPOSE: dict[AgentRole, str] = {
     AgentRole.DISCOVERY: "Proposes mechanisms nothing on record already claims.",
-    AgentRole.LITERATURE: "Retrieves published evidence and keeps its provenance.",
+    AgentRole.LITERATURE: (
+        "Retrieves published evidence, keeps its provenance, and turns the claims "
+        "this engine can construct a test for into open questions."
+    ),
     AgentRole.FEATURE: "Investigates how a signal is constructed, not how it is tuned.",
     AgentRole.HYPOTHESIS: "Turns a mechanism into a claim that can be shown false.",
     AgentRole.FALSIFICATION: "Attacks the candidates that look best.",

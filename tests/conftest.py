@@ -74,6 +74,40 @@ def protect_the_real_storage_pointer() -> Any:
     )
 
 
+# Operator settings: model routing, budget enforcement, external research and
+# appearance. Not tracked by git, for the same reason the pointer is not, and
+# with the same consequence if a test writes it.
+_REAL_SETTINGS = Path(__file__).resolve().parents[1] / "config" / "settings.json"
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings() -> Any:
+    """Give each test its own operator settings, and give the developer theirs back.
+
+    `create_app` resolves the settings file from the *repository*, not from the
+    isolated workspace, so every test that patched `/settings` was writing the
+    real one. Two consequences, and the second is the one that cost an hour:
+
+    * running the suite silently replaced the developer's own model routing,
+      budget and research configuration with whatever the last test set;
+    * and every test after the first started from that state rather than from
+      the defaults, so a test asserting "enforcement is on by default" passed or
+      failed depending on which tests ran before it.
+
+    Snapshot, remove so the test starts from the shipped defaults, restore.
+    """
+    before = _REAL_SETTINGS.read_text(encoding="utf-8") if _REAL_SETTINGS.exists() else None
+    _REAL_SETTINGS.unlink(missing_ok=True)
+    try:
+        yield
+    finally:
+        if before is None:
+            _REAL_SETTINGS.unlink(missing_ok=True)
+        else:
+            _REAL_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+            _REAL_SETTINGS.write_text(before, encoding="utf-8")
+
+
 @pytest.fixture(autouse=True)
 def isolated_template_catalogue() -> Any:
     """Give every test its own view of the shared template catalogue.

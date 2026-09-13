@@ -43,7 +43,7 @@ from __future__ import annotations
 import contextlib
 import random
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -53,10 +53,13 @@ from forge.research.allocation import Bucket, FrontierSignal, ResearchAllocation
 from forge.research.campaign import Campaign, CampaignStore
 from forge.research.followup import FollowUp, Observation, derive
 from forge.research.frontier import FrontierState, ResearchFrontier, SearchKind
+from forge.research.grammar import DrawConstraints, draw
 from forge.research.hypotheses import EdgeKind, HypothesisGraph, HypothesisStatus
 from forge.research.information import estimate_cost, rank, value_of
 from forge.research.journal import EventKind, ResearchJournal
+from forge.research.leads import leads_from_sources, unused
 from forge.research.literature import SourceStore, retrieve, topics_for
+from forge.research.mechanisms import MECHANISMS
 from forge.research.novelty import (
     Subject,
     assess,
@@ -83,7 +86,14 @@ from forge.research.skips import (
     admits,
     level_from_score,
 )
-from forge.research.synthesis import ARCHETYPES, Archetype, archetypes_for, compose
+from forge.research.synthesis import (
+    ARCHETYPES,
+    Archetype,
+    archetype_from_spec,
+    archetypes_for,
+    compose,
+    signature_from_key,
+)
 from forge.strategy import TEMPLATES, TemplateRejected
 from forge.strategy.export import to_python
 
@@ -91,6 +101,50 @@ from forge.strategy.export import to_python
 #: autonomous run that pulls fifty abstracts per cycle is spending its time
 #: fetching rather than testing.
 LITERATURE_RESULTS = 6
+
+#: How many research questions one retrieval may raise. Small for the same
+#: reason the result count is: eight papers on momentum are eight citations for
+#: one question, and admitting eight items would be the engine mistaking a
+#: literature for a programme.
+LITERATURE_LEADS = 3
+
+#: Where a mechanism's questions land in the family catalogue. Every value is a
+#: shipped family key; a family the registry refuses would fail the write.
+_FAMILY_BY_MECHANISM: dict[str, str] = {
+    "liquidity_removal": "breakout",
+    "absorption_reversion": "mean_reversion",
+    "volatility_clustering": "volatility",
+    "volatility_exhaustion": "volatility",
+    "trend_persistence": "momentum",
+    "overreaction_reversal": "mean_reversion",
+    "liquidity_reaction": "liquidity",
+    "session_structure": "session_structure",
+    "horizon_disagreement": "momentum",
+    "regime_transition": "volatility",
+    "delayed_reaction": "momentum",
+    "price_discovery": "mean_reversion",
+}
+
+#: How often a construction is *assembled* by the grammar rather than selected
+#: from the ten written archetypes, once the seeds have been tried.
+#:
+#: Not 1.0, and the reason is not caution. The written archetypes each carry a
+#: mechanism somebody argued for and a prediction somebody wrote; they are the
+#: calibration against which an assembled construction's results mean anything.
+#: A campaign that never ran one would have no baseline.
+ASSEMBLED_SHARE = 0.75
+
+#: How many draws `_assemble` will make before reporting the space exhausted.
+#: Bounded so a saturated campaign says so in one cycle rather than spinning.
+ASSEMBLY_ATTEMPTS = 8
+
+#: The most warm-up bars an assembled construction may need.
+#:
+#: Not a safety limit — a correctness one about what a campaign can learn.
+#: Warmup comes off the front of every partition, so a construction needing
+#: thousands of bars before it computes anything leaves a validation window too
+#: small to partition, and the cycle returns BLOCKED having measured nothing.
+MAX_ASSEMBLED_WARMUP = 800
 
 #: A generated template is piloted before it joins the catalogue. This is the
 #: bar count for that pilot — enough to establish that it trades at a usable
@@ -273,6 +327,7 @@ class ResearchDirector:
         log: Any = None,
         library: Any = None,
         transport: Any = None,
+        research_policy: Any = None,
     ) -> None:
         self.campaigns = campaigns
         self.frontier = frontier
@@ -283,7 +338,16 @@ class ResearchDirector:
         self.families = families
         self.templates = templates
         self.log = log
+        # How deep to search and what to prefer. A callable rather than a
+        # captured value, because an operator changing it in settings has to
+        # change the *next* retrieval and not the next restart. `None` is the
+        # shipped default, which is what a caller that does not care gets.
+        self.research_policy = research_policy
         self.library = library
+        # How deep to search and what to prefer, read at call time rather than
+        # captured: an operator changing it in settings must change the next
+        # retrieval, not the next restart. `None` means the shipped defaults,
+        # which is what a test that does not care about it gets.
         # Injected in tests so literature retrieval can be exercised without a
         # network. Production leaves it None and httpx uses its own transport.
         self.transport = transport
@@ -925,24 +989,142 @@ class ResearchDirector:
             if not campaign.serves((template.data_requirement,))
         )
 
+    # ── where a construction comes from ──────────────────────────────────────
+    # Two sources, in one order. The ten written archetypes are the curated
+    # seeds: they are cheap, well-formed, and a campaign that has not tried them
+    # has not started. Once they are spent, the grammar assembles new ones, and
+    # that is where a campaign stops running out.
+
+    def _tried_signatures(self, campaign: Campaign | None = None) -> frozenset[str]:
+        """Structural signatures this installation has already built.
+
+        Two sources, because one of them survives a restart and the other does
+        not. The in-memory attribution record is exact and current; the template
+        catalogue on disk carries each assembled construction's signature in its
+        own key, so a campaign resumed in a new process can still see what it
+        built yesterday. Without the second, a restarted campaign re-proposes
+        its own earlier work and the novelty gate refuses it — activity, with no
+        progress, and a refusal log that reads like the engine is working.
+        """
+        found: set[str] = set()
+        with self._lock:
+            for key, meta in self._generated.items():
+                if campaign and meta.get("campaign_id") != campaign.campaign_id:
+                    continue
+                signature = str(meta.get("structural_signature") or "")
+                if signature:
+                    found.add(signature)
+                recovered = signature_from_key(key)
+                if recovered:
+                    found.add(recovered)
+        for key in TEMPLATES:
+            recovered = signature_from_key(key)
+            if recovered:
+                found.add(recovered)
+        return frozenset(found)
+
+    def _assemble(
+        self,
+        campaign: Campaign,
+        rng: random.Random,
+        *,
+        family: str = "",
+        extra_excluded: Iterable[str] = (),
+    ) -> Archetype | None:
+        """Draw a construction the grammar has not produced for this campaign yet.
+
+        Returns ``None`` when the constrained space is exhausted, and the caller
+        is expected to say so rather than propose something it knows will be
+        refused. "This campaign has tried everything it is allowed to try" is a
+        finding about the frontier; another near-duplicate is not.
+        """
+        if ASSEMBLED_SHARE <= 0.0:
+            # The grammar is off. A share of zero is not "assemble rarely"; it
+            # is the written archetypes only, which is what the engine had
+            # before this phase and what the comparison harness's baseline arm
+            # needs in order to be a baseline.
+            return None
+        excluded = set(self._tried_signatures()) | set(extra_excluded)
+        for _ in range(ASSEMBLY_ATTEMPTS):
+            spec = draw(
+                rng,
+                DrawConstraints(
+                    exclude_signatures=frozenset(excluded),
+                    gate_rate=0.55 if family else 0.45,
+                ),
+            )
+            if spec is None:
+                return None
+            archetype = archetype_from_spec(spec)
+            if campaign.serves(archetype.required_data):
+                # A data class this campaign cannot reach. Recording it as a
+                # blocked frontier item would be true and would also be a cycle
+                # spent learning something the campaign already knew.
+                excluded.add(spec.signature)
+                continue
+            warmup = compose(
+                archetype=archetype,
+                symbol=campaign.symbol,
+                timeframe=campaign.timeframe,
+                seed=0,
+                direction="both",
+                session="",
+                exit_style="time_stop",
+            ).definition.required_warmup()
+            if warmup > MAX_ASSEMBLED_WARMUP:
+                # Warmup is derived from each parameter's declared maximum, so a
+                # construction sweeping a long window needs history before it
+                # computes anything. Past a point the partition has no room left
+                # to test on and the cycle comes back BLOCKED — true, and a
+                # wasted draw. Refuse it here, where it costs one composition.
+                excluded.add(spec.signature)
+                continue
+            return archetype
+        return None
+
     def _pick_archetype(
         self, campaign: Campaign, rng: random.Random, *, prefer_unused: bool
     ) -> Archetype | None:
-        """An archetype this campaign can actually run.
+        """A construction this campaign can actually run.
 
         ``prefer_unused`` biases family discovery towards constructions that
         have not already been turned into a family, so the discovery bucket does
-        not spend its budget re-proposing the same one and being refused.
+        not spend its budget re-proposing the same one and being refused. When
+        every written archetype is spent — which is exactly where the previous
+        engine stopped discovering — the grammar assembles a new one instead.
         """
         runnable = [a for a in ARCHETYPES.values() if not campaign.serves(a.required_data)]
-        if not runnable:
-            return None
+        # A written archetype this campaign has already built is not a fresh
+        # proposal, and proposing it again is a cycle spent composing a
+        # definition, rendering it, registering a template and having the
+        # novelty gate refuse the claim — correctly, and expensively.
+        #
+        # Measured before this filter: a 320-cycle campaign produced 222
+        # SAME_CONSTRUCTION refusals, most of them the ten written archetypes
+        # coming round again. The gate was doing its job; the draw was asking
+        # it the same question repeatedly.
+        tried = self._tried_signatures()
+        unspent = [a for a in runnable if a.key not in tried]
         if prefer_unused:
             known = self.families.all_keys()
-            fresh = [a for a in runnable if f"discovered_{a.key}"[:40] not in known]
+            fresh = [a for a in unspent if f"discovered_{a.key}"[:40] not in known]
             if fresh:
-                runnable = fresh
-        return runnable[rng.randrange(len(runnable))]
+                return fresh[rng.randrange(len(fresh))]
+            # Every written archetype already has a family. That used to be the
+            # end of discovery; now it is where the assembled half starts.
+            assembled = self._assemble(campaign, rng)
+            if assembled is not None:
+                return assembled
+        if not unspent:
+            return self._assemble(campaign, rng)
+        # Past the seeds, the grammar is the larger half of the vocabulary and
+        # is drawn from most of the time. The written archetypes stay reachable
+        # because they are curated: each carries a mechanism somebody argued for.
+        if rng.random() < ASSEMBLED_SHARE:
+            assembled = self._assemble(campaign, rng)
+            if assembled is not None:
+                return assembled
+        return unspent[rng.randrange(len(unspent))]
 
     def _archetype_for_item(
         self, item: Any, rng: random.Random, *, exclude_used: bool = False
@@ -951,16 +1133,26 @@ class ResearchDirector:
 
         ``exclude_used`` drops constructions this item has already been tested
         with, which is what makes ``ADVANCE_PROMISING`` produce a genuinely
-        different measurement rather than the same one again.
+        different measurement rather than the same one again — and when the
+        written pool for that family is spent, an assembled one keeps the
+        question answerable instead of closing it for want of a second method.
         """
         pool = archetypes_for(item.family)
+        used: set[str] = set()
         if exclude_used:
-            used = {
-                meta["archetype"]
-                for meta in self._generated.values()
-                if meta.get("frontier_item_id") == item.item_id
-            }
-            pool = [a for a in pool if a.key not in used] or []
+            with self._lock:
+                used = {
+                    str(meta.get("structural_signature") or meta.get("archetype") or "")
+                    for meta in self._generated.values()
+                    if meta.get("frontier_item_id") == item.item_id
+                }
+            pool = [a for a in pool if a.key not in used]
+        if not pool or rng.random() < ASSEMBLED_SHARE:
+            campaign = self.campaigns.get(getattr(item, "campaign_id", "") or "")
+            if campaign is not None:
+                assembled = self._assemble(campaign, rng, family=item.family, extra_excluded=used)
+                if assembled is not None:
+                    return assembled
         return pool[rng.randrange(len(pool))] if pool else None
 
     def _candidate_from_archetype(
@@ -1017,6 +1209,53 @@ class ResearchDirector:
 
         template_key = f"gen_{archetype.key}_{definition.definition_hash[:8]}"[:50]
         registered_here = template_key not in TEMPLATES
+
+        # The claim is checked *before* the template is built.
+        #
+        # It used to be the other way round: register, then assess, then
+        # withdraw when the claim turned out to be one already on the frontier.
+        # Registering runs `to_python`, the static guard and a smoke test over
+        # synthetic bars, and withdrawing deletes it again — measured at 220 of
+        # 320 cycles in one campaign, all of that work thrown away for a verdict
+        # that cost nothing and could have come first.
+        #
+        # A fresh claim only. Picking up an existing frontier item is not a new
+        # claim at all, and that branch is below.
+        verdict = None
+        if existing_node is None or existing_item is None:
+            proposal = Subject.of(
+                template_key,
+                statement=definition.hypothesis,
+                mechanism=archetype.mechanism,
+                family=family,
+                features=archetype.signature(),
+                required_data=archetype.required_data,
+            )
+            corpus = subjects_from_hypotheses(
+                self.hypotheses.list(campaign.campaign_id, limit=400)
+            ) + subjects_from_templates(
+                {k: v for k, v in TEMPLATES.items() if k != template_key}
+            )
+            verdict = assess(proposal, corpus, claimed=search_kind)
+            if not verdict.admitted and search_kind is not SearchKind.PARAMETER:
+                self._event(
+                    EventKind.HYPOTHESIS_REJECTED,
+                    verdict.reason,
+                    detail={**verdict.as_dict(), "template_not_built": template_key},
+                    level="warn",
+                    worker=worker,
+                )
+                return Refusal(
+                    reason=verdict.reason,
+                    bucket=bucket,
+                    duplicate=True,
+                    kind=SkipKind.NOT_NOVEL,
+                    level=_level_of(verdict),
+                    matched=verdict.nearest.key if verdict.nearest else None,
+                    similarity=verdict.nearest.combined if verdict.nearest else None,
+                    subject=archetype.label,
+                )
+
         if registered_here:
             registered = self._register_template(
                 campaign, composition, template_key, family, worker, sources
@@ -1064,47 +1303,8 @@ class ResearchDirector:
                 or f"testing an open question with the {archetype.key} construction",
             )
 
-        # A fresh claim, checked against every claim already made. A structural
-        # variant that turns out to restate an existing hypothesis is refused
-        # here rather than becoming a near-duplicate node in the graph.
-        proposal = Subject.of(
-            template_key,
-            statement=definition.hypothesis,
-            mechanism=archetype.mechanism,
-            family=family,
-            features=archetype.signature(),
-            required_data=archetype.required_data,
-        )
-        corpus = subjects_from_hypotheses(
-            self.hypotheses.list(campaign.campaign_id, limit=400)
-        ) + subjects_from_templates({k: v for k, v in TEMPLATES.items() if k != template_key})
-        verdict = assess(proposal, corpus, claimed=search_kind)
-        if not verdict.admitted and search_kind is not SearchKind.PARAMETER:
-            # Take the template back out. It was registered a moment ago to
-            # prove the claim was implementable, and the claim turned out to be
-            # one already on the frontier — leaving it would put a template in
-            # the catalogue that no hypothesis points at, and inflate the
-            # "templates created" count with work that answered nothing.
-            if registered_here:
-                self._withdraw_template(template_key)
-            self._event(
-                EventKind.HYPOTHESIS_REJECTED,
-                verdict.reason,
-                detail={**verdict.as_dict(), "withdrew_template": template_key},
-                level="warn",
-                worker=worker,
-            )
-            return Refusal(
-                reason=verdict.reason,
-                bucket=bucket,
-                duplicate=True,
-                kind=SkipKind.NOT_NOVEL,
-                level=_level_of(verdict),
-                matched=verdict.nearest.key if verdict.nearest else None,
-                similarity=verdict.nearest.combined if verdict.nearest else None,
-                subject=archetype.label,
-            )
-
+        # The verdict was reached above, before any of the work that follows it.
+        assert verdict is not None
         item_id = frontier_item_id
         if item_id is None:
             item = self.frontier.admit(
@@ -1245,24 +1445,6 @@ class ResearchDirector:
         )
         return None
 
-    def _withdraw_template(self, template_key: str) -> None:
-        """Remove a generated template that no admitted hypothesis needs.
-
-        Reverses `_register_template` exactly: out of the shared catalogue, off
-        disk, and out of the attribution record and the campaign's count. A
-        template left behind here would be reachable by the parameter-refinement
-        bucket forever, which would quietly turn a refused duplicate into a
-        thing the engine keeps testing.
-        """
-        TEMPLATES.pop(template_key, None)
-        with self._lock:
-            self._generated.pop(template_key, None)
-        with contextlib.suppress(KeyError):
-            self.templates.delete(template_key)
-        serving = self._serving_id()
-        if serving:
-            self.campaigns.record(serving, templates_created=-1)
-
     def _admit_blocked(
         self, campaign: Campaign, archetype: Archetype, missing: Sequence[str], worker: int
     ) -> None:
@@ -1292,6 +1474,24 @@ class ResearchDirector:
             worker=worker,
         )
 
+    def _retrieval_policy(self) -> tuple[int, str, tuple[str, ...]]:
+        """How many results to keep, what to prefer, and which indexes to search.
+
+        Read at call time from whatever the caller injected. A setting that is
+        stored, shown on a screen and never read is a control that does nothing,
+        which is the defect this phase spent most of its time removing.
+        """
+        default = (LITERATURE_RESULTS, "recent", ())
+        if self.research_policy is None:
+            return default
+        try:
+            policy = self.research_policy()
+        except Exception:
+            return default
+        depth = int(policy.get("results", LITERATURE_RESULTS) or LITERATURE_RESULTS)
+        categories = tuple(str(c) for c in policy.get("categories", ()) or ())
+        return max(1, min(10, depth)), str(policy.get("freshness") or "recent"), categories
+
     def _maybe_retrieve(self, campaign: Campaign, hint: str, worker: int) -> tuple[str, ...]:
         """Search the literature, when the campaign allows it.
 
@@ -1308,7 +1508,14 @@ class ResearchDirector:
             topic = state.topics[state.topic_index % len(state.topics)]
             state.topic_index += 1
 
-        report = retrieve(topic, limit=LITERATURE_RESULTS, transport=self.transport)
+        depth, freshness, categories = self._retrieval_policy()
+        report = retrieve(
+            topic,
+            limit=depth,
+            transport=self.transport,
+            categories=categories,
+            freshness=freshness,
+        )
         stored = self.sources.record(campaign.campaign_id, report)
         self._event(
             EventKind.LITERATURE_SEARCHED,
@@ -1332,7 +1539,90 @@ class ResearchDirector:
                     detail=source.as_dict(),
                     worker=worker,
                 )
+            self._synthesise(campaign, stored, worker)
         return tuple(s.source_id for s in stored[:3])
+
+    def _synthesise(self, campaign: Campaign, stored: Sequence[Any], worker: int) -> None:
+        """Turn what was retrieved into open questions, or record that it did not.
+
+        This is the step that was missing. Sources were stored and attached to
+        frontier items as *references*, and nothing read them: the engine could
+        say "we looked at this paper" and could not say "and so we asked this".
+
+        A lead becomes a frontier item whose question cites the claim it came
+        from. It is admitted as a question, never as evidence — an external claim
+        does not lower the bar the experiment has to clear, and the item enters
+        `OPEN` like any other. Sources that produced no lead are named in the
+        event, because "we retrieved eight and used two" is a different statement
+        from "we retrieved two".
+        """
+        found = leads_from_sources(stored, limit=LITERATURE_LEADS)
+        idle = unused(list(stored), found)
+        if not found:
+            self._event(
+                EventKind.LITERATURE_SEARCHED,
+                f"{len(stored)} source(s) retrieved; none carried a claim this engine "
+                "can construct a test for",
+                detail={"unused_sources": idle},
+                level="info",
+                worker=worker,
+            )
+            return
+
+        admitted = 0
+        for lead in found:
+            mechanism = MECHANISMS[lead.mechanism]
+            proposal = Subject.of(
+                lead.lead_id,
+                statement=lead.question,
+                mechanism=mechanism.claim,
+                features=frozenset(lead.observables),
+                required_data=mechanism.data,
+            )
+            corpus = subjects_from_hypotheses(
+                self.hypotheses.list(campaign.campaign_id, limit=400)
+            )
+            verdict = assess(proposal, corpus, claimed=SearchKind.HYPOTHESIS)
+            if not verdict.admitted:
+                self._event(
+                    EventKind.HYPOTHESIS_REJECTED,
+                    f"a retrieved claim restates a question already on the frontier: "
+                    f"{verdict.reason}",
+                    detail={**verdict.as_dict(), "lead": lead.as_dict()},
+                    level="info",
+                    worker=worker,
+                )
+                continue
+            item = self.frontier.admit(
+                campaign_id=campaign.campaign_id,
+                question=lead.question,
+                family=_FAMILY_BY_MECHANISM.get(lead.mechanism, "statistical"),
+                mechanism=mechanism.claim,
+                search_kind=SearchKind.HYPOTHESIS,
+                required_data=mechanism.data,
+                novelty=verdict.novelty,
+                sources=(lead.source_id,),
+                origin="director:synthesis",
+                reason=(
+                    f"raised by a retrieved claim in '{lead.title[:80]}' "
+                    f"({lead.published or 'no date'})"
+                ),
+            )
+            admitted += 1
+            self._event(
+                EventKind.HYPOTHESIS_PROPOSED,
+                f"a retrieved claim became an open question: {lead.question[:140]}",
+                subject=item.item_id,
+                detail=lead.as_dict(),
+                worker=worker,
+            )
+        self._event(
+            EventKind.LITERATURE_SEARCHED,
+            f"{admitted} open question(s) from {len(found)} lead(s); "
+            f"{len(idle)} source(s) carried nothing this engine can construct",
+            detail={"leads": [item.as_dict() for item in found], "unused_sources": idle},
+            worker=worker,
+        )
 
     # ── reading the outcome ──────────────────────────────────────────────────
     def observe(self, outcome: ObservationInput) -> None:

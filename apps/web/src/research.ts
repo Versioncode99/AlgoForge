@@ -164,6 +164,40 @@ export type ControlCenter = {
   }
   frontier: Record<string, number>
   capacity: { max_agents: number; ceiling: number }
+  /** The registry and the skip ledger, joined.
+   *
+   *  An agent that proposed forty things and had thirty-eight refused has an
+   *  experiment count that looks like work. Acceptance is the share that became
+   *  an experiment; a low one usually means the frontier that role draws from is
+   *  exhausted rather than that the agent is faulty, which is why the payload
+   *  carries the sentence saying so. */
+  effectiveness: {
+    roles: {
+      role: string
+      agents: number
+      proposals: number
+      experiments: number
+      refusals: number
+      idle_cycles: number
+      findings: number
+      errors: number
+      compute_spent: number
+      acceptance: number
+      efficiency: number
+      efficiency_measured: boolean
+      measured: boolean
+    }[]
+    totals: {
+      experiments: number
+      refusals: number
+      idle_cycles: number
+      findings: number
+      acceptance: number
+    }
+    weakest_role: string
+    weakest_acceptance: number
+    note: string
+  }
 }
 
 const KEY = ['research', 'control-center'] as const
