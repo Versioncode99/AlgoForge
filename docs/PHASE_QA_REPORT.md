@@ -57,12 +57,16 @@ plan: the chat wraps the existing loop rather than building a second one.
 | `tsc --noEmit` | clean |
 | `vite build` | clean |
 | CI — ubuntu 3.13 | **success** on the merge head |
-| CI — **windows** 3.13 | success pre-merge; **re-running** on the merge head |
+| CI — **windows** 3.13 | **success** on the merge head (observed 15:44 UTC) |
 | CI — web | **success** on the merge head |
 | E2E (Playwright, real browser) | 43 passed, 1 skipped, **8 failed — all environmental** |
 
 Backend was 2719 at the start of this branch and 2843 before main was merged in.
 Merging #9 brought its suites with it: 3074 now, across 201 source files. The
+research-quality benchmark is no longer deferred either: it came with #9 and is
+on this branch — a 320-cycle campaign takes unique constructions from **29 to
+51** at the same wall clock (`docs/RESEARCH_EXPANSION_REPORT.md`). Section G
+listed it as belonging to another tree; that stopped being true at `fd69333`. The
 figures in this table are the post-merge re-run, not the pre-merge ones carried
 forward -- a merge that changes `Settings.tsx` and the strategy IR is exactly the
 kind that can invalidate an earlier green.
@@ -236,7 +240,6 @@ optional in the DOM, so any host without it crashed the chat panel on mount.
 | Challenge/Funded as a toggle over one analysis | Partially implemented; deferred |
 | Opening-context auto-attachment from chart and strategy surfaces | The panel accepts an `opening` context; call sites do not pass one |
 | Artifact deep links for `port`, `resample`, `parameter_surface` | Reported honestly as "no panel yet" rather than linking nowhere |
-| Research-quality benchmark (construction diversity, SAME_CONSTRUCTION rate) | Belongs to PR #9's vocabulary work, which is not on this branch; running it here would measure the wrong tree |
 | Multi-window soak under a real Electron process | The registry has a 50-round open/close test; driving a real Electron app headlessly was not attempted |
 
 ---
