@@ -50,10 +50,11 @@ plan: the chat wraps the existing loop rather than building a second one.
 
 | Suite | Result |
 | --- | --- |
-| Backend (`pytest`) | **3074 passed**, 0 failed |
-| Frontend (`vitest`) | **272 passed** in 26 files, 0 failed |
+| Backend (`pytest`) | **3219 passed**, 0 failed |
+| Frontend (`vitest`) | **318 passed** in 28 files, 0 failed |
+| Electron (real shell) | **17 passed**, 0 failed |
 | `ruff check .` | clean |
-| `mypy` (strict) | clean, 201 source files |
+| `mypy` (strict) | clean, 204 source files |
 | `tsc --noEmit` | clean |
 | `vite build` | clean |
 | CI — ubuntu 3.13 | **success** on the merge head |
@@ -62,7 +63,7 @@ plan: the chat wraps the existing loop rather than building a second one.
 | E2E (Playwright, real browser) | 43 passed, 1 skipped, **8 failed — all environmental** |
 
 Backend was 2719 at the start of this branch and 2843 before main was merged in.
-Merging #9 brought its suites with it: 3074 now, across 201 source files. The
+Merging #9 brought its suites with it, and the reconciliation phase added more: 3219 now, across 204 source files. The
 research-quality benchmark is no longer deferred either: it came with #9 and is
 on this branch — a 320-cycle campaign takes unique constructions from **29 to
 51** at the same wall clock (`docs/RESEARCH_EXPANSION_REPORT.md`). Section G
@@ -234,13 +235,13 @@ optional in the DOM, so any host without it crashed the chat panel on mount.
 
 | Item | State |
 | --- | --- |
-| Docking geometry and workspace-group UI | Registry, contract, preload and lifecycle are in and tested; the visual composition is not built |
+| Workspace-**group** UI | Grouping and ungrouping work over IPC and are covered by the Electron suite; there is no visual composition for arranging *windows* into a group. Docking **panels** is built — see `forge.workstation.docking`. |
 | Point estimates adjacent to their own tails | Deferred — presentation change to a correct analysis |
 | Scrubbable equity-path fan by trading day | Deferred, same reason |
 | Challenge/Funded as a toggle over one analysis | Partially implemented; deferred |
 | Opening-context auto-attachment from chart and strategy surfaces | The panel accepts an `opening` context; call sites do not pass one |
-| Artifact deep links for `port`, `resample`, `parameter_surface` | Reported honestly as "no panel yet" rather than linking nowhere |
-| Multi-window soak under a real Electron process | The registry has a 50-round open/close test; driving a real Electron app headlessly was not attempted |
+| Artifact deep link for `parameter_surface` | No panel and no action verb behind it, so the artifact lists its references rather than offering a button that goes nowhere. `port` and `prop_simulation` now link. |
+| ~~Multi-window soak under a real Electron process~~ | **Done.** `apps/web/tests/electron/` drives a real Electron process under Xvfb: 17 journeys including a bounded open/close soak and a memory-return check. |
 
 ---
 

@@ -212,4 +212,4 @@ Asked politely, in a sentence, from a chat panel, none of that changes.
 | Point estimates adjacent to their own tails | Future work, per the QuantPad research |
 | Scrubbable equity-path fan | Future work |
 | Opening-context auto-attachment from chart/strategy surfaces | The panel accepts an `opening` context; the call sites do not pass one yet |
-| Artifact deep links for `port`, `resample`, `parameter_surface` | Reported honestly as "no panel yet" rather than linking nowhere |
+| Artifact deep link for `parameter_surface` | No panel and no action verb behind it, so it lists references rather than offering a button that goes nowhere. `port` opens the port pane and `prop_simulation` the desk; `validation` opens the gates pane rather than the summary. |

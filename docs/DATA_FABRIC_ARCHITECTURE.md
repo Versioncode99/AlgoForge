@@ -50,6 +50,12 @@ focusManager.isFocused()) this.#executeFetch()`). Chromium marks a minimised
 window's document hidden, so **a minimised window already stops polling** and
 §18 is satisfied for that case by the framework, for free.
 
+*Believed, not measured.* The Phase 6 harness could not verify it: under Xvfb
+there is no window manager, `minimize()` does not take effect, and the document
+never goes hidden — so a test that minimises a window measures an unchanged
+window. What **is** measured is the path this document adds, below: told it is
+obscured, a renderer drops to zero requests. See `docs/PERFORMANCE_BASELINE.md`.
+
 What the framework cannot see is the state between: a window **fully covered by
 another** reports `visible` and keeps polling at full rate. With roughly twenty
 interval queries in the application, several at 1.5–2.5 s, that is real work
@@ -107,10 +113,15 @@ Several *visible* windows still poll the same global endpoints (`/health`,
 process to broker requests — a real parallel data path, for a saving currently
 estimated at well under one request per second against a local API.
 
-Doc 2 §30 says to baseline before optimising and not to invent numbers, so that
-is Phase 6's question with real measurements in hand, not a class hierarchy built
-on a guess. Recorded here so it is a deferral with a reason rather than an
-oversight.
+Doc 2 §30 says to baseline before optimising and not to invent numbers.
+
+**That measurement has since been taken, and it declined the optimisation.** An
+active renderer issues roughly ten requests per six seconds, so three windows is
+under one request per second in total against a local API. Brokering those
+through the main process would add a real parallel data path — which §28 forbids
+without cause — to save something that is not currently costing anything. The
+figures and the method are in `docs/PERFORMANCE_BASELINE.md`; revisit if request
+volume ever grows with window count in a way that matters.
 
 ## Tests
 
