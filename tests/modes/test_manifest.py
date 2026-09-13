@@ -1,4 +1,4 @@
-"""The four manifests: what they promise, and whether anything backs it.
+"""The three manifests: what they promise, and whether anything backs it.
 
 A manifest is a promise made to two readers at once — the shell renders it, and
 an agent is told it is the answer to "what can I do here". Both make it worth
@@ -20,8 +20,13 @@ ROOT = Path(__file__).resolve().parents[2]
 APP_TSX = ROOT / "apps" / "web" / "src" / "App.tsx"
 
 
-def test_four_modes_in_a_deliberate_order() -> None:
-    assert [mode.value for mode in MODE_ORDER] == ["normal", "prop_firm", "ai", "hedge_fund"]
+def test_three_modes_in_a_deliberate_order() -> None:
+    """There were four. Hedge Fund was a product category, not a capability.
+
+    Nothing it carried was deleted -- `test_the_book_loop_survived_its_mode`
+    below is the check that the surfaces came across rather than going with it.
+    """
+    assert [mode.value for mode in MODE_ORDER] == ["normal", "prop_firm", "ai"]
     assert set(MODE_ORDER) == set(MODES)
     assert [entry["mode"] for entry in catalogue()] == [m.value for m in MODE_ORDER]
 
@@ -101,15 +106,20 @@ def test_every_route_has_a_view_behind_it(mode: WorkspaceMode) -> None:
         )
 
 
-def test_only_hedge_fund_has_stances_and_it_defaults_to_the_cautious_one() -> None:
-    for mode in (WorkspaceMode.NORMAL, WorkspaceMode.PROP_FIRM, WorkspaceMode.AI):
+def test_only_ai_has_stances_and_it_defaults_to_the_cautious_one() -> None:
+    """The stance belongs to the mode whose purpose is unattended work.
+
+    It used to belong to Hedge Fund, which was never the reason it existed:
+    autonomy is a property of running without a person, not of being a fund.
+    """
+    for mode in (WorkspaceMode.NORMAL, WorkspaceMode.PROP_FIRM):
         assert MODES[mode].stances == ()
         assert MODES[mode].default_stance is None
-    fund = MODES[WorkspaceMode.HEDGE_FUND]
-    assert fund.stances == (Stance.HUMAN_IN_THE_LOOP, Stance.AUTONOMOUS)
+    ai = MODES[WorkspaceMode.AI]
+    assert ai.stances == (Stance.HUMAN_IN_THE_LOOP, Stance.AUTONOMOUS)
     # The default is the one where a person is still in the way. A default that
     # ran unattended would make the safer choice the one you have to remember.
-    assert fund.default_stance is Stance.HUMAN_IN_THE_LOOP
+    assert ai.default_stance is Stance.HUMAN_IN_THE_LOOP
 
 
 def test_a_stance_on_a_mode_that_has_none_is_refused_rather_than_ignored() -> None:
@@ -117,12 +127,12 @@ def test_a_stance_on_a_mode_that_has_none_is_refused_rather_than_ignored() -> No
     with pytest.raises(ValueError, match="no operating stances"):
         parse_stance(WorkspaceMode.NORMAL, "autonomous")
     with pytest.raises(ValueError, match="no stance 'sideways'"):
-        parse_stance(WorkspaceMode.HEDGE_FUND, "sideways")
-    assert parse_stance(WorkspaceMode.HEDGE_FUND, None) is Stance.HUMAN_IN_THE_LOOP
+        parse_stance(WorkspaceMode.AI, "sideways")
+    assert parse_stance(WorkspaceMode.AI, None) is Stance.HUMAN_IN_THE_LOOP
 
 
 def test_descriptor_refuses_an_unknown_mode_with_the_valid_set() -> None:
-    with pytest.raises(KeyError, match="normal, prop_firm, ai, hedge_fund"):
+    with pytest.raises(KeyError, match="normal, prop_firm, ai"):
         descriptor("day_trading")
 
 
@@ -132,8 +142,35 @@ def test_every_mode_states_its_limitations() -> None:
         assert MODES[mode].limitations, f"{mode.value} claims no limitations at all"
 
 
-def test_the_fund_mode_admits_what_is_not_installed() -> None:
-    text = " ".join(MODES[WorkspaceMode.HEDGE_FUND].limitations).lower()
+def test_the_book_loop_survived_its_mode() -> None:
+    """Every surface the removed mode carried is still reachable somewhere.
+
+    This is the test that makes "remove the label, keep the capabilities" a
+    fact rather than an intention. Each route below had a view behind it in
+    Hedge Fund mode; if one were dropped in the move it would show up as a
+    feature that quietly stopped existing, which is exactly the failure a
+    product-hierarchy change invites.
+    """
+    reachable = {
+        (mode.value, section.route) for mode in MODE_ORDER for section in MODES[mode].sections
+    }
+    routes = {route for _, route in reachable}
+    # The deterministic loop, now in the environment for somebody trading their
+    # own book.
+    for route in ("portfolio", "risk", "gate", "execution", "operations", "book"):
+        assert ("normal", route) in reachable, f"the book loop lost '{route}'"
+    # Oversight, now beside the actor it watches.
+    for route in ("orchestrator", "approvals", "audit"):
+        assert ("ai", route) in reachable, f"oversight lost '{route}'"
+    # And the rest, which the surviving modes already carried.
+    for route in ("data", "research", "lab", "memory", "validation", "performance"):
+        assert route in routes, f"'{route}' is no longer reachable in any mode"
+
+
+def test_the_book_loop_admits_what_is_not_installed() -> None:
+    """The disclaimers moved with the surfaces they disclaim."""
+    text = " ".join(MODES[WorkspaceMode.NORMAL].limitations).lower()
     assert "simulated" in text
     assert "factor model" in text
-    assert "point-in-time" in text
+    ai = " ".join(MODES[WorkspaceMode.AI].limitations).lower()
+    assert "simulator" in ai, "an autonomously submitted order must say where it goes"

@@ -1,6 +1,6 @@
 """The fund layer: the loop, the approvals a person acts on, and the audit trail.
 
-Everything consequential in Hedge Fund mode passes through one of these three.
+Everything consequential in the book loop passes through one of these three.
 The loop says what the shape is, the queue is where AI-proposed actions wait for
 a person, and the audit log is the record that makes either answerable
 afterwards.

@@ -24,7 +24,7 @@ def test_a_record_answers_who_what_and_under_which_policy(audit: AuditLog) -> No
     entry = audit.record(
         actor="ai",
         origin="orchestrator",
-        mode="hedge_fund",
+        mode="ai",
         stance="autonomous",
         action="construct_portfolio",
         arguments={"capital": 1_000_000},
@@ -36,7 +36,7 @@ def test_a_record_answers_who_what_and_under_which_policy(audit: AuditLog) -> No
     stored = audit.get(entry.entry_id)
     assert stored is not None
     assert (stored.actor, stored.origin, stored.mode, stored.stance) == (
-        "ai", "orchestrator", "hedge_fund", "autonomous",
+        "ai", "orchestrator", "ai", "autonomous",
     )
     assert stored.ruling == "allow"
     assert "preparatory" in stored.ruling_reason

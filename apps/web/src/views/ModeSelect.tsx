@@ -23,14 +23,14 @@ import {
  *
  * Deliberately not a pricing page. There are no tiers, nothing is locked, and
  * every mode reaches the same judge and the same data — so the screen sells
- * nothing and explains four workflows instead. What each panel carries is the
+ * nothing and explains three workflows instead. What each panel carries is the
  * information a person actually chooses on: what the environment is for, and
  * which sections it opens with.
  *
- * The Hedge Fund panel is the only one that asks a second question, because it
- * is the only mode where the answer changes what an agent may do without you.
- * It is asked here rather than after entry: choosing it inside the mode would
- * mean the mode opens on a stance nobody picked.
+ * The AI panel is the only one that asks a second question, because it is the
+ * only mode where the answer changes what an agent may do without you. It is
+ * asked here rather than after entry: choosing it inside the mode would mean
+ * the mode opens on a stance nobody picked.
  *
  * Two bands sit around the grid.
  *
@@ -46,7 +46,7 @@ import {
  * about what the system will do, and no level hides a refusal.
  */
 
-const ORDER: ModeKey[] = ['normal', 'prop_firm', 'ai', 'hedge_fund']
+const ORDER: ModeKey[] = ['normal', 'prop_firm', 'ai']
 
 export function ModeSelect() {
   const modes = useModes()

@@ -81,11 +81,13 @@ class PanelKind(StrEnum):
     DESK_ACTIVITY = "desk_activity"
     DESK_RISK = "desk_risk"
     DESK_AI = "desk_ai"
-    # Fund. The Hedge Fund loop's own surfaces, each backed by a deterministic
-    # engine rather than by a narrative: `forge.portfolio`, `forge.risk.portfolio`,
+    # The deterministic book loop, each surface backed by an engine rather than
+    # by a narrative: `forge.portfolio`, `forge.risk.portfolio`,
     # `forge.execution.gate` and the approval and audit stores. They are panel
-    # kinds and not merely screens so a fund operator can put the gate next to
-    # the portfolio it is refusing orders from.
+    # kinds and not merely screens so an operator can put the gate next to the
+    # portfolio it is refusing orders from. Built for the Hedge Fund mode and
+    # kept when that mode went: the engines were always the valuable part, and
+    # the label was always the disposable one.
     FUND_SUMMARY = "fund_summary"
     PORTFOLIO = "portfolio"
     PRETRADE_GATE = "pretrade_gate"

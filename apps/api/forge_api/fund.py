@@ -1,4 +1,4 @@
-"""The Hedge Fund loop, assembled from state that actually exists.
+"""The deterministic book loop, assembled from state that actually exists.
 
 Every stage here reads a real record: the strategy library, the backtest store,
 the judge's verdict through the same dossier path the Evidence screen uses, the

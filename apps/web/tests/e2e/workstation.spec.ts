@@ -238,8 +238,8 @@ test('capture desktop evidence', async ({ page, request }, testInfo) => {
   await expect(page.getByRole('button', { name: /Run the matrix/ })).toBeVisible()
   await page.screenshot({ path: '../../artifacts/qa/propfirm-desktop.png', fullPage: true })
 
-  await enterMode(request, 'hedge_fund', 'human_in_the_loop')
-  await page.goto('/')
+  await enterMode(request, 'normal')
+  await page.goto('/#book')
   await expect(page.getByText('NAV')).toBeVisible({ timeout: 30_000 })
-  await page.screenshot({ path: '../../artifacts/qa/fund-command-desktop.png', fullPage: true })
+  await page.screenshot({ path: '../../artifacts/qa/book-command-desktop.png', fullPage: true })
 })

@@ -2878,12 +2878,12 @@ class Actions:
             {
                 "mode": {
                     "type": "string",
-                    "description": "normal, prop_firm, ai or hedge_fund.",
+                    "description": "normal, prop_firm or ai.",
                 },
                 "stance": {
                     "type": "string",
                     "optional": True,
-                    "description": "Hedge Fund only: human_in_the_loop or autonomous.",
+                    "description": "AI mode only: human_in_the_loop or autonomous.",
                 },
             },
             self.enter_mode,
@@ -2892,7 +2892,7 @@ class Actions:
         )
         self._add(
             "set_stance",
-            "Switch Hedge Fund mode between human-in-the-loop and autonomous. Protected "
+            "Switch AI mode between human-in-the-loop and autonomous. Protected "
             "for the same reason as enter_mode.",
             {"stance": {"type": "string", "description": "human_in_the_loop or autonomous."}},
             self.set_stance,
@@ -3945,7 +3945,7 @@ class Actions:
         )
         self._add(
             "cancel_order",
-            "Cancel a working order. Reaches the book, so only Hedge Fund mode on the "
+            "Cancel a working order. Reaches the book, so only AI mode on the "
             "autonomous stance runs it without a person.",
             {"order_id": {"type": "string"}},
             self.cancel_order,

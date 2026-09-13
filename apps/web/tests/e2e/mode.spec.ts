@@ -19,7 +19,7 @@ test('the application opens on the chooser rather than inside a mode', async ({ 
   await expect(page.getByRole('heading', { name: /choose your workspace/i })).toBeVisible({
     timeout: 30_000,
   })
-  for (const name of ['Normal', 'Prop Firm', 'AI', 'Hedge Fund']) {
+  for (const name of ['Normal', 'Prop Firm', 'AI']) {
     await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
   }
   // The boundary is stated before anything is entered, not discovered later.
@@ -28,20 +28,23 @@ test('the application opens on the chooser rather than inside a mode', async ({ 
 
 test('entering a mode seeds its workspace and lands in its own navigation', async ({ page }) => {
   await page.goto('/')
-  await page.getByRole('button', { name: 'Open Hedge Fund' }).click()
+  await page.getByRole('button', { name: 'Open Normal' }).click()
 
-  await expect(page.getByRole('link', { name: 'Fund Overview', exact: true })).toBeVisible({
+  // The deterministic book loop is Normal's now. It came across from the Hedge
+  // Fund mode intact rather than going with it.
+  await expect(page.getByRole('link', { name: 'Book Overview', exact: true })).toBeVisible({
     timeout: 30_000,
   })
   await expect(page.getByRole('link', { name: 'Pre-Trade Gate', exact: true })).toBeVisible()
-  // Normal mode's sections must not be in Hedge Fund's rail.
-  await expect(page.getByRole('link', { name: 'Charts', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Charts', exact: true })).toBeVisible()
+  // Prop Firm's account sections must not be in Normal's rail.
+  await expect(page.getByRole('link', { name: 'Profit Target', exact: true })).toHaveCount(0)
 })
 
-test('the Hedge Fund stance is chosen before entry and shown in the chrome', async ({ page }) => {
+test('the AI stance is chosen before entry and shown in the chrome', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('radio', { name: /autonomous/i }).click()
-  await page.getByRole('button', { name: 'Open Hedge Fund' }).click()
+  await page.getByRole('button', { name: 'Open AI' }).click()
   // Autonomous is the one state where the machine acts unasked, so it is named
   // where the operator can see it from every screen rather than only on the one
   // that set it.
@@ -49,7 +52,7 @@ test('the Hedge Fund stance is chosen before entry and shown in the chrome', asy
 })
 
 test('each mode keeps its own layout across a switch', async ({ page, request }) => {
-  // Enter Normal, note the workspace it seeded, then go through Hedge Fund and
+  // Enter Normal, note the workspace it seeded, then go through AI and
   // back. Returning must find the same layout: a mode that reopens on whatever
   // was globally active reads to the operator as their workspace having been
   // replaced.
@@ -57,7 +60,7 @@ test('each mode keeps its own layout across a switch', async ({ page, request })
   const first = (await (await request.get(`${API}/modes/session`)).json()).data.session.workspace_id
   expect(first).toBeTruthy()
 
-  await enterMode(request, 'hedge_fund', 'human_in_the_loop')
+  await enterMode(request, 'ai', 'human_in_the_loop')
   const fund = (await (await request.get(`${API}/modes/session`)).json()).data.session.workspace_id
   expect(fund).toBeTruthy()
   expect(fund).not.toBe(first)
@@ -97,12 +100,12 @@ test('the permission policy is shown per action, and denies protected controls',
   await expect(row.getByText('PROTECTED')).toBeVisible()
 })
 
-test('the fund command centre reports the loop rather than a diagram of it', async ({
+test('the book command centre reports the loop rather than a diagram of it', async ({
   page,
   request,
 }) => {
-  await enterMode(request, 'hedge_fund', 'human_in_the_loop')
-  await page.goto('/#fund')
+  await enterMode(request, 'normal')
+  await page.goto('/#book')
   await expect(page.getByText('NAV')).toBeVisible({ timeout: 30_000 })
   // Every stage carries a state. A board of eleven labels with no state on them
   // would be a diagram, which is the thing this screen must not be.
@@ -115,7 +118,7 @@ test('a fresh fund refuses to construct rather than sizing against nothing', asy
   page,
   request,
 }) => {
-  await enterMode(request, 'hedge_fund', 'human_in_the_loop')
+  await enterMode(request, 'normal')
   const config = (await (await request.get(`${API}/fund/config`)).json()).data.config
   test.skip(
     (config.universe ?? []).length > 0,

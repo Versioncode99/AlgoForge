@@ -14,7 +14,7 @@ import type { APIRequestContext } from '@playwright/test'
 
 export const API = process.env.ALGOFORGE_API_URL ?? 'http://127.0.0.1:8765/api/v1'
 
-export type Mode = 'normal' | 'prop_firm' | 'ai' | 'hedge_fund'
+export type Mode = 'normal' | 'prop_firm' | 'ai'
 
 export async function enterMode(
   request: APIRequestContext,

@@ -77,10 +77,10 @@ export const MAIN_LANDMARK_ID = 'main-content'
  *
  * Keyed by mode first so the same word can mean different things in different
  * environments without either one being renamed into something worse: "Risk" in
- * Prop Firm is an account's exposure against its contract, and in Hedge Fund it
- * is the book against the fund's limits. Falling through to the shared map is
+ * Prop Firm is an account's exposure against its contract, and in Normal it is
+ * the book against the limits you set. Falling through to the shared map is
  * what keeps Strategies, Validation and Evidence a single implementation in all
- * four.
+ * three.
  */
 function viewFor(mode: ModeKey, route: string): React.ReactNode {
   const perMode: Record<string, React.ReactNode> = {
@@ -102,19 +102,19 @@ function viewFor(mode: ModeKey, route: string): React.ReactNode {
     'ai/assistant': <ConsoleView />,
     'ai/actions': <ActionsView />,
     'ai/activity': <OperatingLogView />,
-    'hedge_fund/fund': <FundView section="fund" />,
-    'hedge_fund/data': <DataWorkspaceView />,
-    'hedge_fund/research': <ExperimentsView mode="experiments" />,
-    'hedge_fund/alpha': <FundView section="alpha" />,
-    'hedge_fund/portfolio': <FundView section="portfolio" />,
-    'hedge_fund/risk': <FundView section="risk" />,
-    'hedge_fund/gate': <FundView section="gate" />,
-    'hedge_fund/execution': <FundView section="execution" />,
-    'hedge_fund/operations': <FundView section="operations" />,
-    'hedge_fund/performance': <FundView section="performance" />,
-    'hedge_fund/orchestrator': <OperatingLogView />,
-    'hedge_fund/approvals': <FundView section="approvals" />,
-    'hedge_fund/audit': <FundView section="audit" />,
+    // The oversight surfaces built for the Hedge Fund mode, now where the actor
+    // they exist to watch actually lives.
+    'ai/orchestrator': <OperatingLogView />,
+    'ai/approvals': <FundView section="approvals" />,
+    'ai/audit': <FundView section="audit" />,
+    // The deterministic book loop, likewise: same engines, same views, in the
+    // environment for somebody trading their own book.
+    'normal/book': <FundView section="fund" />,
+    'normal/portfolio': <FundView section="portfolio" />,
+    'normal/risk': <FundView section="risk" />,
+    'normal/gate': <FundView section="gate" />,
+    'normal/execution': <FundView section="execution" />,
+    'normal/operations': <FundView section="operations" />,
   }
   const shared: Record<string, React.ReactNode> = {
     overview: <OverviewView onRoute={(id) => { window.location.hash = id }} />,
@@ -325,7 +325,7 @@ export function App() {
         * destinations from is the same category error the modes themselves
         * were. The mode is still shown, smaller, because it decides what an
         * assistant may do on your behalf. */}
-      <div className="mode-badge">
+      <div className="mode-badge" data-testid="mode-badge">
         {railWorkspace?.sidebar_is_custom
           ? <b title={railWorkspace.description || undefined}>
               {railWorkspace.icon && <i className="mode-badge-icon" aria-hidden="true">{railWorkspace.icon}</i>}

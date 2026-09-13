@@ -133,9 +133,14 @@ _TEMPLATES: tuple[WorkspaceTemplate, ...] = (
 #: `forge.modes`, because they are the same kind of object and a second registry
 #: of layouts is a second place for a panel kind to go stale.
 #:
-#: These four are still templates, not modes: a workspace built from one can be
-#: rearranged into anything, and `template_key` remains provenance. What the
-#: mode contributes is only *which one is seeded*.
+#: The three a mode seeds, plus Book Command. All still templates, not modes: a
+#: workspace built from one can be rearranged into anything, and `template_key`
+#: remains provenance. What a mode contributes is only *which one is seeded*.
+#:
+#: Book Command is seeded by nothing and reachable from the template catalogue,
+#: which is the point of §23: the institutional layout survives the removal of
+#: the institutional mode, as a starting point somebody may choose rather than a
+#: category they are placed in.
 _MODE_TEMPLATES: tuple[WorkspaceTemplate, ...] = (
     WorkspaceTemplate(
         key="normal_desk",
@@ -195,9 +200,9 @@ _MODE_TEMPLATES: tuple[WorkspaceTemplate, ...] = (
         ),
     ),
     WorkspaceTemplate(
-        key="fund_command",
-        name="Fund Command",
-        summary="NAV and the loop across the top, then portfolio, risk and the gate.",
+        key="book_command",
+        name="Book Command",
+        summary="Capital and the loop across the top, then portfolio, risk and the gate.",
         panels=(
             _panel(PanelKind.FUND_SUMMARY, 0, 0, 12, 5),
             _panel(PanelKind.PORTFOLIO, 0, 5, 5, 6),

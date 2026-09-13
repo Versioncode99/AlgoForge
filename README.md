@@ -2,14 +2,13 @@
 
 AlgoForge is a private, local, paper-only desktop application for building, running and judging trading strategies. It writes strategies to disk as real Python, backtests them on real market data, judges them through a deterministic gate ladder, and simulates how they would fare under funded-account rules.
 
-It opens on four operating environments rather than one workspace. Every one of them reaches the same data, the same strategies and the same judge; what changes is what the screen is arranged around, and how much an assistant may do on your behalf.
+It opens on three operating environments rather than one workspace. Every one of them reaches the same data, the same strategies and the same judge; what changes is what the screen is arranged around, and how much an assistant may do on your behalf.
 
 | Mode | For | What it is arranged around |
 | --- | --- | --- |
-| **Normal** | Conventional trading and research | Charts, the book, strategies and their evidence |
+| **Normal** | Conventional trading and research | Charts, strategies, their evidence, and the whole book loop: portfolio, risk, the pre-trade gate, execution and operations |
 | **Prop Firm** | A funded or evaluation account | One question: how close am I to breaching |
-| **AI** | Research and workflow automation | The bounded action registry, and what an assistant may call |
-| **Hedge Fund** | Institutional-style quantitative work | The loop: data, research, alpha, validation, portfolio, risk, gate, execution, operations, performance |
+| **AI** | Research and workflow automation | The bounded action registry, what an assistant may call, and the record of what it did |
 
 Modes are not tiers and nothing is locked: every mode can reach validation, and switching modes never deletes work. Each remembers its own layout, so leaving one and returning is a return rather than a reset.
 
@@ -17,7 +16,7 @@ Modes are not tiers and nothing is locked: every mode can reach validation, and 
 
 **Fills are modelled, not calibrated.** Backtests apply commission and ATR-proportional slippage, but they have not been reconciled against a live platform. Calibrate against NinjaTrader's Strategy Analyzer before trusting any number. No live-order, account-signup, payment, KYC, or production-broker capability exists.
 
-## The four modes
+## The three modes
 
 **Normal** is the least opinionated: it supplies the tools and leaves the
 arrangement to you.
@@ -36,11 +35,22 @@ discipline the judge uses.
 **AI** reaches the same bounded action registry the interface uses. There is no
 verb here the interface does not also have, and no arbitrary-code verb at all.
 The Actions screen shows the policy per action, computed by the same function
-that enforces it.
+that enforces it. It asks one more question on the way in — *human in the loop*,
+or *autonomous* — because it is the only environment whose purpose is unattended
+work. On either stance the deterministic controls are the same and an assistant
+cannot change them.
 
-**Hedge Fund** is the whole quantitative loop, and it asks one more question on
-the way in: *human in the loop*, or *autonomous*. On either stance the
-deterministic controls are the same and an assistant cannot change them.
+**There was a fourth mode, and it was a product category rather than a
+capability.** AlgoForge is not sold as hedge-fund infrastructure, and a
+top-level mode named after an institution told quants, traders and prop traders
+that the deepest part of the application was for somebody else. Nothing built
+for it was deleted. The deterministic loop it carried — portfolio construction,
+the risk engine, the pre-trade gate, execution, operations — is in Normal, which
+is the environment for somebody trading their own book. Its oversight surfaces —
+the orchestrator log, the approval queue, the audit trail — are in AI, beside
+the actor they exist to watch. The institutional layout survives as a workspace
+template anyone can start from, which is what a starting point should be: a
+choice, not a category you are placed in.
 
 ## What an assistant may do, and where that is decided
 
@@ -51,11 +61,14 @@ generates can set any of them.
 * **Preparation** — research, backtests, validation, portfolio construction,
   order preparation, screening — is permitted in every mode. An assistant that
   must ask before running a backtest is not assisting.
-* **Automation** — starting the engine, dispatching a specialist — belongs to
-  the AI and Hedge Fund modes.
-* **Reaching the book** is permitted on exactly one configuration: Hedge Fund on
+* **Automation** — starting the engine, dispatching a specialist — belongs to AI
+  mode.
+* **Reaching the book** is permitted on exactly one configuration: AI mode on
   the autonomous stance, and even there the order still passes the pre-trade
-  gate.
+  gate. That grant moved with the stance when the Hedge Fund mode was removed —
+  it was neither dropped nor widened, and
+  `test_exactly_one_configuration_reaches_the_book` asserts the count rather
+  than the name, so a second one appearing fails whatever it is called.
 * **Protected controls** — risk limits, prop rules, the fund configuration, the
   kill switch, the operating mode and the stance itself — are denied to an
   assistant in every mode and on every stance. The mode and stance actions are

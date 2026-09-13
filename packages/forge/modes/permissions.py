@@ -189,8 +189,8 @@ PREPARATORY: frozenset[str] = frozenset(
 
 #: Workflow automation: starting the autonomous engine, dispatching a specialist.
 #: These commit the machine to doing work on its own for a while, which is what
-#: the AI and Hedge Fund modes are *for* and is not what somebody opened Normal
-#: mode to get. Held for a person in Normal and Prop Firm.
+#: AI mode is *for* and is not what somebody opened Normal mode to get. Held for
+#: a person in Normal and Prop Firm.
 AUTOMATION: frozenset[str] = frozenset(
     {
         "start_engine",
@@ -209,9 +209,15 @@ AUTOMATION: frozenset[str] = frozenset(
 )
 
 #: Consequential: it reaches the book. Permitted to an AI actor on exactly one
-#: configuration — Hedge Fund mode on the autonomous stance — and even there it
-#: passes the pre-trade gate first, because the gate is deterministic and this
-#: policy is not what keeps a bad order out.
+#: configuration — AI mode on the autonomous stance — and even there it passes
+#: the pre-trade gate first, because the gate is deterministic and this policy is
+#: not what keeps a bad order out.
+#:
+#: That configuration was Hedge Fund + autonomous until the Hedge Fund mode was
+#: removed as a product category. The grant moved with the stance rather than
+#: being dropped or widened: it is still one mode, still behind a second
+#: explicit opt-in, still behind the same gate. Autonomy was never a property of
+#: being a fund — it is a property of running unattended.
 CONSEQUENTIAL: frozenset[str] = frozenset(
     {
         "submit_orders",
@@ -275,9 +281,9 @@ def evaluate(
     if facts.name in PREPARATORY:
         return ruled(Ruling.ALLOW, "preparatory: it proposes or measures, it does not commit")
 
-    # 7. Automation, in the two modes that exist to run it.
+    # 7. Automation, in the mode that exists to run it.
     if facts.name in AUTOMATION:
-        if mode in {WorkspaceMode.AI, WorkspaceMode.HEDGE_FUND}:
+        if mode is WorkspaceMode.AI:
             return ruled(Ruling.ALLOW, f"{mode.value} mode grants workflow automation")
         return ruled(
             Ruling.REQUIRE_APPROVAL,
@@ -286,7 +292,7 @@ def evaluate(
 
     # 8. The book.
     if facts.name in CONSEQUENTIAL:
-        if mode is WorkspaceMode.HEDGE_FUND and stance is Stance.AUTONOMOUS:
+        if mode is WorkspaceMode.AI and stance is Stance.AUTONOMOUS:
             return ruled(
                 Ruling.ALLOW,
                 "the autonomous stance permits execution inside the deterministic "
@@ -294,7 +300,7 @@ def evaluate(
             )
         return ruled(
             Ruling.REQUIRE_APPROVAL,
-            f"'{facts.name}' reaches the book; only Hedge Fund mode on the autonomous "
+            f"'{facts.name}' reaches the book; only AI mode on the autonomous "
             "stance runs it without a person",
         )
 
@@ -324,12 +330,8 @@ def summarise(mode: WorkspaceMode, stance: Stance | None = None) -> dict[str, ob
             "cannot alter a rule, a limit or a recorded balance."
         ),
         WorkspaceMode.AI: (
-            "AI runs the research and automation workflow directly. Reaching the book, "
-            "and anything destructive, still needs you."
-        ),
-        WorkspaceMode.HEDGE_FUND: (
-            "AI researches, constructs portfolios and prepares orders on its own. "
-            "Submitting them needs your approval."
+            "AI runs the research and automation workflow directly, and prepares "
+            "orders. Submitting them needs your approval."
             if stance is not Stance.AUTONOMOUS
             else "AI runs the whole loop unattended, including submission - inside the "
             "risk engine, the pre-trade gate and the kill switch, none of which it can "
