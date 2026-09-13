@@ -53,32 +53,42 @@ test('an old conversation is reachable from the history', async ({ page }) => {
   await page.goto('/#assistant')
   await expect(page.getByLabel('Ask a question')).toBeVisible({ timeout: 30_000 })
 
+  /* Start from a known-empty thread. The panel opens on the most recent
+   * conversation -- which is correct, and means a message sent on arrival
+   * lands in whatever was last worked on rather than in a new thread. */
+  await page.getByRole('button', { name: /^New$/ }).first().click()
   const first = `First thread ${Date.now()}`
   await page.getByLabel('Ask a question').fill(first)
   await page.getByRole('button', { name: 'Send' }).click()
-  await expect(page.getByText(first)).toBeVisible({ timeout: 60_000 })
+  // The first message names an untitled thread, so it appears in the list.
+  await expect(page.locator('.chat-history .ch-open strong', { hasText: first })).toBeVisible({
+    timeout: 60_000,
+  })
 
   // Start a second, then walk back to the first through the list.
   await page.getByRole('button', { name: /^New$/ }).first().click()
-  await expect(page.getByText(first)).toHaveCount(1, { timeout: 30_000 })
+  await expect(page.locator('.chat-thread .chat-msg')).toHaveCount(0, { timeout: 30_000 })
 
-  await page.locator('.chat-history .ch-open', { hasText: first.slice(0, 24) }).first().click()
-  await expect(page.getByText(first)).toBeVisible({ timeout: 30_000 })
+  await page.locator('.chat-history .ch-open', { hasText: first }).first().click()
+  await expect(page.locator('.chat-thread').getByText(first)).toBeVisible({ timeout: 30_000 })
 })
 
 test('searching the history reaches into what was said', async ({ page }) => {
   await page.goto('/#assistant')
   await expect(page.getByLabel('Ask a question')).toBeVisible({ timeout: 30_000 })
 
+  await page.getByRole('button', { name: /^New$/ }).first().click()
   const needle = `absorption${Date.now()}`
   await page.getByLabel('Ask a question').fill(`What about liquidity ${needle} at the open?`)
   await page.getByRole('button', { name: 'Send' }).click()
-  await expect(page.getByText(new RegExp(needle))).toBeVisible({ timeout: 60_000 })
+  // Scoped to the thread: the same text is also the derived title in the
+  // history beside it, and an unscoped match is two elements, not a failure.
+  await expect(page.locator('.chat-thread').getByText(new RegExp(needle))).toBeVisible({
+    timeout: 60_000,
+  })
 
   await page.getByLabel('Search conversations').fill(needle)
-  await expect(page.locator('.chat-history li.on, .chat-history .ch-open')).toHaveCount(1, {
-    timeout: 30_000,
-  })
+  await expect(page.locator('.chat-history .ch-open')).toHaveCount(1, { timeout: 30_000 })
 })
 
 test('the console and the workspace panel are the same conversation', async ({ page }) => {

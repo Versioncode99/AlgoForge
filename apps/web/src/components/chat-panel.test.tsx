@@ -19,7 +19,7 @@ import { ChatPanel } from './ChatPanel'
 
 const conversations: Conversation[] = []
 let thread: Thread | null = null
-const sent: string[] = []
+const sent: { path: string; message: string }[] = []
 let sendFails = false
 
 function turn(over: Partial<Turn> = {}): Turn {
@@ -60,7 +60,7 @@ vi.mock('../api', () => ({
   postJson: vi.fn(async (path: string, body: unknown) => {
     if (path.endsWith('/messages')) {
       if (sendFails) throw new Error('the model provider timed out')
-      sent.push((body as { message: string }).message)
+      sent.push({ path, message: (body as { message: string }).message })
       return { turn: turn({ text: 'Understood.' }), conversation: conversation(), note: null }
     }
     if (path.endsWith('/context')) return { ...(body as object), attached_at: 'now' }
@@ -300,7 +300,28 @@ describe('asking', () => {
     const input = await screen.findByLabelText('Ask a question')
     fireEvent.change(input, { target: { value: 'What families can you build?' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    await waitFor(() => expect(sent).toEqual(['What families can you build?']))
+    await waitFor(() => expect(sent.map((s) => s.message)).toEqual(['What families can you build?']))
+  })
+
+  it('sends the first message to the conversation it just created', async () => {
+    /* The bug this exists for: the send mutation used to close over the
+     * component's `activeId`, and the id set by `create` is not readable until
+     * React re-renders. So the first message of every new thread went to
+     * `/conversations/null/messages`, 404'd, and was simply gone.
+     *
+     * Invisible to a mock that accepts any path ending in `/messages`, which
+     * is what the original test did. The path is asserted now.
+     */
+    thread = { conversation: conversation(), turns: [] }
+    mount()
+    fireEvent.change(await screen.findByLabelText('Ask a question'), {
+      target: { value: 'first ever question' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0].path).toBe('/conversations/c-new/messages')
+    expect(sent[0].path).not.toContain('null')
+    expect(sent[0].path).not.toContain('undefined')
   })
 
   it('reports a failed answer instead of leaving the panel silent', async () => {

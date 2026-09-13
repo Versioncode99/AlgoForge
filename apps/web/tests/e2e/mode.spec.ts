@@ -43,7 +43,10 @@ test('entering a mode seeds its workspace and lands in its own navigation', asyn
 
 test('the AI stance is chosen before entry and shown in the chrome', async ({ page }) => {
   await page.goto('/')
-  await page.getByRole('radio', { name: /autonomous/i }).click()
+  // Clicked through the label, which is what a person does: the input is
+  // wrapped by one and the span inside it takes the pointer.
+  await page.getByRole('radio', { name: /autonomous/i }).check({ force: true })
+  await expect(page.getByRole('radio', { name: /autonomous/i })).toBeChecked()
   await page.getByRole('button', { name: 'Open AI' }).click()
   // Autonomous is the one state where the machine acts unasked, so it is named
   // where the operator can see it from every screen rather than only on the one
@@ -82,7 +85,13 @@ test('switching back to the chooser forgets nothing', async ({ page, request }) 
     timeout: 30_000,
   })
   await page.getByRole('button', { name: /switch/i }).click()
-  await expect(page.getByRole('heading', { name: /choose your workspace/i })).toBeVisible()
+  // Switch opens the workspace switcher. Leaving the mode is a control inside
+  // it, deliberately: changing mode changes what an assistant may do on your
+  // behalf, which is a permissions decision rather than a navigation one.
+  await page.getByRole('button', { name: /change operating mode/i }).click()
+  await expect(page.getByRole('heading', { name: /choose your workspace/i })).toBeVisible({
+    timeout: 30_000,
+  })
 
   await page.getByRole('button', { name: 'Open Prop Firm' }).click()
   await expect(page.getByRole('link', { name: 'Account Status', exact: true })).toBeVisible()
@@ -94,10 +103,12 @@ test('the permission policy is shown per action, and denies protected controls',
 }) => {
   await enterMode(request, 'ai')
   await page.goto('/#actions')
-  await expect(page.getByText('set_fund_config')).toBeVisible({ timeout: 30_000 })
-  const row = page.locator('.measure-row', { hasText: 'set_fund_config' })
-  await expect(row.getByText('DENIED')).toBeVisible()
-  await expect(row.getByText('PROTECTED')).toBeVisible()
+  const row = page.locator('.measure-row', { hasText: 'set_fund_config' }).first()
+  await expect(row).toBeVisible({ timeout: 30_000 })
+  // Scoped to the pills. Both words also appear inside the refusal sentence in
+  // the detail cell, which is the sentence working rather than a second badge.
+  await expect(row.locator('.measure-pill', { hasText: 'DENIED' })).toBeVisible()
+  await expect(row.locator('.measure-pill', { hasText: 'PROTECTED' })).toBeVisible()
 })
 
 test('the book command centre reports the loop rather than a diagram of it', async ({
@@ -106,7 +117,7 @@ test('the book command centre reports the loop rather than a diagram of it', asy
 }) => {
   await enterMode(request, 'normal')
   await page.goto('/#book')
-  await expect(page.getByText('NAV')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText('NAV', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
   // Every stage carries a state. A board of eleven labels with no state on them
   // would be a diagram, which is the thing this screen must not be.
   const stages = page.locator('.loop-track > li')
@@ -129,5 +140,8 @@ test('a fresh fund refuses to construct rather than sizing against nothing', asy
   await page.getByRole('button', { name: /construct portfolio/i }).click()
   // The honest refusal, not an empty portfolio: nothing can be sized against a
   // universe of nothing, and an empty holdings table would read as a decision.
-  await expect(page.getByText(/the fund has no universe/i)).toBeVisible({ timeout: 30_000 })
+  // The refusal itself, not the activity line that also quotes it.
+  await expect(page.getByRole('alert').filter({ hasText: /no universe/i }).first()).toBeVisible({
+    timeout: 30_000,
+  })
 })

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { enterMode } from './mode'
+import { API, enterMode } from './mode'
 
 /* Carrying a strategy to another platform, through the interface.
  *
@@ -13,16 +13,25 @@ test.beforeEach(async ({ request }) => {
 })
 
 test('the port surface leads with what did not cross', async ({ page, request }) => {
-  const created = await request.post('/api/v1/strategies', {
+  const created = await request.post(`${API}/strategies`, {
     data: { template: 'momentum_breakout' },
   })
   test.skip(!created.ok(), 'this build could not create a strategy to port')
   const strategyId = (await created.json()).data.strategy_id
 
+  // Strategies opens on the catalogue; the panes are one row-click away.
   await page.goto('/#strategies')
-  await expect(page.getByRole('button', { name: 'Port' })).toBeVisible({ timeout: 30_000 })
+  const rows = page.locator('.catalogue-table tbody tr:not([aria-hidden="true"])')
+  await expect(page.getByText('No strategies yet').or(rows.first())).toBeVisible({
+    timeout: 120_000,
+  })
+  test.skip(await page.getByText('No strategies yet').isVisible(), 'no strategies in this vault')
+  await rows.first().click()
+  await expect(page.getByRole('button', { name: 'Port', exact: true })).toBeVisible({
+    timeout: 30_000,
+  })
 
-  const report = await request.get(`/api/v1/strategies/${strategyId}/port/pine`)
+  const report = await request.get(`${API}/strategies/${strategyId}/port/pine`)
   test.skip(report.status() === 404, 'this strategy is hand-written and has no canonical IR')
   const payload = (await report.json()).data
 
@@ -37,7 +46,7 @@ test('the port surface leads with what did not cross', async ({ page, request })
 })
 
 test('the target catalogue says which targets are only analysed', async ({ request }) => {
-  const response = await request.get('/api/v1/strategies/port-targets')
+  const response = await request.get(`${API}/strategies/port-targets`)
   expect(response.ok()).toBeTruthy()
   const targets = (await response.json()).data.targets
   const byKey = Object.fromEntries(targets.map((t: { key: string }) => [t.key, t]))

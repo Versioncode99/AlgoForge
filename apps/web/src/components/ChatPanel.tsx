@@ -278,7 +278,7 @@ export function ChatPanel({
   const conversations = useConversations(query)
   const thread = useThread(activeId)
   const create = useCreateConversation()
-  const send = useSendMessage(activeId)
+  const send = useSendMessage()
   const archive = useArchiveConversation()
   const remove = useDeleteConversation()
   const attach = useAttachContext(activeId)
@@ -322,18 +322,21 @@ export function ChatPanel({
   const submit = (text: string) => {
     const message = text.trim()
     if (!message) return
+    setDraft('')
     if (!activeId) {
+      // The id comes back from the create call and goes straight into the send.
+      // Reading it from state here would read the previous render's value,
+      // which is null -- and the first message of every new thread would be
+      // posted to a conversation that does not exist.
       create.mutate('', {
         onSuccess: (conversation) => {
           setActiveId(conversation.conversation_id)
-          send.mutate(message)
-          setDraft('')
+          send.mutate({ conversationId: conversation.conversation_id, message })
         },
       })
       return
     }
-    send.mutate(message)
-    setDraft('')
+    send.mutate({ conversationId: activeId, message })
   }
 
   const turns = thread.data?.turns ?? []

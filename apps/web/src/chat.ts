@@ -141,15 +141,28 @@ export function useCreateConversation() {
   })
 }
 
-export function useSendMessage(conversationId: string | null) {
+/**
+ * Send a message to a named conversation.
+ *
+ * The conversation id travels in the *variables*, not in a closure over
+ * component state. It used to be a parameter, and the first message of a new
+ * thread was therefore posted to `/conversations/null/messages`: the caller
+ * creates a conversation, calls `setActiveId`, and sends — all before React has
+ * re-rendered, so the mutation still held the id from the previous render,
+ * which was null. The request 404s and the message is simply gone.
+ *
+ * Nothing about that is visible in a unit test whose fetch mock accepts any
+ * path ending in `/messages`. It took driving the real interface to see it.
+ */
+export function useSendMessage() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (message: string) =>
+    mutationFn: ({ conversationId, message }: { conversationId: string; message: string }) =>
       postJson<{ turn: Turn; conversation: Conversation; note: string | null }>(
         `/conversations/${conversationId}/messages`,
         { message },
       ),
-    onSuccess: () => {
+    onSuccess: (_result, { conversationId }) => {
       client.invalidateQueries({ queryKey: ['conversation', conversationId] })
       client.invalidateQueries({ queryKey: ['conversations'] })
     },
