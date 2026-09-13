@@ -13,6 +13,7 @@ from forge.analytics.regime import attribute_at_times as attribute_trades
 from forge.analytics.resample import compare as compare_resamples
 from forge.capabilities import nautilus_capability
 from forge.contracts.models import ApiEnvelope
+from forge.conversation import ContextKind, ConversationError, ConversationStore
 from forge.data.live import ProviderError
 from forge.execution.oms import ExecutionStore
 from forge.explain import Depth as PassportDepth
@@ -58,6 +59,7 @@ from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
 from forge_api.assistant import Assistant
 from forge_api.campaigns import CampaignService, build_campaign_router
+from forge_api.chat import ChatService
 from forge_api.director import ResearchDirector
 from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.fund import FundService
@@ -133,6 +135,24 @@ class SettingsPatch(BaseModel):
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
+
+
+class ConversationRequest(BaseModel):
+    title: str = Field(default="", max_length=200)
+
+
+class MessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class AttachRequest(BaseModel):
+    kind: str
+    ref: str = Field(min_length=1, max_length=200)
+    label: str = Field(default="", max_length=200)
 
 
 class PropRequest(BaseModel):
@@ -639,6 +659,9 @@ def build_control_router(
     actions.ledger = ledger_view
     actions.lab = research_lab
     assistant = Assistant(root, library, store, log, settings_store, actions)
+    # Conversations are application state, not research: this database can be
+    # deleted and the operator loses their dialogue history and nothing else.
+    chat = ChatService(ConversationStore(workspace.data / "conversations.db"), assistant)
     agents.context = lambda: {
         "running": engine.state.running,
         "dataset": engine.state.config.dataset,
@@ -892,7 +915,136 @@ def build_control_router(
     # ── assistant ────────────────────────────────────────────────────────────
     @router.post("/ask", response_model=ApiEnvelope[dict[str, Any]])
     def ask(body: AskRequest) -> ApiEnvelope[dict[str, Any]]:
+        """One question, answered and not remembered.
+
+        Kept for callers that genuinely want a single shot -- the command
+        palette, a script. A dialogue somebody will come back to belongs in a
+        conversation, below, where it survives a reload.
+        """
         return ApiEnvelope(data=assistant.ask(body.question))
+
+    # ── conversations ────────────────────────────────────────────────────────
+    # A durable research thread. Nothing stored here is evidence: every turn
+    # carries the provenance of its own text, and there is no operation anywhere
+    # that promotes one kind into another. See `forge.conversation.models`.
+
+    @router.get("/conversations", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def conversations(
+        query: str = "", include_archived: bool = False
+    ) -> ApiEnvelope[list[dict[str, Any]]]:
+        rows = chat.list(query=query, include_archived=include_archived)
+        return ApiEnvelope(
+            data=[row.model_dump(mode="json") for row in rows],
+            meta={"total": len(rows), "query": query},
+        )
+
+    @router.post("/conversations", response_model=ApiEnvelope[dict[str, Any]], status_code=201)
+    def create_conversation(body: ConversationRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=chat.create(body.title).model_dump(mode="json"))
+
+    @router.get("/conversations/{conversation_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def conversation(conversation_id: str) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            return ApiEnvelope(data=chat.get(conversation_id))
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+
+    @router.post(
+        "/conversations/{conversation_id}/messages", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def send_message(
+        conversation_id: str, body: MessageRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """Ask, inside a thread that remembers."""
+        try:
+            return ApiEnvelope(data=chat.send(conversation_id, body.message))
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+
+    @router.patch("/conversations/{conversation_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def rename_conversation(
+        conversation_id: str, body: RenameRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            renamed = chat.rename(conversation_id, body.title)
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+        return ApiEnvelope(data=renamed.model_dump(mode="json"))
+
+    @router.post(
+        "/conversations/{conversation_id}/archive", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def archive_conversation(
+        conversation_id: str, archived: bool = True
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """Hide a thread, reversibly. The destructive verb is DELETE."""
+        try:
+            payload = chat.set_archived(conversation_id, archived)
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+        return ApiEnvelope(data=payload.model_dump(mode="json"))
+
+    @router.delete("/conversations/{conversation_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def delete_conversation(conversation_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Discard a thread.
+
+        It references strategies, backtests and findings; it does not own them,
+        and deleting it leaves every one of them where it was.
+        """
+        if not chat.delete(conversation_id):
+            raise HTTPException(404, {"code": "conversation_not_found"})
+        return ApiEnvelope(
+            data={"conversation_id": conversation_id, "deleted": True},
+            meta={"note": "Nothing the conversation referenced was touched."},
+        )
+
+    @router.post(
+        "/conversations/{conversation_id}/context",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def attach_context(conversation_id: str, body: AttachRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Put a subject in scope for one conversation, and only that one."""
+        try:
+            kind = ContextKind(body.kind)
+        except ValueError:
+            valid = ", ".join(k.value for k in ContextKind)
+            raise HTTPException(
+                422, {"code": "unknown_context_kind", "reason": f"one of {valid}"}
+            ) from None
+        try:
+            attached = chat.attach(conversation_id, kind, body.ref, body.label)
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+        return ApiEnvelope(data=attached.model_dump(mode="json"))
+
+    @router.delete(
+        "/conversations/{conversation_id}/context/{kind}/{ref}",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def detach_context(
+        conversation_id: str, kind: str, ref: str
+    ) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            parsed = ContextKind(kind)
+        except ValueError:
+            valid = ", ".join(k.value for k in ContextKind)
+            raise HTTPException(
+                422, {"code": "unknown_context_kind", "reason": f"one of {valid}"}
+            ) from None
+        removed = chat.detach(conversation_id, parsed, ref)
+        if not removed:
+            raise HTTPException(404, {"code": "context_not_attached"})
+        return ApiEnvelope(data={"kind": kind, "ref": ref, "detached": True})
 
     # ── datasets ─────────────────────────────────────────────────────────────
     @router.get("/datasets", response_model=ApiEnvelope[list[dict[str, Any]]])

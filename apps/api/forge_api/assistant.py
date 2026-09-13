@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -185,7 +186,14 @@ class Assistant:
         )
 
     # ── the tool loop ────────────────────────────────────────────────────────
-    def ask(self, question: str) -> dict[str, Any]:
+    def ask(self, question: str, *, attached: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Answer one question, optionally about a named subject.
+
+        `attached` is the conversation's own context -- the strategies, accounts
+        and datasets somebody put in scope for this thread. It is passed to the
+        model as *subject matter*, never as instruction: it names things to look
+        at, and every fact about them still has to come back from an action.
+        """
         ctx = self.context()
         current = self.settings.load()
         model = current.ai.routing.get("chat", "")
@@ -207,6 +215,7 @@ class Assistant:
                     return {
                         "answer": _render(matched["action"], result),
                         "model": "local-actions",
+                        "source": "action_result",
                         "grounded": True,
                         "calls": [{**matched, "ok": True, "result": result}],
                         "note": (
@@ -218,12 +227,14 @@ class Assistant:
                     return {
                         "answer": f"That action was refused: {exc}",
                         "model": "local-actions",
+                        "source": "action_result",
                         "grounded": True,
                         "calls": [{**matched, "ok": False, "error": str(exc)}],
                     }
             return {
                 "answer": self._local_answer(question, ctx),
                 "model": "local-ledger",
+                "source": "deterministic",
                 "grounded": True,
                 "calls": [],
                 "note": (
@@ -237,11 +248,13 @@ class Assistant:
         tools = self.actions.schemas() if self.actions else []
         transcript: list[dict[str, Any]] = []
         calls: list[dict[str, Any]] = []
-        prompt_head = {
+        prompt_head: dict[str, Any] = {
             "question": question,
             "instance_context": ctx,
             "available_actions": tools,
         }
+        if attached:
+            prompt_head["conversation_subject"] = attached
 
         try:
             for _ in range(MAX_TOOL_CALLS + 1):
@@ -257,6 +270,7 @@ class Assistant:
                     arguments = (
                         parsed.get("arguments") if isinstance(parsed.get("arguments"), dict) else {}
                     )
+                    started = time.monotonic()
                     try:
                         result = self.actions.call(
                             name, arguments, actor=Actor.AI, origin="console assistant"
@@ -266,6 +280,7 @@ class Assistant:
                             "arguments": arguments,
                             "ok": True,
                             "result": result,
+                            "ms": int((time.monotonic() - started) * 1000),
                         }
                     except ActionError as exc:
                         entry = {
@@ -273,6 +288,7 @@ class Assistant:
                             "arguments": arguments,
                             "ok": False,
                             "error": str(exc),
+                            "ms": int((time.monotonic() - started) * 1000),
                         }
                     calls.append(entry)
                     transcript.append(entry)
@@ -287,6 +303,11 @@ class Assistant:
                 )
                 return {
                     "answer": answer,
+                    # The prose is the model's, whatever informed it. A caller
+                    # recording provenance must not read "grounded" as
+                    # "deterministic": the actions produced the facts, the model
+                    # produced the sentence.
+                    "source": "model_prose",
                     "model": response.get("model", model),
                     "provider": selection.provider,
                     "grounded": True,
@@ -304,6 +325,7 @@ class Assistant:
             return {
                 "answer": self._local_answer(question, ctx),
                 "model": "local-ledger",
+                "source": "deterministic",
                 "provider": selection.provider,
                 "grounded": True,
                 "calls": calls,
@@ -317,6 +339,7 @@ class Assistant:
                 "narrower question, or launch a mission from Agent Command for multi-step work."
             ),
             "model": model,
+            "source": "deterministic",
             "grounded": True,
             "calls": calls,
         }
