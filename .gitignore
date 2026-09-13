@@ -27,3 +27,7 @@ test-results/
 *.log
 .DS_Store
 Thumbs.db
+
+# Playwright artifacts from a local run.
+apps/web/test-results/
+apps/web/playwright-report/
