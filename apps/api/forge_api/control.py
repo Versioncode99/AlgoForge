@@ -1459,15 +1459,34 @@ def build_control_router(
         timeframe: str = "1m",
         limit: int = 1500,
         before: str | None = None,
+        after: str | None = None,
     ) -> ApiEnvelope[dict[str, Any]]:
-        """Candles for a chart.
+        """Candles for a chart, and where they sit in the archive.
 
         Real bars from a real archive or nothing at all. A dataset that is not
         present is a 409 naming it, never a generated stand-in -- a chart that
         silently invents prices is worse than a chart that refuses to draw.
+
+        `before` and `after` page the window in either direction, exclusive of
+        the cursor bar. They are mutually exclusive: passing both is a 422 that
+        says so rather than a window paged the way the server happened to check
+        first.
         """
+        if before and after:
+            raise HTTPException(
+                422,
+                {
+                    "code": "conflicting_cursors",
+                    "reason": (
+                        "pass 'before' or 'after', not both -- they page in "
+                        "opposite directions."
+                    ),
+                },
+            )
         try:
-            payload = market.chart_bars(dataset, timeframe, limit=limit, before=before)
+            payload = market.chart_bars(
+                dataset, timeframe, limit=limit, before=before, after=after
+            )
         except KeyError as exc:
             raise HTTPException(422, {"code": "unknown_timeframe", "reason": str(exc)}) from exc
         except ProviderError as exc:

@@ -360,8 +360,9 @@ class MarketService:
         timeframe_key: str = "1m",
         limit: int = 1500,
         before: str | None = None,
+        after: str | None = None,
     ) -> dict[str, Any]:
-        """OHLCV for a chart, newest `limit` bars at `timeframe_key`.
+        """One window of OHLCV for a chart, and where it sits in the archive.
 
         Reads a derived aggregate rather than the archive, and builds that
         aggregate the first time it is asked for. A daily chart of sixteen years
@@ -369,23 +370,59 @@ class MarketService:
         request would be the same mistake as parsing every artifact to render a
         table.
 
-        `before` pages backwards for pan-left, in the only direction a chart
-        actually needs: give it the timestamp of the oldest bar on screen and it
-        returns the `limit` bars before it.
+        **Paging is symmetric and exclusive.** `before` returns the `limit` bars
+        strictly older than the timestamp given; `after` returns the `limit`
+        bars strictly newer. Exclusive on purpose: a chart pages by handing back
+        the timestamp of the bar on its own edge, and an inclusive bound would
+        return that bar again on every request. Passing both is a caller error
+        rather than an intersection, because the two describe different
+        directions of travel and silently honouring one would page the wrong way.
+
+        **The response says where the window sits**, not merely what is in it.
+        `coverage_start`/`coverage_end` bound the whole archive at this
+        timeframe and `has_more_before`/`has_more_after` say which way there is
+        further to go. Without those a chart cannot tell "nothing loaded yet"
+        apart from "there is no more history" — and it is the second of those
+        that makes a chart behave like a photograph of a market.
         """
         dataset = DATASETS.get(key)
         if dataset is None:
             raise ProviderError(f"unknown dataset '{key}'")
+        if before and after:
+            raise ProviderError(
+                "pass 'before' or 'after', not both: they page in opposite "
+                "directions and honouring one of them silently would move the "
+                "chart the wrong way."
+            )
         spec = timeframe(timeframe_key)
         frame = self._timeframe_frame(key, dataset, spec.key)
 
         total = len(frame)
-        if before:
-            cutoff = _pd().Timestamp(before)
-            if cutoff.tzinfo is None:
-                cutoff = cutoff.tz_localize("UTC")
-            frame = frame[frame["event_time"] < cutoff]
-        window = frame.tail(max(1, min(int(limit), 20_000)))
+        stamps = frame["event_time"]
+        coverage_start = stamps.iloc[0].isoformat() if total else None
+        coverage_end = stamps.iloc[-1].isoformat() if total else None
+        size = max(1, min(int(limit), 20_000))
+
+        if after:
+            cutoff = self._instant(after)
+            newer = frame[stamps > cutoff]
+            window = newer.head(size)
+            # Anything at or before the cutoff is older than this window, and
+            # anything the head did not reach is newer than it.
+            more_before = bool(total > len(newer))
+            more_after = bool(len(newer) > len(window))
+        elif before:
+            cutoff = self._instant(before)
+            older = frame[stamps < cutoff]
+            window = older.tail(size)
+            more_before = bool(len(older) > len(window))
+            more_after = bool(total > len(older))
+        else:
+            window = frame.tail(size)
+            more_before = bool(total > len(window))
+            # The newest bars in the archive: there is nothing further forward
+            # to load, which is a different statement from "the market ended".
+            more_after = False
 
         return {
             "dataset": key,
@@ -400,9 +437,21 @@ class MarketService:
             "is_real": dataset.is_real,
             "bar_count": len(window),
             "total_bars": total,
-            # True when there is more history to the left, so the chart knows
-            # whether panning further can load anything.
-            "has_more": bool(len(frame) > len(window)),
+            # The archive's own bounds at this timeframe, so a chart can tell an
+            # empty response caused by reaching the start of history from one
+            # caused by asking for a range that was never held.
+            "coverage_start": coverage_start,
+            "coverage_end": coverage_end,
+            # The returned window's bounds, so the caller pages from what it was
+            # actually given rather than from what it believes it asked for.
+            "range_start": window["event_time"].iloc[0].isoformat() if len(window) else None,
+            "range_end": window["event_time"].iloc[-1].isoformat() if len(window) else None,
+            "has_more_before": more_before,
+            "has_more_after": more_after,
+            # Retained under its original name, which has always meant "more
+            # history to the left". Renaming it would have been a silent break
+            # for any caller still reading it.
+            "has_more": more_before,
             "bars": [
                 {
                     "time": stamp.isoformat(),
@@ -423,6 +472,21 @@ class MarketService:
                 )
             ],
         }
+
+    @staticmethod
+    def _instant(value: str) -> pd.Timestamp:
+        """A paging cursor, always resolved to UTC.
+
+        A naive timestamp compared against a tz-aware column raises rather than
+        comparing, so a cursor arriving without an offset — which is what a
+        browser sends when it formats a local time — would take down the request
+        instead of paging it.
+        """
+        stamp: pd.Timestamp = _pd().Timestamp(value)
+        localised: pd.Timestamp = (
+            stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
+        )
+        return localised
 
     def _timeframe_frame(self, key: str, dataset: Dataset, timeframe_key: str) -> pd.DataFrame:
         """The aggregate for one dataset and timeframe, built once and kept."""

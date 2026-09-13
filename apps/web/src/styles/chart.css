@@ -121,6 +121,25 @@
 .chart-state.error strong { color: var(--fail); }
 .chart-state .chart-note { color: var(--fg-3); max-width: 46ch; }
 
+/* The left-hand boundary of the archive, marked where the bars stop.
+   A chart that has run out of history looks exactly like one that stopped
+   loading, and the difference is the whole question of whether to keep
+   dragging. Quiet enough to ignore, present enough to answer it. */
+.chart-edge {
+  position: absolute;
+  left: 8px;
+  bottom: 34px;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-nano);
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
 .chart-provenance {
   display: flex;
   gap: 14px;

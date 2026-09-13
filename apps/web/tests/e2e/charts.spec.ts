@@ -63,6 +63,48 @@ test('timeframes are switchable and report which is active', async ({ page }) =>
   }
 })
 
+test('dragging backwards loads history that was not on screen', async ({ page }) => {
+  /* The defect this covers produced no error and no warning. One window of
+   * bars was fetched, drawn, and that was the whole series: dragging left
+   * revealed empty space where sixteen years of archive actually sit, and the
+   * chart behaved like a photograph of a market.
+   *
+   * Asserted over the network rather than the canvas, because the canvas
+   * cannot be read — and what matters is that the drag reached the archive. */
+  const pages: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/bars?')) pages.push(request.url())
+  })
+
+  await page.goto('/#charts')
+  await expect(page.locator('.chart-provenance')).toBeVisible({ timeout: 60_000 })
+
+  const canvas = page.locator('.price-chart-canvas canvas').first()
+  await expect(canvas).toBeVisible()
+  const box = await canvas.boundingBox()
+  test.skip(!box, 'the chart never got a size to drag inside')
+  if (!box) return
+
+  const opening = pages.length
+  // Dragging right walks the viewport backwards through time.
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2)
+  await page.mouse.down()
+  for (let step = 1; step <= 12; step += 1) {
+    await page.mouse.move(box.x + box.width * 0.3 + step * 60, box.y + box.height / 2)
+  }
+  await page.mouse.up()
+
+  await expect
+    .poll(() => pages.filter((url) => url.includes('before=')).length, { timeout: 30_000 })
+    .toBeGreaterThan(0)
+
+  // The pan is paged, not refetched: it asks for the bars it does not have
+  // rather than the whole window again.
+  expect(pages.length).toBeGreaterThan(opening)
+  const paged = pages.filter((url) => url.includes('before='))
+  expect(new Set(paged).size).toBe(paged.length)
+})
+
 test('no console errors while charting', async ({ page }) => {
   const errors: string[] = []
   page.on('console', (message) => {

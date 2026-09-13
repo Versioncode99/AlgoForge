@@ -32,6 +32,7 @@ import threading
 from datetime import UTC, datetime
 from typing import Any
 
+from forge.analytics.reading import read as read_regimes
 from forge.analytics.regime import (
     SHORT_LABEL,
     Basis,
@@ -462,6 +463,12 @@ class TradeLedgerService:
         report = summarise(trades, marks, own, attribution=attribution)  # type: ignore[arg-type]
         return {
             **report.model_dump(mode="json"),
+            # The grid, and what it says. Derived here rather than in the
+            # browser so the sentences a reader is shown and the numbers a test
+            # asserts on come out of the same function: a surface that composed
+            # its own prose from the cells would be a second, unversioned
+            # interpretation of the same evidence.
+            "reading": read_regimes(report).model_dump(mode="json"),
             "strategy_id": strategy_id,
             "backtest_id": payload.get("backtest_id"),
             "dataset_key": dataset,
