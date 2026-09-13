@@ -20,7 +20,8 @@ const DESKTOP = join(process.cwd(), '..', 'desktop')
 const ELECTRON = join(DESKTOP, 'node_modules', 'electron', 'dist', 'electron')
 const ROOT = join(process.cwd(), '..', '..')
 const SESSION = join(ROOT, 'data', 'runtime', 'workspace-session.json')
-const HEALTH = 'http://127.0.0.1:8765/api/v1/health'
+const API = 'http://127.0.0.1:8765/api/v1'
+const HEALTH = `${API}/health`
 
 let api: ChildProcess | null = null
 
@@ -31,6 +32,31 @@ async function healthy(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/** Wait for the API, starting one if nothing is serving.
+ *
+ * Every shell launch starts its own API child and kills it on quit, so between
+ * two tests there is a window with nothing on the port. A test that reaches the
+ * API before launching -- which the ones below do, because the first window has
+ * to load already in the right mode -- has to wait rather than assume.
+ */
+async function ensureApi(): Promise<void> {
+  if (await healthy()) return
+  if (api === null) {
+    api = spawn(
+      join(ROOT, '.venv', 'bin', 'python'),
+      ['-m', 'uvicorn', 'forge_api.main:app', '--app-dir', join(ROOT, 'apps', 'api'),
+       '--host', '127.0.0.1', '--port', '8765'],
+      { cwd: ROOT, stdio: 'ignore' },
+    )
+  }
+  const deadline = Date.now() + 90_000
+  while (Date.now() < deadline) {
+    if (await healthy()) return
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  throw new Error('the API did not become healthy, so the shell would never load a page')
 }
 
 test.beforeAll(async () => {
@@ -88,6 +114,24 @@ async function windows(app: ElectronApplication): Promise<ShellWindow[]> {
  */
 async function workspaceWindows(app: ElectronApplication): Promise<ShellWindow[]> {
   return (await windows(app)).filter((each) => each.workspaceId !== null)
+}
+
+/** The Playwright page for the window showing one workspace, once it attaches.
+ *
+ * Polled rather than read once. The main process registers a window the moment
+ * it is created, and Playwright attaches to it slightly later -- so a registry
+ * that already counts two windows can coexist with `app.windows()` holding one,
+ * and a `find` on that snapshot fails for a reason that has nothing to do with
+ * what is being tested.
+ */
+async function windowShowing(app: ElectronApplication, workspaceId: string) {
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    const match = app.windows().find((candidate) => candidate.url().includes(workspaceId))
+    if (match) return match
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error(`no window ever loaded ${workspaceId}`)
 }
 
 async function openWorkspace(app: ElectronApplication, id: string, intent = 'new'): Promise<void> {
@@ -219,6 +263,53 @@ test('two workspace windows can be grouped and separated again', async () => {
   await app.close()
 })
 
+test('two windows show two workspaces, not the same one twice', async () => {
+  /* The guarantee the main process writes down and the renderer did not keep.
+   *
+   * `createWorkspaceWindow` loads `#workspace?workspace=<id>`, and its own
+   * comment says the id travels in the fragment "so a reload lands on the same
+   * workspace instead of on whatever was globally active". The workspace view
+   * read `/workspaces/active` regardless, so two windows opened on two
+   * workspaces both showed whichever had been opened last -- which is most of
+   * what multi-window is for, absent.
+   *
+   * Asserted on the *rendered* name rather than on the registry, because the
+   * registry was right the whole time. */
+  const app = await launch()
+
+  await ensureApi()
+
+  const names = ['Desk A', 'Desk B']
+  const ids: string[] = []
+  for (const name of names) {
+    const made = await fetch(`${API}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, activate: true }),
+    })
+    expect(made.ok).toBe(true)
+    ids.push((await made.json()).data.workspace_id as string)
+  }
+
+  for (const id of ids) await openWorkspace(app, id)
+  await expect.poll(async () => (await workspaceWindows(app)).length).toBe(2)
+
+  const shown: string[] = []
+  for (const id of ids) {
+    const registered = (await workspaceWindows(app)).find((each) => each.workspaceId === id)
+    expect(registered, `no window registered for ${id}`).toBeTruthy()
+    const match = await windowShowing(app, id)
+    await expect(match.locator('.workspace-bar')).toBeVisible({ timeout: 30_000 })
+    // The select in the bar names what this window is showing; its value is the
+    // workspace id, which is the claim under test.
+    shown.push(await match.getByLabel('Active workspace').inputValue())
+  }
+
+  expect(shown).toEqual(ids)
+
+  await app.close()
+})
+
 test('an operator can group two windows from the interface, not only over IPC', async () => {
   /* The test above proves the *mechanism*. This proves there is a way to reach
    * it, which is the thing that was missing: the registry, the IPC channel and
@@ -226,28 +317,38 @@ test('an operator can group two windows from the interface, not only over IPC', 
    * interface could form one, so "windows cannot be snapped together in the
    * UI" stayed true while every unit test passed.
    *
-   * Driven by clicking, in a real window, through the real bridge. */
-  const app = await launch()
-  await openWorkspace(app, 'ws_research')
-  await openWorkspace(app, 'ws_prop')
-  await expect.poll(async () => (await workspaceWindows(app)).length).toBe(2)
-
-  // A mode has to be open before any route inside one is reachable, and which
-  // mode is open is server state rather than a browser preference -- so it is
-  // set the same way the browser suite sets it.
-  const entered = await fetch('http://127.0.0.1:8765/api/v1/modes/normal/enter', {
+   * Driven by clicking, in a real window, through the real bridge.
+   *
+   * Both pieces of server state the workspace route needs are set *before* the
+   * shell launches, so the first window loads already in the right mode with a
+   * desk to show. Doing it afterwards meant navigating and reloading a window
+   * that was already somewhere else, which failed about one run in six on a
+   * race that says nothing about window groups. */
+  await ensureApi()
+  const entered = await fetch(`${API}/modes/normal/enter`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ stance: null }),
   })
   expect(entered.ok).toBe(true)
 
-  const page = await app.firstWindow()
-  // Reloaded rather than navigated: changing only the fragment on an already
-  // loaded document fires a hashchange and never re-reads which mode is open,
-  // so the chooser would stay on screen with the route behind it.
-  await page.goto(`${page.url().split('#')[0]}#workspace`)
-  await page.reload()
+  const made = await fetch(`${API}/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Window group test', activate: true }),
+  })
+  expect(made.ok).toBe(true)
+  const workspaceId = (await made.json()).data.workspace_id as string
+
+  const app = await launch()
+  await openWorkspace(app, workspaceId)
+  await openWorkspace(app, 'ws_group_other')
+  await expect.poll(async () => (await workspaceWindows(app)).length).toBe(2)
+
+  // The window the shell opened *for this workspace* -- which shows it because
+  // the id is in its fragment, the guarantee the test above this one pins.
+  const page = await windowShowing(app, workspaceId)
+  await expect(page.locator('.workspace-bar')).toBeVisible({ timeout: 30_000 })
   await page.getByRole('button', { name: 'Manage' }).click()
 
   const groups = page.getByRole('region', { name: 'Window groups' })
@@ -303,7 +404,21 @@ test('the arrangement is written to disk and restored after a relaunch', async (
   await openWorkspace(first, 'ws_research')
   await openWorkspace(first, 'ws_prop')
   await expect.poll(async () => (await workspaceWindows(first)).length).toBe(2)
-  // Closing flushes the debounced session rather than losing the last 400ms.
+
+  /* Quit the way a person quits, rather than letting the harness tear the
+   * windows down.
+   *
+   * The shell distinguishes "the operator closed this window" -- which must not
+   * come back -- from "the application went away with windows open", which is
+   * the arrangement to restore. The only thing that can tell them apart is
+   * `before-quit` arriving before the close handlers, which Electron guarantees
+   * for a real quit and Playwright's teardown does not: when it destroyed the
+   * windows first, each close flushed a session one window emptier than the
+   * last, and the final one wrote a blank arrangement. That made this test fail
+   * about one run in three, on a path no user has.
+   *
+   * So `app.quit()` is called explicitly, which is what a menu Quit does. */
+  await first.evaluate(({ app }) => app.quit())
   await first.close()
 
   expect(existsSync(SESSION)).toBe(true)

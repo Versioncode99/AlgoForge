@@ -124,7 +124,7 @@ function viewFor(mode: ModeKey, hash: string): React.ReactNode {
   }
   const shared: Record<string, React.ReactNode> = {
     overview: <OverviewView onRoute={(id) => { window.location.hash = id }} />,
-    workspace: <WorkspaceView />,
+    workspace: <WorkspaceView workspaceId={params.workspace ?? ''} />,
     charts: <ChartsView />,
     trades: <StrategyChartView />,
     strategies: <StrategiesView open={params.strategy ?? ''} pane={params.pane ?? ''} />,

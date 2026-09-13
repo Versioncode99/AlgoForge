@@ -32,11 +32,28 @@ const { contextBridge, ipcRenderer } = require('electron')
  */
 const VISIBILITY_CHANNEL = 'workspace:visibility'
 
-const call = (channel, payload) => ipcRenderer.invoke(channel, payload ?? {})
+/* Every invoke goes through here, so this is the only honest place to count
+ * them. `docs/PERFORMANCE_BASELINE.md` named IPC volume as a dimension nobody
+ * had measured, and there is no counter in Electron to read: instrumenting from
+ * outside would have meant wrapping the bridge from the page, which changes the
+ * thing being measured. A monotonic integer changes nothing and is readable. */
+let invokes = 0
+
+const call = (channel, payload) => {
+  invokes += 1
+  return ipcRenderer.invoke(channel, payload ?? {})
+}
 
 contextBridge.exposeInMainWorld('algoforge', {
   /** True only inside the shell, so the web build can tell and degrade. */
   desktop: true,
+
+  /** How many IPC calls this window has made since it loaded.
+   *
+   * A number, and nothing else: it carries no payload, reaches nothing, and
+   * cannot be reset from the page. It exists so IPC volume is a thing that can
+   * be measured rather than estimated. */
+  ipcCalls: () => invokes,
 
   /**
    * What this window is doing: 'active', 'background' or 'obscured'.

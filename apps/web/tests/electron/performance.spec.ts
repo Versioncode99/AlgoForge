@@ -276,6 +276,45 @@ test('a renderer told it is obscured stops polling, and a background one does no
   await app.close()
 })
 
+test('IPC volume over an ordinary session', async () => {
+  /* The third of the four dimensions the baseline named and did not measure.
+   *
+   * Counted in the preload, because that is the only place every invoke passes
+   * through and the only count that is not an estimate. Measuring it from the
+   * page would have meant wrapping the bridge, which changes the thing being
+   * measured.
+   *
+   * What matters is the *idle* figure. A shell that chatters to its main
+   * process while nobody is doing anything is paying for nothing, and it is the
+   * kind of cost that only appears with several windows open. */
+  const app = await launch()
+  const page = await app.firstWindow()
+  await page.waitForLoadState('domcontentloaded')
+
+  const read = () => page.evaluate(() => window.algoforge.ipcCalls())
+
+  const afterLoad = await read()
+  await new Promise((resolve) => setTimeout(resolve, 6_000))
+  const idle = (await read()) - afterLoad
+
+  const beforeWork = await read()
+  await openWorkspace(app, 'ws_ipc_a')
+  await expect.poll(async () => workspaceWindows(app)).toBe(1)
+  await openWorkspace(app, 'ws_ipc_b')
+  await expect.poll(async () => workspaceWindows(app)).toBe(2)
+  const opening = (await read()) - beforeWork
+
+  measured.ipc_calls = { after_load: afterLoad, idle_over_6s: idle, opening_two_windows: opening }
+
+  /* The structural assertion: an idle window must not be talking to the main
+   * process on a timer. Opening windows costs calls and should; sitting still
+   * should cost none. A handful is allowed for a resize or a focus event that
+   * the container's compositor produced on its own. */
+  expect(idle).toBeLessThan(10)
+
+  await app.close()
+})
+
 test('the report is written where the next measurement can be compared to it', async () => {
   mkdirSync(join(ROOT, 'docs'), { recursive: true })
   expect(Object.keys(measured).length).toBeGreaterThan(0)

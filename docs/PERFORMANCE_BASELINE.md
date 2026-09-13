@@ -84,20 +84,63 @@ What *is* asserted is structural, because it holds on any machine:
 - an obscured renderer must do less work than an active one;
 - a background renderer must still do some.
 
-## Still not measured
+## Three of the four gaps are now measured
 
-Honest gaps, not oversights:
+The first version of this document named four dimensions it had not measured.
+Three of them are measured now, and one still is not.
 
-- **Panel drag and chart pan latency.** Both are pointer-driven, and measuring
-  them meaningfully needs a frame-timing harness rather than a wall clock around
-  an IPC call.
-- **IPC volume.** No counter exists; adding one to the contract to measure it
-  would change the thing being measured.
-- **Database writes per operation.** Worth having, and better taken from the
-  store's own instrumentation than inferred from the outside.
-- **Docking and undocking latency.** The gesture landed after this harness; the
-  operations themselves are pure functions over a grid and are unlikely to be
-  where time goes, but that is a prediction, not a measurement.
+### IPC volume — measured
+
+Counted in the preload, which is the only place every `invoke` passes through.
+The earlier note said no counter existed and that adding one "would change the
+thing being measured" — that was true of wrapping the bridge *from the page*,
+which is what had been considered. A monotonic integer incremented inside the
+preload's own `call` changes nothing and is readable as `window.algoforge.ipcCalls()`.
+
+| | Observed |
+| --- | --- |
+| Calls after load | **0** |
+| Calls while idle, over 6 s | **0** |
+| Calls to open two workspace windows | **4** |
+
+The idle figure is the one that matters and it is the right answer: the shell
+does not talk to its main process on a timer. Two calls per window opened is the
+open and the bounds it records, which is what it should cost.
+
+### Docking latency and writes per operation — measured
+
+Both are properties of the server rather than the shell, so they are measured
+where they happen: `tests/performance/test_operation_cost.py`, writing
+`docs/OPERATION_COST.json`.
+
+| Operation | Median |
+| --- | --- |
+| Split a panel | **~6–8 ms** |
+| Stack a panel onto another | **~7 ms** |
+| Detach a panel from a stack | **~8 ms** |
+| Write statements per split | **4**, on a two-panel desk and on a ten-panel one |
+
+The write count is the finding, and it is the one that could have gone wrong
+invisibly: a layout rewritten whole per edit would show as a write count that
+grows with the desk, and as a workstation that gets slower the longer somebody
+uses it. It does not grow, and the test fails if it starts to.
+
+Two earlier attempts at counting are worth recording because both *looked* like
+they worked. `sqlite3_total_changes` is per connection and counts from when that
+connection opened, and every store here opens one per call — so it can never see
+across them. `PRAGMA data_version` only moves for commits from other connections
+and counts commits rather than rows; it reported a flattering **zero writes per
+operation**, which is exactly the shape of a measurement that measures nothing.
+The counting is done by wrapping `sqlite3.connect` for the duration and reading
+the SQL each connection actually executes.
+
+### Panel drag and chart pan latency — still not measured
+
+Both are pointer-driven, and measuring them meaningfully needs frame timing
+rather than a wall clock around an IPC call. What *is* now known is the server
+half: a docking operation costs single-digit milliseconds and four row writes, so
+if a drag ever feels slow, the time is in the browser and not behind the API.
+That narrows where to look without pretending to have looked.
 
 ## The optimisation this baseline does not license
 

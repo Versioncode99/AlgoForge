@@ -123,8 +123,30 @@ function stopApi() {
   }
 }
 
+/* Has the saved arrangement been dealt with yet this run?
+ *
+ * Until it has, it is the only copy of what the operator left, and an empty
+ * snapshot must not be written over it. That is not hypothetical: the main
+ * window fires `move` and `resize` while it is being placed on screen, both of
+ * which persist the arrangement -- and at that moment no workspace window is
+ * open, so the snapshot is empty. A launch could therefore erase the session
+ * before anything had a chance to restore it, and whether it did came down to
+ * whether the debounce landed first. That is what made restore fail about one
+ * run in three.
+ *
+ * It stops mattering the moment the session has been restored or the operator
+ * has opened a workspace of their own: from then on an empty arrangement is a
+ * real statement about what is open, not a startup artefact. */
+let sessionConsumed = false
+
+/** Would writing now destroy an arrangement nobody has read yet? */
+function wouldEraseUnreadSession() {
+  return !sessionConsumed && windows.snapshot().windows.length === 0
+}
+
 /** Persist the arrangement, at most once per debounce window. */
 function rememberSession() {
+  if (wouldEraseUnreadSession()) return
   if (sessionTimer) clearTimeout(sessionTimer)
   sessionTimer = setTimeout(() => {
     sessionTimer = null
@@ -153,6 +175,7 @@ function flushSession() {
     clearTimeout(sessionTimer)
     sessionTimer = null
   }
+  if (wouldEraseUnreadSession()) return
   try {
     fs.mkdirSync(path.dirname(SESSION_FILE), { recursive: true })
     fs.writeFileSync(SESSION_FILE, JSON.stringify(windows.snapshot(), null, 2))
@@ -237,7 +260,10 @@ function installIpc() {
       })),
     }),
     'workspace:restore-session': () => {
+      // Read before it is marked consumed: from here on the operator has been
+      // given their arrangement back, and what is open is the truth again.
       const plan = windows.planRestore(readSession())
+      sessionConsumed = true
       const opened = []
       for (const item of plan) {
         if (windows.windowFor(item.workspaceId) !== null) continue
@@ -273,6 +299,9 @@ function windowIdOf(event) {
  * is a window the operator cannot trust to keep their arrangement.
  */
 function createWorkspaceWindow(workspaceId, bounds = null) {
+  // A workspace window exists, so what is open is now a real arrangement and
+  // persisting it can no longer destroy an unread one.
+  sessionConsumed = true
   const window = new BrowserWindow({
     ...(bounds ?? { width: 1360, height: 900 }),
     minWidth: 900,
@@ -516,7 +545,25 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.on('window-all-closed', () => {
-    if (!quitting) flushSession()
+    /* No flush here, and that is the fix rather than an omission.
+     *
+     * Every window's own `close` handler has already written the arrangement as
+     * it shrank, so by this point the file says what the operator left -- which
+     * for a one-by-one close is nothing, correctly. Flushing again could only
+     * ever write the same empty snapshot.
+     *
+     * It could also write it at the wrong moment. When the windows are
+     * destroyed before `before-quit` runs -- which is how an external quit and
+     * Playwright's `app.close()` both behave -- this handler fired first with
+     * `quitting` still false and overwrote the arrangement with a snapshot in
+     * which every window was already closing. The restore test failed
+     * intermittently on exactly that race, and passed whenever `before-quit`
+     * happened to win.
+     *
+     * The flag is set here because this handler quits: from here on the
+     * application is on its way out, and nothing that runs afterwards should
+     * treat a disappearing window as an arrangement being abandoned. */
+    quitting = true
     stopApi()
     app.quit()
   })

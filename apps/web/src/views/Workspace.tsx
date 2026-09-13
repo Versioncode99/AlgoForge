@@ -77,16 +77,38 @@ const PANEL_KINDS = [
   'replay', 'agent', 'activity', 'logs', 'notes',
 ]
 
-export function WorkspaceView() {
+export function WorkspaceView({ workspaceId = '' }: { workspaceId?: string } = {}) {
   const client = useQueryClient()
   const surface = useRef<HTMLDivElement | null>(null)
   const [adding, setAdding] = useState(false)
   const [managing, setManaging] = useState(false)
 
-  const active = useQuery({
+  /* Which workspace this window is showing.
+   *
+   * A named one when the link says so, and the active one otherwise. The
+   * desktop shell has always opened a second window on
+   * `#workspace?workspace=<id>` -- its own comment says the id travels in the
+   * fragment "so a reload lands on the same workspace instead of on whatever
+   * was globally active" -- and this view read `/workspaces/active` regardless.
+   * So two windows opened on two workspaces both showed the same one, and
+   * whichever was opened last decided which. The guarantee was written down in
+   * the main process and implemented nowhere.
+   *
+   * Keyed by id so two windows do not share one cache entry, and a named
+   * workspace that no longer exists falls back rather than rendering nothing:
+   * a deleted desk should leave you somewhere, not on a blank screen. */
+  const named = useQuery({
+    queryKey: ['workspace-named', workspaceId],
+    queryFn: () => getJson<Workspace | null>(`/workspaces/${workspaceId}`),
+    enabled: Boolean(workspaceId),
+    retry: false,
+  })
+  const activeQuery = useQuery({
     queryKey: ['workspace-active'],
     queryFn: () => getJson<Workspace | null>('/workspaces/active'),
+    enabled: !workspaceId || named.isError,
   })
+  const active = workspaceId && !named.isError ? named : activeQuery
   const list = useQuery({
     queryKey: ['workspace-list'],
     queryFn: () => getJson<{ workspaces: WorkspaceSummary[]; active: string | null }>('/workspaces'),
@@ -102,6 +124,7 @@ export function WorkspaceView() {
 
   const refresh = useCallback(() => {
     void client.invalidateQueries({ queryKey: ['workspace-active'] })
+    void client.invalidateQueries({ queryKey: ['workspace-named'] })
     void client.invalidateQueries({ queryKey: ['workspace-list'] })
   }, [client])
 
