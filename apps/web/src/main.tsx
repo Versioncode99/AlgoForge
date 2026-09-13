@@ -1,6 +1,7 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { followVisibility } from './desktop'
 import { App } from './App'
 import { applyAppearance, cachedAppearance } from './theme'
 // Self-hosted so the workstation renders identically offline.
@@ -38,6 +39,19 @@ import './styles/research-control.css'
 applyAppearance(cachedAppearance())
 
 const queryClient = new QueryClient({defaultOptions: {queries: {retry: 1, staleTime: 30_000}}})
+
+/* A window nobody can see stops polling.
+ *
+ * The query layer already pauses interval refetching when the document is
+ * hidden, which covers a minimised window. Inside the shell there is a state it
+ * cannot detect -- a window fully covered by another -- and one it must not act
+ * on: a window that is merely not frontmost, which in a workstation is half the
+ * screen and still being read.
+ *
+ * `followVisibility` sends only the first of those through the focus gate, so
+ * there is one mechanism deciding this rather than two disagreeing. Outside the
+ * shell it does nothing and the browser's own visibility handling stands. */
+followVisibility((focused) => focusManager.setFocused(focused))
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode><QueryClientProvider client={queryClient}><App /></QueryClientProvider></StrictMode>,

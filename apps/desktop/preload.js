@@ -17,12 +17,33 @@
  */
 
 const { contextBridge, ipcRenderer } = require('electron')
+const { VISIBILITY_CHANNEL } = require('./ipc-contract')
 
 const call = (channel, payload) => ipcRenderer.invoke(channel, payload ?? {})
 
 contextBridge.exposeInMainWorld('algoforge', {
   /** True only inside the shell, so the web build can tell and degrade. */
   desktop: true,
+
+  /**
+   * What this window is doing: 'active', 'background' or 'obscured'.
+   *
+   * A listener, not a getter, because the renderer needs to react rather than
+   * ask -- and the shell is the only thing that knows the difference between a
+   * window that is covered and one that is merely not frontmost.
+   *
+   * The callback receives the state name only. Returns an unsubscribe, so a
+   * renderer that tears down does not leave a listener attached to a window
+   * that is about to be reused: Electron reuses window ids.
+   */
+  onVisibilityChange: (callback) => {
+    const listener = (_event, payload) => {
+      const state = payload && payload.visibility
+      if (typeof state === 'string') callback(state)
+    }
+    ipcRenderer.on(VISIBILITY_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(VISIBILITY_CHANNEL, listener)
+  },
 
   workspaces: {
     /** Open a workspace. `intent` is 'auto' | 'current' | 'new'. */

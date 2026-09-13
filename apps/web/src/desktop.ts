@@ -21,8 +21,12 @@ export type ShellWindow = {
   groupId: string | null
 }
 
+/** What the shell says this window is doing. */
+export type Visibility = 'active' | 'background' | 'obscured'
+
 type ShellBridge = {
   desktop: true
+  onVisibilityChange?: (callback: (visibility: Visibility) => void) => () => void
   workspaces: {
     open: (workspaceId: string, intent?: WindowIntent) => Promise<unknown>
     list: () => Promise<{ windows: ShellWindow[] }>
@@ -85,4 +89,32 @@ export async function shellWindows(): Promise<ShellWindow[]> {
   } catch {
     return []
   }
+}
+
+/**
+ * Stop periodic work in a window nobody can see, and only then.
+ *
+ * The query layer already gates interval refetching on
+ * `document.visibilityState`, which covers a minimised window for free. What it
+ * cannot see is the difference between a window that is covered and one that is
+ * simply not frontmost -- and those must be treated differently. Several
+ * windows watched at once is the arrangement this product is for, so pausing
+ * the unfocused half of a chart-beside-risk layout would make the product worse
+ * to save requests nobody was short of.
+ *
+ * So only `obscured` stands a renderer down, via the query layer's own focus
+ * gate rather than a second mechanism competing with it.
+ *
+ * Nothing here touches monitoring: risk, accounts and execution are watched by
+ * the backend, which does not know or care whether a renderer is on screen.
+ * Safety must never depend on what a window is doing.
+ *
+ * Returns an unsubscribe, or null outside the shell.
+ */
+export function followVisibility(
+  setFocused: (focused: boolean) => void,
+): (() => void) | null {
+  const bridge = shell()
+  if (!bridge?.onVisibilityChange) return null
+  return bridge.onVisibilityChange((visibility) => setFocused(visibility !== 'obscured'))
 }

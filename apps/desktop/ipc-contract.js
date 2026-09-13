@@ -31,6 +31,18 @@
  * way in.
  */
 
+/**
+ * The one channel that runs the other way: main tells a renderer what its
+ * window is doing.
+ *
+ * It carries no payload the renderer could act on beyond a state name, and the
+ * renderer cannot send on it -- which is why it is named here but not in
+ * CHANNELS. CHANNELS is the set a renderer may *invoke*, and keeping a
+ * main-to-renderer event out of it means the invoke allowlist stays exactly
+ * what it claims to be.
+ */
+const VISIBILITY_CHANNEL = 'workspace:visibility'
+
 /** Field validators. Small on purpose: this is a boundary, not a schema library. */
 const is = {
   workspaceId: (v) => typeof v === 'string' && v.length > 0 && v.length <= 200,
@@ -104,4 +116,4 @@ function validate(channel, payload) {
   return { ok: true, payload: clean }
 }
 
-module.exports = { CHANNELS, CHANNEL_NAMES, validate }
+module.exports = { VISIBILITY_CHANNEL, CHANNELS, CHANNEL_NAMES, validate }

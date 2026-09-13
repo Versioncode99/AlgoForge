@@ -32,6 +32,27 @@ const PLACEMENT = {
   FOCUS: 'focus',
 }
 
+/**
+ * What a window is doing, for the purpose of deciding whether its renderer
+ * should keep doing periodic work.
+ *
+ * The distinction that matters is **not** focus. A trading workstation is
+ * several windows open at once and watched at once -- a risk panel beside a
+ * chart is the arrangement Doc 2 asks for, and pausing the unfocused half of it
+ * would make the product worse to save requests nobody was short of. So
+ * `BACKGROUND` is a first-class state that keeps working.
+ *
+ * Only surfaces the operator genuinely cannot see are told to stand down.
+ */
+const VISIBILITY = {
+  /** On screen and frontmost. */
+  ACTIVE: 'active',
+  /** On screen, not frontmost. Still watched, so still working. */
+  BACKGROUND: 'background',
+  /** Minimised, hidden, or fully covered. Nobody can read it. */
+  OBSCURED: 'obscured',
+}
+
 /** What the operator asked for. `auto` lets the registry decide. */
 const INTENT = {
   AUTO: 'auto',
@@ -41,7 +62,7 @@ const INTENT = {
 
 class WindowRegistry {
   constructor() {
-    /** @type {Map<number, {workspaceId: string|null, groupId: string|null, closing: boolean, bounds: object|null}>} */
+    /** @type {Map<number, {workspaceId: string|null, groupId: string|null, closing: boolean, bounds: object|null, visibility: string}>} */
     this._windows = new Map()
     this._nextGroup = 1
   }
@@ -72,7 +93,16 @@ class WindowRegistry {
       if (workspaceId !== null) existing.workspaceId = workspaceId
       return existing
     }
-    const entry = { workspaceId, groupId: null, closing: false, bounds: null }
+    const entry = {
+      workspaceId,
+      groupId: null,
+      closing: false,
+      bounds: null,
+      // A window is assumed watched until the shell says otherwise. Assuming
+      // OBSCURED would stall a renderer whose first visibility event has not
+      // arrived yet, which is a blank panel on startup.
+      visibility: VISIBILITY.ACTIVE,
+    }
     this._windows.set(windowId, entry)
     return entry
   }
@@ -206,6 +236,55 @@ class WindowRegistry {
    * Windows showing nothing are excluded too — an empty window is not an
    * arrangement worth reconstructing.
    */
+  /**
+   * Record what a window is doing. Returns true when the state actually moved,
+   * so the caller can avoid sending a renderer a message telling it nothing.
+   *
+   * An unknown or closing window is ignored rather than registered: visibility
+   * events arrive from Electron listeners that can outlive the window they were
+   * attached to, and resurrecting a closed window here would leave a workspace
+   * marked open forever.
+   */
+  setVisibility(windowId, visibility) {
+    if (!Object.values(VISIBILITY).includes(visibility)) return false
+    const entry = this._windows.get(windowId)
+    if (!entry || entry.closing) return false
+    if (entry.visibility === visibility) return false
+    entry.visibility = visibility
+    return true
+  }
+
+  /** What one window is doing, or null if it is not a live window. */
+  visibilityOf(windowId) {
+    const entry = this._windows.get(windowId)
+    return entry && !entry.closing ? entry.visibility : null
+  }
+
+  /**
+   * Whether a renderer should keep doing periodic work.
+   *
+   * Named for the question the caller is asking rather than for the state,
+   * because the caller should not have to know that BACKGROUND counts as yes.
+   */
+  shouldWork(windowId) {
+    return this.visibilityOf(windowId) !== VISIBILITY.OBSCURED
+  }
+
+  /**
+   * Every window an operator can currently read.
+   *
+   * The count this returns is the honest denominator for "how many copies of
+   * this poll are in flight" -- windows nobody can see are not part of the
+   * answer.
+   */
+  watched() {
+    const ids = []
+    for (const [windowId, entry] of this._windows) {
+      if (!entry.closing && entry.visibility !== VISIBILITY.OBSCURED) ids.push(windowId)
+    }
+    return ids
+  }
+
   snapshot() {
     const windows = []
     for (const [windowId, entry] of this._windows) {
@@ -266,4 +345,4 @@ function _bounds(value) {
   return { x, y, width, height }
 }
 
-module.exports = { WindowRegistry, PLACEMENT, INTENT }
+module.exports = { VISIBILITY, WindowRegistry, PLACEMENT, INTENT }

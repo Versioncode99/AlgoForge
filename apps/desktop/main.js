@@ -14,8 +14,8 @@ const http = require('node:http')
 const path = require('node:path')
 const fs = require('node:fs')
 
-const { WindowRegistry, PLACEMENT } = require('./workspace-windows')
-const { CHANNEL_NAMES, validate } = require('./ipc-contract')
+const { VISIBILITY, WindowRegistry, PLACEMENT } = require('./workspace-windows')
+const { CHANNEL_NAMES, VISIBILITY_CHANNEL, validate } = require('./ipc-contract')
 
 const ROOT = path.resolve(__dirname, '..', '..')
 const API_PORT = 8765
@@ -289,6 +289,28 @@ function createWorkspaceWindow(workspaceId, bounds = null) {
   }
   window.on('move', record)
   window.on('resize', record)
+
+  // What the window is doing, for the renderer's periodic work.
+  //
+  // Chromium already marks a minimised window's document hidden, and the query
+  // layer already stops interval work on that. What it does not distinguish is
+  // a window that is on screen but not frontmost -- and that one must keep
+  // working, because several windows watched at once is the arrangement this
+  // product exists for. So `blur` is deliberately not a reason to stand down.
+  //
+  // `setVisibility` returns whether the state actually moved, so a window that
+  // is shown while already shown does not wake its renderer for nothing.
+  const visibility = (state) => {
+    if (window.isDestroyed()) return
+    if (!windows.setVisibility(window.id, state)) return
+    window.webContents.send(VISIBILITY_CHANNEL, { visibility: state })
+  }
+  window.on('focus', () => visibility(VISIBILITY.ACTIVE))
+  window.on('blur', () => visibility(VISIBILITY.BACKGROUND))
+  window.on('show', () => visibility(window.isFocused() ? VISIBILITY.ACTIVE : VISIBILITY.BACKGROUND))
+  window.on('restore', () => visibility(window.isFocused() ? VISIBILITY.ACTIVE : VISIBILITY.BACKGROUND))
+  window.on('hide', () => visibility(VISIBILITY.OBSCURED))
+  window.on('minimize', () => visibility(VISIBILITY.OBSCURED))
 
   // `close` and `closed` are separate events with real time between them. A
   // window is enumerable in that gap, so it is marked as leaving before it is

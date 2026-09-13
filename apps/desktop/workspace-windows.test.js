@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { INTENT, PLACEMENT, WindowRegistry } from './workspace-windows.js'
+import { INTENT, PLACEMENT, VISIBILITY, WindowRegistry } from './workspace-windows.js'
 
 /* The main process's answer to "where is this workspace open".
  *
@@ -275,5 +275,89 @@ describe('the session', () => {
     expect(plan).toHaveLength(2)
     expect(plan[0].groupId).toBe(plan[1].groupId)
     expect(plan[1].bounds.x).toBe(1000)
+  })
+})
+
+describe('visibility', () => {
+  /* The point of this state is deciding whether a renderer keeps polling, and
+   * the expensive mistake is pausing a window the operator is still reading.
+   * A trading workstation is several windows watched at once -- that is the
+   * arrangement the product is for -- so "not frontmost" must not mean "stop". */
+
+  it('a new window is assumed watched', () => {
+    const registry = new WindowRegistry()
+    registry.register(1, 'ws_nq')
+    expect(registry.visibilityOf(1)).toBe(VISIBILITY.ACTIVE)
+    expect(registry.shouldWork(1)).toBe(true)
+  })
+
+  it('a window that is merely not frontmost keeps working', () => {
+    const registry = new WindowRegistry()
+    registry.register(1, 'ws_nq')
+    registry.setVisibility(1, VISIBILITY.BACKGROUND)
+    expect(registry.shouldWork(1)).toBe(true)
+  })
+
+  it('a window nobody can see stands down', () => {
+    const registry = new WindowRegistry()
+    registry.register(1, 'ws_nq')
+    registry.setVisibility(1, VISIBILITY.OBSCURED)
+    expect(registry.shouldWork(1)).toBe(false)
+  })
+
+  it('reports whether the state actually moved', () => {
+    const registry = new WindowRegistry()
+    registry.register(1, 'ws_nq')
+    expect(registry.setVisibility(1, VISIBILITY.OBSCURED)).toBe(true)
+    expect(registry.setVisibility(1, VISIBILITY.OBSCURED)).toBe(false)
+  })
+
+  it('refuses a state it does not define', () => {
+    const registry = new WindowRegistry()
+    registry.register(1, 'ws_nq')
+    expect(registry.setVisibility(1, 'somewhere-else')).toBe(false)
+    expect(registry.visibilityOf(1)).toBe(VISIBILITY.ACTIVE)
+  })
+
+  it('ignores an event for a window that is gone', () => {
+    /* Electron listeners can outlive the window they were attached to.
+     * Registering one here would mark a workspace open forever. */
+    const registry = new WindowRegistry()
+    registry.register(1, 'ws_nq')
+    registry.closing(1)
+    expect(registry.setVisibility(1, VISIBILITY.OBSCURED)).toBe(false)
+    expect(registry.visibilityOf(1)).toBe(null)
+  })
+
+  it('ignores an event for a window that never existed', () => {
+    expect(new WindowRegistry().setVisibility(99, VISIBILITY.ACTIVE)).toBe(false)
+  })
+
+  it('counts only the windows somebody can read', () => {
+    const registry = new WindowRegistry()
+    registry.register(1, 'ws_nq')
+    registry.register(2, 'ws_research')
+    registry.register(3, 'ws_risk')
+    registry.setVisibility(2, VISIBILITY.BACKGROUND)
+    registry.setVisibility(3, VISIBILITY.OBSCURED)
+    expect(registry.watched()).toEqual([1, 2])
+  })
+
+  it('a closing window is not watched', () => {
+    const registry = new WindowRegistry()
+    registry.register(1, 'ws_nq')
+    registry.closing(1)
+    expect(registry.watched()).toEqual([])
+  })
+
+  it('visibility does not disturb the arrangement that gets restored', () => {
+    /* What a window was doing when the app closed is not part of the layout. */
+    const registry = new WindowRegistry()
+    registry.register(1, 'ws_nq')
+    registry.remember(1, { x: 0, y: 0, width: 800, height: 600 })
+    registry.setVisibility(1, VISIBILITY.OBSCURED)
+    const snapshot = registry.snapshot()
+    expect(snapshot.windows).toHaveLength(1)
+    expect(snapshot.windows[0]).not.toHaveProperty('visibility')
   })
 })

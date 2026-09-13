@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { canOpenWindows, openWorkspaceWindow, shell, shellWindows } from './desktop'
+import {
+  type Visibility,
+  canOpenWindows,
+  followVisibility,
+  openWorkspaceWindow,
+  shell,
+  shellWindows,
+} from './desktop'
 
 /* Running inside the shell, or not, and the difference being detected rather
  * than assumed.
@@ -101,5 +108,70 @@ describe('listing windows', () => {
       }),
     })
     await expect(shellWindows()).resolves.toEqual([])
+  })
+})
+
+describe('followVisibility', () => {
+  /* The expensive mistake here is pausing a window somebody is reading. A
+   * workstation is several windows watched at once, so "not frontmost" must
+   * keep working; only a window nobody can see stands down. */
+
+  /** A shell bridge with just the parts this behaviour touches. */
+  function bridge(
+    onVisibilityChange?: (cb: (v: Visibility) => void) => () => void,
+  ): void {
+    window.algoforge = {
+      desktop: true,
+      onVisibilityChange,
+      workspaces: {
+        open: async () => ({}),
+        list: async () => ({ windows: [] }),
+        close: async () => ({}),
+        group: async () => ({}),
+        ungroup: async () => ({}),
+        restoreSession: async () => ({}),
+      },
+    }
+  }
+
+  it('does nothing in a browser', () => {
+    expect(followVisibility(() => {})).toBe(null)
+  })
+
+  it('does nothing in a shell too old to report visibility', () => {
+    bridge(undefined)
+    expect(followVisibility(() => {})).toBe(null)
+  })
+
+  it('keeps working when the window is merely not frontmost', () => {
+    const seen: boolean[] = []
+    let emit: ((v: Visibility) => void) | undefined
+    bridge((cb) => {
+      emit = cb
+      return () => {}
+    })
+    followVisibility((focused) => seen.push(focused))
+    emit?.('background')
+    expect(seen).toEqual([true])
+  })
+
+  it('stands down only when nobody can see the window', () => {
+    const seen: boolean[] = []
+    let emit: ((v: Visibility) => void) | undefined
+    bridge((cb) => {
+      emit = cb
+      return () => {}
+    })
+    followVisibility((focused) => seen.push(focused))
+    emit?.('obscured')
+    emit?.('active')
+    expect(seen).toEqual([false, true])
+  })
+
+  it('hands back the unsubscribe so a teardown does not leak a listener', () => {
+    const off = vi.fn()
+    bridge(() => off)
+    followVisibility(() => {})?.()
+    expect(off).toHaveBeenCalledOnce()
   })
 })
