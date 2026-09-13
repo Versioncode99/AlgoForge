@@ -29,7 +29,7 @@ type ShellBridge = {
   onVisibilityChange?: (callback: (visibility: Visibility) => void) => () => void
   workspaces: {
     open: (workspaceId: string, intent?: WindowIntent) => Promise<unknown>
-    list: () => Promise<{ windows: ShellWindow[] }>
+    list: () => Promise<{ self: number | null; windows: ShellWindow[] }>
     close: (windowId: number) => Promise<unknown>
     group: (windowIds: number[]) => Promise<unknown>
     ungroup: (windowId: number) => Promise<unknown>
@@ -80,14 +80,57 @@ export async function openWorkspaceWindow(
   }
 }
 
-/** Every window the shell has, or an empty list in a browser. */
-export async function shellWindows(): Promise<ShellWindow[]> {
+/** What the shell has open, and which of those windows is asking.
+ *
+ * `self` is part of the answer rather than a second call: a list of window ids
+ * with no way to tell which one is the window you are looking at is a list an
+ * operator has to guess at, and grouping the wrong pair is not recoverable by
+ * looking harder.
+ */
+export type ShellWindowList = { self: number | null; windows: ShellWindow[] }
+
+const NO_WINDOWS: ShellWindowList = { self: null, windows: [] }
+
+/** Every window the shell has, or nothing in a browser. */
+export async function shellWindows(): Promise<ShellWindowList> {
   const bridge = shell()
-  if (!bridge) return []
+  if (!bridge) return NO_WINDOWS
   try {
-    return (await bridge.workspaces.list()).windows
+    const answer = await bridge.workspaces.list()
+    return { self: answer.self ?? null, windows: answer.windows ?? [] }
   } catch {
-    return []
+    return NO_WINDOWS
+  }
+}
+
+/**
+ * Compose windows into one group.
+ *
+ * Returns the group id, or null when there is no shell or the main process
+ * refused -- fewer than two live windows, or an id that has since closed. Null
+ * rather than a throw for the same reason `openWorkspaceWindow` returns false:
+ * the caller has a fallback to offer and needs to know to offer it.
+ */
+export async function groupWindows(windowIds: number[]): Promise<string | null> {
+  const bridge = shell()
+  if (!bridge || windowIds.length < 2) return null
+  try {
+    const answer = (await bridge.workspaces.group(windowIds)) as { groupId?: string }
+    return answer?.groupId ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Take one window out of its group. True when the shell acted. */
+export async function ungroupWindow(windowId: number): Promise<boolean> {
+  const bridge = shell()
+  if (!bridge) return false
+  try {
+    await bridge.workspaces.ungroup(windowId)
+    return true
+  } catch {
+    return false
   }
 }
 

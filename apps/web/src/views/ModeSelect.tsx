@@ -48,6 +48,9 @@ import {
 
 const ORDER: ModeKey[] = ['normal', 'prop_firm', 'ai']
 
+/** Small numbers read as words in a sentence. Beyond this the digit is fine. */
+const WORDS: Record<number, string> = { 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five' }
+
 export function ModeSelect() {
   const modes = useModes()
   const enter = useEnterMode()
@@ -99,9 +102,13 @@ export function ModeSelect() {
         <Wordmark />
         <h1>Choose your workspace</h1>
         <p>
-          One platform, four operating environments. Every one reaches the same data, the same
-          strategies and the same judge — what changes is what the screen is arranged around, and
-          how much an assistant may do on your behalf.
+          {/* Counted from the manifest rather than written down. The sentence said
+              "four" for as long as the Hedge Fund mode had been gone, because a
+              number in prose has nothing to keep it honest. */}
+          One platform, {WORDS[modes.data?.modes.length ?? 0] ?? modes.data?.modes.length} operating
+          environments. Every one reaches the same data, the same strategies and the same judge —
+          what changes is what the screen is arranged around, and how much an assistant may do on
+          your behalf.
         </p>
       </header>
 

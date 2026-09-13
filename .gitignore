@@ -31,3 +31,8 @@ Thumbs.db
 # Playwright artifacts from a local run.
 apps/web/test-results/
 apps/web/playwright-report/
+
+# The research vault's own notes are repository content; the papers a search
+# retrieves at runtime are not. A test run writes them, and they arrived in a
+# commit once before this rule existed.
+research/notes/Research Papers/

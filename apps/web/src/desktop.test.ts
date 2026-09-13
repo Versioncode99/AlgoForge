@@ -5,7 +5,9 @@ import {
   followVisibility,
   openWorkspaceWindow,
   shell,
+  groupWindows,
   shellWindows,
+  ungroupWindow,
 } from './desktop'
 
 /* Running inside the shell, or not, and the difference being detected rather
@@ -27,7 +29,10 @@ function install(overrides: Record<string, unknown> = {}) {
     desktop: true,
     workspaces: {
       open: vi.fn(async () => ({ placement: 'new', windowId: 3 })),
-      list: vi.fn(async () => ({ windows: [{ windowId: 1, workspaceId: 'ws_a', groupId: null }] })),
+      list: vi.fn(async () => ({
+        self: 1,
+        windows: [{ windowId: 1, workspaceId: 'ws_a', groupId: null }],
+      })),
       close: vi.fn(),
       group: vi.fn(),
       ungroup: vi.fn(),
@@ -91,14 +96,15 @@ describe('opening a window', () => {
 
 describe('listing windows', () => {
   it('is empty in a browser rather than throwing', async () => {
-    await expect(shellWindows()).resolves.toEqual([])
+    await expect(shellWindows()).resolves.toEqual({ self: null, windows: [] })
   })
 
-  it('returns what the shell has', async () => {
+  it('returns what the shell has, and which window is asking', async () => {
     install()
-    await expect(shellWindows()).resolves.toEqual([
-      { windowId: 1, workspaceId: 'ws_a', groupId: null },
-    ])
+    await expect(shellWindows()).resolves.toEqual({
+      self: 1,
+      windows: [{ windowId: 1, workspaceId: 'ws_a', groupId: null }],
+    })
   })
 
   it('is empty when the shell fails rather than propagating', async () => {
@@ -107,7 +113,66 @@ describe('listing windows', () => {
         throw new Error('gone')
       }),
     })
-    await expect(shellWindows()).resolves.toEqual([])
+    await expect(shellWindows()).resolves.toEqual({ self: null, windows: [] })
+  })
+
+  it('survives an older shell that does not say which window is asking', async () => {
+    /* The renderer and the main process are versioned together, but a stale
+       window left open across an update is a real state. A missing `self`
+       must read as "not known" rather than crash the list it came with. */
+    install({
+      list: vi.fn(async () => ({ windows: [{ windowId: 4, workspaceId: 'ws_b', groupId: null }] })),
+    })
+    await expect(shellWindows()).resolves.toEqual({
+      self: null,
+      windows: [{ windowId: 4, workspaceId: 'ws_b', groupId: null }],
+    })
+  })
+})
+
+describe('composing windows into a group', () => {
+  it('does nothing in a browser', async () => {
+    await expect(groupWindows([1, 2])).resolves.toBeNull()
+  })
+
+  it('refuses fewer than two without troubling the shell', async () => {
+    const bridge = install()
+    await expect(groupWindows([1])).resolves.toBeNull()
+    expect(bridge.workspaces.group).not.toHaveBeenCalled()
+  })
+
+  it('returns the group the shell minted', async () => {
+    install({ group: vi.fn(async () => ({ groupId: 'wsg_2', windowIds: [1, 2] })) })
+    await expect(groupWindows([1, 2])).resolves.toBe('wsg_2')
+  })
+
+  it('reports a refusal as no group rather than propagating it', async () => {
+    install({
+      group: vi.fn(async () => {
+        throw new Error('a group needs at least two windows')
+      }),
+    })
+    await expect(groupWindows([1, 2])).resolves.toBeNull()
+  })
+})
+
+describe('taking a window out of its group', () => {
+  it('is false in a browser', async () => {
+    await expect(ungroupWindow(1)).resolves.toBe(false)
+  })
+
+  it('is true when the shell acted', async () => {
+    install({ ungroup: vi.fn(async () => ({ groupId: 'wsg_1' })) })
+    await expect(ungroupWindow(1)).resolves.toBe(true)
+  })
+
+  it('is false when the shell refused', async () => {
+    install({
+      ungroup: vi.fn(async () => {
+        throw new Error('gone')
+      }),
+    })
+    await expect(ungroupWindow(9)).resolves.toBe(false)
   })
 })
 
@@ -125,7 +190,7 @@ describe('followVisibility', () => {
       onVisibilityChange,
       workspaces: {
         open: async () => ({}),
-        list: async () => ({ windows: [] }),
+        list: async () => ({ self: null, windows: [] }),
         close: async () => ({}),
         group: async () => ({}),
         ungroup: async () => ({}),

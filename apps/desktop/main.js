@@ -225,7 +225,11 @@ function installIpc() {
       rememberSession()
       return { groupId }
     },
-    'workspace:windows': () => ({
+    // `self` so a renderer can tell which row is itself. Without it the window
+    // list is a set of numbers the operator has no way to match to the window
+    // they are looking at, and "group these two" becomes a guess.
+    'workspace:windows': (event) => ({
+      self: windowIdOf(event),
       windows: windows.windowIds.map((id) => ({
         windowId: id,
         workspaceId: windows.workspaceIn(id),

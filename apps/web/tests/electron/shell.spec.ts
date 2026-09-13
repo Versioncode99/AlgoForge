@@ -219,6 +219,65 @@ test('two workspace windows can be grouped and separated again', async () => {
   await app.close()
 })
 
+test('an operator can group two windows from the interface, not only over IPC', async () => {
+  /* The test above proves the *mechanism*. This proves there is a way to reach
+   * it, which is the thing that was missing: the registry, the IPC channel and
+   * the session snapshot all supported window groups and nothing in the
+   * interface could form one, so "windows cannot be snapped together in the
+   * UI" stayed true while every unit test passed.
+   *
+   * Driven by clicking, in a real window, through the real bridge. */
+  const app = await launch()
+  await openWorkspace(app, 'ws_research')
+  await openWorkspace(app, 'ws_prop')
+  await expect.poll(async () => (await workspaceWindows(app)).length).toBe(2)
+
+  // A mode has to be open before any route inside one is reachable, and which
+  // mode is open is server state rather than a browser preference -- so it is
+  // set the same way the browser suite sets it.
+  const entered = await fetch('http://127.0.0.1:8765/api/v1/modes/normal/enter', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stance: null }),
+  })
+  expect(entered.ok).toBe(true)
+
+  const page = await app.firstWindow()
+  // Reloaded rather than navigated: changing only the fragment on an already
+  // loaded document fires a hashchange and never re-reads which mode is open,
+  // so the chooser would stay on screen with the route behind it.
+  await page.goto(`${page.url().split('#')[0]}#workspace`)
+  await page.reload()
+  await page.getByRole('button', { name: 'Manage' }).click()
+
+  const groups = page.getByRole('region', { name: 'Window groups' })
+  await expect(groups).toBeVisible({ timeout: 30_000 })
+
+  // Two or more windows are listed, and the button refuses until two are picked.
+  const boxes = groups.getByRole('checkbox')
+  await expect.poll(async () => await boxes.count()).toBeGreaterThanOrEqual(2)
+  const button = page.getByRole('button', { name: /Group selected/ })
+  await expect(button).toBeDisabled()
+
+  await boxes.nth(0).check()
+  await expect(button).toBeDisabled()
+  await expect(groups.getByText('A group needs at least two windows.')).toBeVisible()
+
+  await boxes.nth(1).check()
+  await expect(button).toBeEnabled()
+  await button.click()
+
+  // The main process is the judge of whether it happened, not the DOM.
+  await expect
+    .poll(async () => {
+      const open = await windows(app)
+      return open.filter((each) => each.groupId !== null).length
+    })
+    .toBeGreaterThanOrEqual(2)
+
+  await app.close()
+})
+
 test('rapid open and close leaves no windows and no registry entries', async () => {
   /* The soak the directive asks for, bounded: what it catches is an entry that
    * survives its window, which accumulates silently until a workspace can no

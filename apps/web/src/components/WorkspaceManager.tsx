@@ -24,6 +24,7 @@ import {
 import { useRef, useState } from 'react'
 import { API, getJson } from '../api'
 import { playSound } from '../sound'
+import { WindowGroups } from './WindowGroups'
 
 type Summary = {
   workspace_id: string
@@ -277,6 +278,10 @@ export function WorkspaceManager({
           </li>
         ))}
       </ul>
+
+      {/* Below the desks rather than above them: a person comes here to manage
+          workspaces, and the windows showing them are the second question. */}
+      <WindowGroups names={new Map(rows.map((row) => [row.workspace_id, row.name]))} />
 
       <section className="ws-new">
         <h3>New workspace</h3>
