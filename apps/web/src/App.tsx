@@ -6,6 +6,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { getJson } from './api'
 import { parse, routeOf } from './route'
+import { chatOpening } from './opening'
 import { CommandPalette } from './components/CommandPalette'
 import { ContextBar } from './components/ContextBar'
 import { InboxDrawer, useInbox } from './components/InboxDrawer'
@@ -104,7 +105,7 @@ function viewFor(mode: ModeKey, hash: string): React.ReactNode {
     'prop_firm/desk_activity': <PropDeskView section="desk_activity" />,
     'prop_firm/risk_management': <PropDeskView section="risk_management" />,
     'prop_firm/ai_management': <PropDeskView section="ai_management" />,
-    'ai/assistant': <ConsoleView />,
+    'ai/assistant': <ConsoleView opening={chatOpening(params)} />,
     'ai/actions': <ActionsView />,
     'ai/activity': <OperatingLogView />,
     // The oversight surfaces built for the Hedge Fund mode, now where the actor
@@ -139,7 +140,7 @@ function viewFor(mode: ModeKey, hash: string): React.ReactNode {
     experiments: <ExperimentsView mode="experiments" />,
     lineage: <ExperimentsView mode="lineage" />,
     memory: <ResearchMemoryView />,
-    assistant: <ConsoleView />,
+    assistant: <ConsoleView opening={chatOpening(params)} />,
     agents: <AgentCommandView />,
     missions: <MissionsView />,
     campaigns: <ResearchCampaignView />,

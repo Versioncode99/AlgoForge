@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, ArrowLeft, Box, Check, FileCode2, Gavel, Play, Plus, ShieldCheck, Trash2,
-  Waves,
+  AlertTriangle, ArrowLeft, Box, Check, FileCode2, Gavel, MessagesSquare, Play, Plus,
+  ShieldCheck, Trash2, Waves,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { deleteJson, getJson, postJson, putJson } from '../api'
@@ -15,6 +15,7 @@ import { Empty, PanelHead, Rolling, Stat, TierPill, VerdictPill } from '../compo
 import { useJob } from '../hooks/useJob'
 import { StrategyCatalogue } from './StrategyCatalogue'
 import { money, pct, shortHash, signed, stamp } from '../lib'
+import { format } from '../route'
 import type {
   BacktestJobResult, BacktestResult, DatasetInfo, Job, StrategyDetail, StrategyListItem,
   SweepResult, TemplateInfo, Trade, ValidationEvidence, Verdict,
@@ -280,6 +281,22 @@ export function StrategiesView({ open = '', pane: wanted = '' }: Opening = {}) {
                     ])}>
                     <Box />{surfaceJob.active ? 'Mapping…' : 'Surface'}
                   </button>
+                  {/* The entry point the conversation panel had been waiting
+                      for. It accepted an opening subject since it was written
+                      and no caller passed one, so every thread started either
+                      blank or from whatever the workspace happened to be
+                      pointed at -- never from the strategy somebody was
+                      actually looking at. */}
+                  <a
+                    className="btn af-press"
+                    href={format('assistant', {
+                      strategy: spec.strategy_id,
+                      label: spec.name,
+                    })}
+                    title="Opens a conversation that already knows which strategy you mean."
+                  >
+                    <MessagesSquare />Ask about this
+                  </a>
                   <button className="btn danger af-press" aria-label="Delete strategy" onClick={() => remove.mutate(spec.strategy_id)}>
                     <Trash2 />
                   </button>

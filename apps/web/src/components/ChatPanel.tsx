@@ -315,6 +315,9 @@ function openingContext(facets: {
     .map(([kind, ref]) => ({ kind, ref, label: ref }))
 }
 
+/** What a link or a caller asked a new conversation to start knowing. */
+export type ChatOpening = { kind: ContextKind; ref: string; label?: string }
+
 export function ChatPanel({
   /** Context the panel was opened against — a strategy, a chart's instrument.
    *  Attached to a new conversation on creation so the thread starts knowing
@@ -324,7 +327,7 @@ export function ChatPanel({
   opening,
   compact = false,
 }: {
-  opening?: { kind: ContextKind; ref: string; label?: string }
+  opening?: ChatOpening
   compact?: boolean
 }) {
   const [activeId, setActiveId] = useState<string | null>(null)
