@@ -88,6 +88,12 @@ function destination(artifact: Artifact): string {
       return strategy ? format('strategies', { strategy, pane: 'gates' }) : ''
     case 'port':
       return strategy ? format('strategies', { strategy, pane: 'port' }) : ''
+    case 'parameter_surface':
+      // The surface draws under the strategy rather than in a pane of its own,
+      // so this opens the strategy it belongs to. Not a pane link pretending to
+      // be one: there is no surface pane, and inventing a route to a tab that
+      // does not exist is how a button starts going nowhere again.
+      return strategy ? format('strategies', { strategy }) : ''
     case 'prop_simulation':
       return account ? format('desk', { account }) : '#desk'
     case 'workspace':

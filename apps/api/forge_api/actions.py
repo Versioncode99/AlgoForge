@@ -2100,6 +2100,26 @@ class Actions:
             mutating=True,
         )
         self._add(
+            "parameter_surface",
+            "Sweep two parameters against each other and map the landscape. Every "
+            "cell is a real backtest on the development partition, so the result is "
+            "exploration and can never promote a strategy - the cell count is the "
+            "trial count. Runs as a job.",
+            {
+                "strategy_id": {"type": "string"},
+                "x_parameter": {"type": "string"},
+                "y_parameter": {"type": "string"},
+                "dataset": {"type": "string", "optional": True},
+                "steps": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "Values per axis. Defaults to 6, giving 36 backtests.",
+                },
+            },
+            self.parameter_surface,
+            mutating=True,
+        )
+        self._add(
             "split_panel",
             "Split a panel's rectangle in two and put a new panel in the freed half. "
             "Direction is 'row' for side by side or 'column' for one above the other.",
@@ -2836,6 +2856,118 @@ class Actions:
         workspace = self._workspace(workspace_id)
         target = self._panel_id(workspace, panel_id)
         return self._save_workspace(docking.activate(workspace, target), f"showing {target}")
+
+    def parameter_surface(
+        self,
+        strategy_id: str,
+        x_parameter: str,
+        y_parameter: str,
+        dataset: str | None = None,
+        steps: int | None = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        """Two parameters swept against each other, through the same code the route uses.
+
+        The sweep itself lives in `forge_api.surface` precisely so this is not a
+        second implementation: an assistant and the interface run the same cells
+        with the same labels, and `NON_PROMOTABLE` is on every one of them.
+
+        The full cell list is returned to the caller by id rather than inline -
+        36 cells with trade counts and backtest ids is not something to read in a
+        conversation, and the surface itself is where it belongs.
+        """
+        from forge.research.analyses import make_provenance
+        from forge.research.parameter_surface import build_surface
+
+        from forge_api.surface import SurfaceError, axes_for, sweep_points
+
+        sid = _str(strategy_id, "strategy_id", limit=120)
+        try:
+            spec = self.library.get_spec(sid)
+            module = self.library.load_module(sid)
+        except KeyError as exc:
+            raise ActionError(f"No strategy '{sid}'.") from exc
+
+        per_axis = _bounded(steps, 6, 2, 12, "steps")
+        try:
+            x_param, y_param, xs, ys = axes_for(
+                spec,
+                _str(x_parameter, "x_parameter", limit=80),
+                _str(y_parameter, "y_parameter", limit=80),
+                per_axis,
+                per_axis,
+            )
+        except SurfaceError as exc:
+            raise ActionError(exc.detail) from exc
+
+        key = dataset or self.engine.state.config.dataset
+
+        def work(handle: JobHandle) -> dict[str, Any]:
+            bars, meta = self.market.load(key)
+            is_real = meta.is_real
+            receipt = None
+            if is_real:
+                partitions = chronological_split(bars, warmup_bars=spec.warmup_bars)
+                bars, receipt = partitions.development, partitions.receipt
+            points = sweep_points(
+                module=module,
+                spec=spec,
+                bars=bars,
+                x_param=x_param,
+                y_param=y_param,
+                xs=xs,
+                ys=ys,
+                code_hash=self.library.code_hash(sid),
+                dataset_key=key,
+                is_real=is_real,
+                split_receipt=receipt,
+                progress=handle.progress,
+            )
+            # The axes are part of the identity: two surfaces over the same
+            # strategy and different parameters are different artifacts, and a
+            # provenance that omitted them would make them collide.
+            surface = build_surface(
+                points,
+                make_provenance(
+                    "parameter_surface",
+                    {
+                        "strategy_id": sid,
+                        "dataset_key": key,
+                        "spec_hash": spec.spec_hash,
+                        "code_hash": self.library.code_hash(sid),
+                        "evidence_tier": "DEVELOPMENT_IN_SAMPLE" if is_real else "SYNTHETIC",
+                        "x_parameter": x_param.name,
+                        "y_parameter": y_param.name,
+                    },
+                ),
+                x_name=x_param.name,
+                y_name=y_param.name,
+                metric="net_pnl",
+            )
+            return {
+                "strategy_id": sid,
+                "x_parameter": x_param.name,
+                "y_parameter": y_param.name,
+                "cells": len(points),
+                "trials": len(points),
+                "promotable": False,
+                "title": surface.title,
+                "findings": list(surface.findings),
+            }
+
+        job = REGISTRY.submit(
+            "surface", f"{spec.name}: {x_param.name} x {y_param.name}", len(xs) * len(ys), work
+        )
+        return {
+            "job_id": job.job_id,
+            "strategy_id": sid,
+            "cells": len(xs) * len(ys),
+            "promotable": False,
+            "note": (
+                "Running in the background. Poll /api/v1/jobs/{job_id} for the result. "
+                "Every cell is in-sample by construction, so nothing here can promote."
+            ),
+        }
 
     def set_panel_setting(
         self, panel_id: str, key: str, value: str, workspace_id: str | None = None

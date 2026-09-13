@@ -255,11 +255,14 @@ describe('artifacts', () => {
           artifacts: [
             {
               artifact_id: 'a2',
-              // A kind with no surface behind it. `port` used to be the
-              // example here and now opens the port pane, so the honest-label
-              // behaviour needs a kind that genuinely has nowhere to go.
-              kind: 'parameter_surface',
-              title: 'Parameter surface · s1',
+              // A kind with no surface behind it, which now takes some finding:
+              // `port` was the example until it opened the port pane, and
+              // `parameter_surface` until it opened its strategy. `resample`
+              // is the one left, and when it stops being so this assertion
+              // should be deleted rather than re-pointed a third time -- at
+              // that point every kind resolves and the branch is dead.
+              kind: 'resample',
+              title: 'Resample · s1',
               refs: { strategy_id: 's1' },
               provenance: 'deterministic',
             },

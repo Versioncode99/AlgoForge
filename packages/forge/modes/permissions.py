@@ -109,6 +109,10 @@ PREPARATORY: frozenset[str] = frozenset(
         "create_strategy_from_blueprint",
         "backtest_strategy",
         "run_analysis",
+        # A parameter sweep is 36 backtests on the development partition. Every
+        # cell is labelled NON_PROMOTABLE by construction, so it explores and
+        # can never advance anything -- the same standing as the backtest above.
+        "parameter_surface",
         "export_strategy",
         # validation
         "validate_strategy",

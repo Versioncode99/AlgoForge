@@ -1068,6 +1068,8 @@ def build_router(
         from forge.research.analyses import make_provenance
         from forge.research.parameter_surface import METRICS, build_surface
 
+        from forge_api.surface import SurfaceError, axes_for, sweep_points
+
         try:
             spec = library.get_spec(strategy_id)
             module = library.load_module(strategy_id)
@@ -1080,67 +1082,12 @@ def build_router(
             raise HTTPException(
                 422, {"code": "unknown_metric", "known": sorted(METRICS)}
             )
-        if body.x_parameter == body.y_parameter:
-            raise HTTPException(
-                422,
-                {
-                    "code": "same_parameter_twice",
-                    "detail": (
-                        "A surface needs two different parameters. Sweeping one "
-                        "against itself is the line the one-parameter sweep draws."
-                    ),
-                },
+        try:
+            x_param, y_param, xs, ys = axes_for(
+                spec, body.x_parameter, body.y_parameter, body.x_steps, body.y_steps
             )
-
-        by_name = {p.name: p for p in spec.parameters}
-        for axis, name in (("x", body.x_parameter), ("y", body.y_parameter)):
-            if name not in by_name:
-                raise HTTPException(
-                    404,
-                    {
-                        "code": "parameter_not_found",
-                        "axis": axis,
-                        "parameter": name,
-                        "known": sorted(by_name),
-                    },
-                )
-        x_param = by_name[body.x_parameter]
-        y_param = by_name[body.y_parameter]
-
-        def axis_values(param: Any, steps: int) -> list[float]:
-            """`steps` values across the parameter's own declared range.
-
-            Snapped to the declared step so every value is one the strategy
-            would actually accept, and de-duplicated: a range of 3 with a step
-            of 1 cannot supply six distinct values however many are asked for.
-            """
-            low, high, step = float(param.low), float(param.high), float(param.step or 1.0)
-            if steps == 1 or high <= low:
-                return [low]
-            span = (high - low) / (steps - 1)
-            seen: list[float] = []
-            for index in range(steps):
-                raw = low + span * index
-                snapped = low + round((raw - low) / step) * step if step > 0 else raw
-                snapped = min(high, max(low, round(snapped, 10)))
-                if snapped not in seen:
-                    seen.append(snapped)
-            return seen
-
-        xs = axis_values(x_param, body.x_steps)
-        ys = axis_values(y_param, body.y_steps)
-        if len(xs) < 2 or len(ys) < 2:
-            raise HTTPException(
-                422,
-                {
-                    "code": "range_too_narrow",
-                    "detail": (
-                        f"'{x_param.name}' yields {len(xs)} distinct value(s) and "
-                        f"'{y_param.name}' {len(ys)} across their declared ranges and "
-                        "steps. A surface needs at least two on each axis."
-                    ),
-                },
-            )
+        except SurfaceError as exc:
+            raise HTTPException(exc.status, exc.payload) from exc
 
         bars, is_real, _ = _bars(body)  # type: ignore[arg-type]
         split_receipt: ResearchSplitReceipt | None = None
@@ -1152,39 +1099,22 @@ def build_router(
         total = len(xs) * len(ys)
 
         def work(handle: JobHandle) -> dict[str, Any]:
-            points: list[dict[str, Any]] = []
-            done = 0
-            for x in xs:
-                for y in ys:
-                    handle.progress(done, f"{x_param.name}={x:g} {y_param.name}={y:g}")
-                    result = run_backtest(
-                        module,
-                        spec,
-                        bars,
-                        parameters={x_param.name: x, y_param.name: y},
-                        code_hash=library.code_hash(strategy_id),
-                        labels=(
-                            ("REAL_DATA", "DEVELOPMENT_IN_SAMPLE", "SWEEP", "NON_PROMOTABLE")
-                            if is_real
-                            else ("SYNTHETIC_DATA", "SWEEP", "NON_PROMOTABLE")
-                        ),
-                        evidence_tier="DEVELOPMENT_IN_SAMPLE" if is_real else "SYNTHETIC",
-                        dataset_key=body.dataset,
-                        partition_name="DEVELOPMENT" if is_real else None,
-                        split_receipt=split_receipt,
-                    )
-                    points.append(
-                        {
-                            "x": x,
-                            "y": y,
-                            "net_pnl": result.net_pnl,
-                            "trade_count": len(result.trades),
-                            "win_rate": result.win_rate,
-                            "max_drawdown": result.max_drawdown,
-                            "backtest_id": result.backtest_id,
-                        }
-                    )
-                    done += 1
+            points = sweep_points(
+                module=module,
+                spec=spec,
+                bars=bars,
+                x_param=x_param,
+                y_param=y_param,
+                xs=xs,
+                ys=ys,
+                code_hash=library.code_hash(strategy_id),
+                dataset_key=body.dataset,
+                is_real=is_real,
+                split_receipt=split_receipt,
+                progress=handle.progress,
+            )
+            done = len(points)
+
             handle.progress(done, "building the surface")
 
             provenance = make_provenance(

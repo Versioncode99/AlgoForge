@@ -47,7 +47,7 @@ fresh; where a row moved, the commit that moved it is named.
 
 | § | Requirement | Then | Now | Evidence |
 | --- | --- | --- | --- | --- |
-| 1b | Seven-bucket hedge-fund classification | Missing | **Missing** | Still not written. The move happened; the formal classification did not |
+| 1b | Seven-bucket hedge-fund classification | Missing | **Complete** | `HEDGE_FUND_RECLASSIFICATION.md` — 11 loop stages + 3 oversight surfaces, written against the code. `REMOVE` is empty, which is the finding: nothing built for the mode was mode-specific |
 | 2 | AI horizontal, not a mode | Partial | **Partial** | Chat is a panel everywhere and the registry is shared, but AI is still one of three top-level modes |
 | 4 | Multi-window | Partial | **Complete** | Registry, IPC, lifecycle, restore, 17 Electron journeys (`a92feb2`) |
 | 6 | Workspace/Window/Group/DockNode | Partial | **Complete** | DockNode resolved by decision, not omission: the grid already holds geometry, so docking is operations over it (`docking.py`) |
@@ -62,7 +62,7 @@ fresh; where a row moved, the commit that moved it is named.
 | 31 | Final design test | Partial | **Partial** | One of thirteen still answers no: workspace *windows* cannot be snapped together in the UI |
 | — | All other D2 rows | Complete | **Complete** | Unchanged |
 
-**Document 2: 28 complete, 3 partial, 0 deferred, 1 missing.**
+**Document 2: 29 complete, 3 partial, 0 deferred, 0 missing.**
 
 ### Document 3 — QuantPad UX
 
@@ -85,18 +85,18 @@ Unchanged except where the reconciliation touched it.
 | Capability, end to end | — | **Complete** | 22 tests over the real registry; 160 actions, no chat-only verb (`7b049d7`) |
 | Cross-platform porting | Partial | **Partial** | Pine ceiling VERIFIED; NinjaScript, MQL5, Python ceiling STRUCTURAL |
 | Inline quantitative visualisation | Partial | **Partial** | Artifacts link out; no chart rendered in a turn |
-| `parameter_surface` artifact | — | **Missing** | No panel and no action verb; lists references instead |
+| `parameter_surface` artifact | — | **Complete** | Action verb added, sweep extracted to `forge_api/surface.py` so the route and the action are one implementation; artifact registered; opens its strategy |
 | Opening-context auto-attachment | Deferred | **Deferred** | Panel accepts `opening`; call sites pass none |
 | 11 user journeys | Partial | **Partial** | 6 chat + 2 porting exercised |
 | — All other D4 rows | Complete | **Complete** | Unchanged |
 
-**Document 4: 13 complete, 3 partial, 1 deferred, 1 missing.**
+**Document 4: 14 complete, 3 partial, 1 deferred, 0 missing.**
 
 ### Totals
 
 | | Complete | Partial | Deferred | Missing |
 | --- | --- | --- | --- | --- |
-| **117 requirements** | **93** | **15** | **4** | **2** |
+| **117 requirements** | **95** | **15** | **4** | **0** |
 | First audit | 79 | 27 | 3 | 8 |
 
 ---
@@ -128,6 +128,17 @@ Fifteen, each with the reason in the tables above. The four that matter most:
   feeling: under one request per second across three windows.
 - **An Inbox** — the one idea worth taking from OpenAlice, deliberately not built
   in a hurry because what makes it worth having is a deterministic arrival rule.
+
+## 4b. Nothing missing
+
+Both rows that were missing at the first pass of this audit are now closed. The
+`REMOVE` bucket being empty in the hedge-fund classification is the more
+interesting of the two: nothing built for that mode turned out to be
+hedge-fund-specific, which is why removing the label cost nothing.
+
+Two pieces of named debt remain that are not requirements and are not pretending
+to be: `forge.hedgefund` is still called that while containing the book layer,
+and `resample` is now the only artifact kind with no surface to open.
 
 ## 5. Invalid or no longer applicable
 

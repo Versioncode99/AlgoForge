@@ -77,6 +77,10 @@ _ARTIFACTS: dict[str, tuple[ArtifactKind, tuple[str, ...]]] = {
     "create_strategy": (ArtifactKind.STRATEGY, ("strategy_id", "template")),
     "create_strategy_from_blueprint": (ArtifactKind.STRATEGY, ("blueprint_id",)),
     "run_analysis": (ArtifactKind.ANALYSIS, ("strategy_id", "analysis")),
+    "parameter_surface": (
+        ArtifactKind.PARAMETER_SURFACE,
+        ("strategy_id", "x_parameter", "y_parameter"),
+    ),
     "analysis_trades": (ArtifactKind.ANALYSIS, ("strategy_id",)),
     "assess_prop_account": (ArtifactKind.PROP_SIMULATION, ("account_id",)),
     "export_strategy": (ArtifactKind.PORT, ("strategy_id", "target")),

@@ -58,6 +58,7 @@ def registry(actions: Any) -> dict[str, Any]:
         ("port it to another platform", "export_strategy"),
         ("build a workspace", "build_workspace"),
         ("dock a panel", "stack_panel"),
+        ("map a parameter surface", "parameter_surface"),
     ],
 )
 def test_the_conversation_can_reach_every_step_of_the_workflow(
@@ -202,3 +203,54 @@ def test_approval_required_is_raised_not_swallowed(actions: Any) -> None:
     """
     assert issubclass(ApprovalRequired, Exception)
     assert not issubclass(ApprovalRequired, ActionError) or True
+
+# ── the parameter surface, reachable through the conversation ────────────────
+
+
+def test_an_assistant_can_run_a_parameter_surface(actions: Any) -> None:
+    """The last capability the chat could not reach.
+
+    It returns a job rather than a surface: 36 backtests is not something to
+    wait for inside a turn, and the note says where the result lands.
+    """
+    created = actions.call(
+        "create_strategy", {"name": "Surface smoke", "template": "momentum_breakout"}
+    )
+    sid = str(created["strategy_id"])
+    spec = actions.library.get_spec(sid)
+    names = [p.name for p in spec.parameters]
+    if len(names) < 2:
+        pytest.skip("this template has fewer than two parameters to sweep")
+
+    started = actions.call(
+        "parameter_surface",
+        {"strategy_id": sid, "x_parameter": names[0], "y_parameter": names[1], "steps": 2},
+    )
+    assert started["job_id"]
+    assert started["promotable"] is False, "a sweep is in-sample and can never promote"
+
+
+def test_sweeping_a_parameter_against_itself_is_refused(actions: Any) -> None:
+    created = actions.call(
+        "create_strategy", {"name": "Self sweep", "template": "momentum_breakout"}
+    )
+    sid = str(created["strategy_id"])
+    name = actions.library.get_spec(sid).parameters[0].name
+    with pytest.raises(ActionError, match="two different parameters"):
+        actions.call(
+            "parameter_surface",
+            {"strategy_id": sid, "x_parameter": name, "y_parameter": name},
+        )
+
+
+def test_an_unknown_parameter_names_the_ones_that_exist(actions: Any) -> None:
+    created = actions.call(
+        "create_strategy", {"name": "Bad axis", "template": "momentum_breakout"}
+    )
+    sid = str(created["strategy_id"])
+    real = actions.library.get_spec(sid).parameters[0].name
+    with pytest.raises(ActionError, match="No parameter"):
+        actions.call(
+            "parameter_surface",
+            {"strategy_id": sid, "x_parameter": real, "y_parameter": "not_a_parameter"},
+        )
