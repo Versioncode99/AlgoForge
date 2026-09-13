@@ -180,6 +180,12 @@ class Action:
     #: every mode and every stance, which is what makes "AI cannot raise its own
     #: limits" a property of the code rather than an intention.
     protected: bool = False
+    #: This action's result contains text a stranger chose -- a retrieved title,
+    #: an abstract, a web page. Flagged on the action rather than guessed at the
+    #: call site, because whoever is about to put the result in front of a model
+    #: is the one place that cannot tell. Everything so flagged is fenced before
+    #: it reaches a prompt; see `forge.research.untrusted`.
+    external: bool = False
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -188,6 +194,7 @@ class Action:
             "mutating": self.mutating,
             "risk": str(self.risk),
             "protected": self.protected,
+            "external": self.external,
             "requires_confirmation": self.risk is not ActionRisk.SAFE,
             "parameters": {
                 "type": "object",
@@ -549,9 +556,10 @@ class Actions:
         mutating: bool = False,
         risk: ActionRisk = ActionRisk.SAFE,
         protected: bool = False,
+        external: bool = False,
     ) -> None:
         self._registry[name] = Action(
-            name, summary, parameters, run, mutating, risk, protected
+            name, summary, parameters, run, mutating, risk, protected, external
         )
 
     def _register_all(self) -> None:
@@ -568,6 +576,7 @@ class Actions:
             },
             self.search_papers,
             mutating=True,
+            external=True,
         )
         self._add(
             "list_families",
@@ -738,6 +747,7 @@ class Actions:
                 "filter": {"type": "string", "optional": True},
             },
             self.read_research,
+            external=True,
         )
         self._register_ir()
         self._register_lab()

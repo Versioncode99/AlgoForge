@@ -639,6 +639,7 @@ class ControlSurface:
     audit: AuditLog
     campaigns: CampaignService
     prop_desk: PropDeskService
+    assistant: Assistant
 
 
 def build_control_router(
@@ -3408,4 +3409,5 @@ def build_control_router(
         audit=audit,
         campaigns=campaign_service,
         prop_desk=prop_desk,
+        assistant=assistant,
     )

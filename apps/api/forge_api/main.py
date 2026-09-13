@@ -367,6 +367,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     app.state.mirror = mirror
     app.state.research_loop = research_loop
     app.state.actions = surface.actions
+    app.state.assistant = surface.assistant
     app.include_router(
         build_router(
             workspace.store, library, store, log, market, research_ledger, surface.actions

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from forge.modes.permissions import Actor
+from forge.research.untrusted import fence
 from forge.strategy import TEMPLATES, StrategyLibrary
 
 from forge_api import jsonish
@@ -123,6 +124,41 @@ class Assistant:
         }
 
     # ── deterministic intent matching ────────────────────────────────────────
+
+    def _external_actions(self) -> frozenset[str]:
+        """Names whose results carry text somebody outside chose.
+
+        Read from the registry rather than listed here, so a new retrieval verb
+        is fenced by declaring itself rather than by somebody remembering to
+        edit a second list in another module.
+        """
+        if self.actions is None:
+            return frozenset()
+        return frozenset(
+            schema["name"] for schema in self.actions.schemas() if schema.get("external")
+        )
+
+    def _for_prompt(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """One transcript entry, ready to put in front of a model.
+
+        Unchanged for everything the deterministic system computed itself. For a
+        result carrying retrieved text, the payload is rendered into a fenced
+        block that says what it is and cannot be closed from inside -- see
+        `forge.research.untrusted`. A filter looking for instruction-shaped
+        sentences is deliberately not attempted: it would mostly teach us to
+        trust the retrieved text that did not match it.
+        """
+        if entry.get("action") not in self._external_actions() or not entry.get("ok"):
+            return entry
+        result = entry.get("result")
+        return {
+            **entry,
+            "result": fence(
+                f"result of {entry.get('action')}",
+                json.dumps(result, default=str)[:40_000],
+            ),
+        }
+
     def _local_action(self, question: str) -> dict[str, Any] | None:
         """Match a few unambiguous requests onto actions without a model.
 
@@ -291,7 +327,14 @@ class Assistant:
                             "ms": int((time.monotonic() - started) * 1000),
                         }
                     calls.append(entry)
-                    transcript.append(entry)
+                    # The transcript is what the model sees next. An action
+                    # flagged `external` returns text a stranger chose -- a
+                    # retrieved title or abstract -- so its result is fenced
+                    # before it goes back into a prompt. The caller's own record
+                    # keeps the unfenced entry: the fence is for the model, and
+                    # a surface showing a reader angle brackets they did not ask
+                    # for would be carrying a boundary into the wrong place.
+                    transcript.append(self._for_prompt(entry))
                     continue
 
                 answer = str(parsed.get("answer") or response["answer"])
