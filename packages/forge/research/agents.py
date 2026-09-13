@@ -76,9 +76,15 @@ class AgentRole(StrEnum):
     #: Search for genuinely new mechanisms.
     DISCOVERY = "DISCOVERY"
     #: Retrieve academic and industry evidence, with citations kept.
+    #:
+    #: Turning what it retrieves into research questions is not a separate role.
+    #: A SYNTHESIS role was added here and removed: its bucket preference came
+    #: out identical to DISCOVERY's, which `test_no_two_roles_prefer_exactly_the
+    #: _same_work` correctly refused as one role with two names. The capability
+    #: is real and lives in `forge.research.leads`, called deterministically by
+    #: whichever role triggered the retrieval — it makes no model call, so a
+    #: role for it would also be a routing entry that changes nothing.
     LITERATURE = "LITERATURE"
-    #: Turn retrieved claims into mechanisms and research questions.
-    SYNTHESIS = "SYNTHESIS"
     #: Investigate feature and signal constructions.
     FEATURE = "FEATURE"
     #: Generate falsifiable hypotheses.
@@ -116,10 +122,9 @@ ELIGIBLE = frozenset({AgentState.STARTING, AgentState.RUNNING, AgentState.IDLE, 
 #: enum so a role added without an explanation is obvious in review.
 ROLE_PURPOSE: dict[AgentRole, str] = {
     AgentRole.DISCOVERY: "Proposes mechanisms nothing on record already claims.",
-    AgentRole.LITERATURE: "Retrieves published evidence and keeps its provenance.",
-    AgentRole.SYNTHESIS: (
-        "Reads what was retrieved and turns a claim into a research question this "
-        "engine can construct."
+    AgentRole.LITERATURE: (
+        "Retrieves published evidence, keeps its provenance, and turns the claims "
+        "this engine can construct a test for into open questions."
     ),
     AgentRole.FEATURE: "Investigates how a signal is constructed, not how it is tuned.",
     AgentRole.HYPOTHESIS: "Turns a mechanism into a claim that can be shown false.",
@@ -136,10 +141,6 @@ ROLE_PURPOSE: dict[AgentRole, str] = {
 ROLE_BUCKETS: dict[AgentRole, tuple[str, ...]] = {
     AgentRole.DISCOVERY: ("DISCOVER_FAMILY", "EXPLORE_HYPOTHESIS"),
     AgentRole.LITERATURE: ("DISCOVER_FAMILY",),
-    # Synthesis is where a retrieved claim becomes an open question, so it draws
-    # from the bucket that admits new questions rather than the one that
-    # proposes new families: a paper is a reason to ask, not a family.
-    AgentRole.SYNTHESIS: ("EXPLORE_HYPOTHESIS", "DISCOVER_FAMILY"),
     # Composing a construction, and changing the *structure* of one that
     # exists. `BUCKET_KIND` makes this exact: DISCOVER_FAMILY produces
     # SearchKind.FAMILY and ADVANCE_PROMISING produces SearchKind.STRUCTURAL,
@@ -176,7 +177,6 @@ def default_roles(count: int) -> tuple[AgentRole, ...]:
         AgentRole.VALIDATION,
         AgentRole.LITERATURE,
         AgentRole.REVIEWER,
-        AgentRole.SYNTHESIS,
     )
     if count <= 0:
         return ()

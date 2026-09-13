@@ -190,13 +190,6 @@ ROLES: tuple[Role, ...] = (
         Demand.BALANCED,
     ),
     Role(
-        "agent_synthesis",
-        "Synthesis agent",
-        "Turns retrieved claims into mechanisms and research questions",
-        "research",
-        Demand.REASONING,
-    ),
-    Role(
         "agent_feature",
         "Construction agent",
         "Investigates how a signal is constructed, not how it is tuned",
@@ -263,16 +256,24 @@ ROLES_BY_KEY: dict[str, Role] = {role.key: role for role in ROLES}
 #: the enum so `forge.research` stays free of anything provider-shaped.
 #:
 #: There is one role per engine role and no more. Roles that would read well on a
-#: diagram and do nothing distinct in this architecture are deliberately absent:
-#: a "campaign allocator" would duplicate `forge.research.allocation`, which is
-#: deterministic and must stay that way, and a "supervisor" would duplicate the
-#: director, which is also deterministic and cannot be allowed to be talked out
-#: of a gate. A role that cannot be pointed at work only it does is a line in a
-#: settings table.
+#: diagram and do nothing distinct in this architecture are deliberately absent,
+#: and each absence has a reason:
+#:
+#: * a *campaign allocator* would duplicate `forge.research.allocation`, which
+#:   is deterministic and must stay that way;
+#: * a *supervisor* would duplicate the director, which is also deterministic
+#:   and cannot be allowed to be talked out of a gate;
+#: * a *synthesis* role was added and removed. Turning a retrieved claim into a
+#:   research question is real work and `forge.research.leads` does it — but it
+#:   does it deterministically, with no model call, so a routing entry for it
+#:   would be a control that changes nothing. Its bucket preference also came
+#:   out identical to discovery's, which the engine's own role test refuses.
+#:
+#: A role that cannot be pointed at work only it does is a line in a settings
+#: table.
 AGENT_ROLE_KEYS: dict[str, str] = {
     "DISCOVERY": "agent_discovery",
     "LITERATURE": "agent_literature",
-    "SYNTHESIS": "agent_synthesis",
     "FEATURE": "agent_feature",
     "HYPOTHESIS": "agent_hypothesis",
     "FALSIFICATION": "agent_falsification",

@@ -125,8 +125,18 @@ GATE_LEVEL: dict[str, tuple[float, float, float, float]] = {
     "zscore": (1.0, -2.5, 2.5, 0.25),
     "percentile": (0.8, 0.05, 0.95, 0.05),
     "index": (60.0, 10.0, 90.0, 5.0),
-    "rate": (0.0, 0.0, 0.0, 0.0),
 }
+
+#: Units compared against a fixed zero rather than a tunable level. A rate is
+#: one: "the slope turned positive" is scale free without a number, and any
+#: other number would be one somebody fitted.
+#:
+#: This is not a presentational detail. Declaring a parameter for it produced a
+#: spec with `low == high == 0`, which the template store refuses — four
+#: campaign cycles in a 120-cycle run were spent composing a construction,
+#: rendering it, and having the write rejected for a parameter that should
+#: never have existed.
+FIXED_AT_ZERO: frozenset[str] = frozenset({"rate"})
 
 #: The level range used when a *relative* gate compares one measure against a
 #: multiple of another. This one genuinely is a multiplicative ratio, whatever
@@ -727,13 +737,18 @@ def _gate(
             f"gate on '{spec.gate_observable}' has unit '{unit}', which has no meaningful "
             "scalar threshold. Apply a transformation that scales it first."
         )
+    operator: Literal["gt", "lt"] = "gt" if spec.gate_side == "gt" else "lt"
+    if unit in FIXED_AT_ZERO:
+        return Compare(
+            op=operator, left=FeatureRef(name=target), right=Constant(value=0.0)
+        )
     parameters.append(
         _gate_level_param(
             "gate_level", unit, f"Where the gating {observable.label} must sit.", observable
         )
     )
     return Compare(
-        op="gt" if spec.gate_side == "gt" else "lt",
+        op=operator,
         left=FeatureRef(name=target),
         right=ParamRef(name="gate_level"),
     )

@@ -423,12 +423,17 @@ def _categories(raw: Any, fallback: list[str]) -> list[str]:
     An unknown category is not an error and must not fail the load, but it must
     not survive either: a category nothing searches would show as enabled on the
     settings screen while contributing nothing.
+
+    An *empty* stored list is kept rather than replaced by the defaults. "Search
+    nothing" and "search everything" are opposite instructions, and reading the
+    first as the second turns an operator's deliberate choice into its inverse
+    on the next restart. Absent — not a list at all — is the only case that
+    falls back, because that is a file written before the field existed.
     """
     known = {item["key"] for item in SOURCE_CATEGORIES}
     if not isinstance(raw, list):
         return list(fallback)
-    kept = [str(item) for item in raw if str(item) in known]
-    return kept or list(fallback)
+    return [str(item) for item in raw if str(item) in known]
 
 
 def _merge_routing(routing: RoutingSettings, flat: dict[str, str]) -> RoutingSettings:

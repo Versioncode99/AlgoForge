@@ -268,14 +268,43 @@ export type CredentialInfo = {
   key: string; label: string; detail: string; present: boolean; hint: string; source: string
 }
 export type BudgetSettings = {
+  /** The master switch. Off means no research ceiling is applied at all; the
+   *  system safety limits are separate and hold regardless. */
+  enforced: boolean
   daily_usd_hard: number; daily_usd_soft: number
   monthly_usd_hard: number; per_session_usd: number; halt_on_breach: boolean
+  campaign_experiments: number; model_calls_per_day: number
+  wall_clock_minutes: number; backtests_per_campaign: number
+  external_research_per_day: number
 }
 export type ProviderInfo = { id: string; label: string; detail: string }
+export type RoleRouting = {
+  model: string; fallback: string; critic: string; enabled: boolean
+}
+export type ModelRouting = {
+  mode: string; default_model: string; fallback_model: string
+  allowed: string[]; roles: Record<string, RoleRouting>
+}
+/** One role as the server describes it. `kind` splits the workflow roles an
+ *  operator triggers from the research agents a campaign runs on its own. */
+export type RoutingRole = {
+  key: string; label: string; detail: string
+  kind: 'workflow' | 'research'; demand: string; optional: boolean
+}
+export type RoutingMode = { key: string; label: string; detail: string }
+/** Which model would actually answer for a role, and why that one. A
+ *  substitution the operator never sees is the failure this carries. */
+export type RoutingDecision = {
+  role: string; provider: string; model: string; source: string
+  reason: string; substituted: boolean; considered: string[]; critic: string
+}
+export type SafetyLimit = { key: string; label: string; value: string; why: string }
+export type ResearchOption = { key: string; label: string; detail: string }
+
 export type SettingsPayload = {
   ai: {
     enabled: boolean; provider: string; base_url: string
-    routing: Record<string, string>; budget: BudgetSettings
+    routing: Record<string, string>; model_routing: ModelRouting; budget: BudgetSettings
     gateway: {
       provider: string; connected: boolean; status_code: number | null; latency_ms: number
       model_count: number; credential_present: boolean; credential_source: string
@@ -286,9 +315,18 @@ export type SettingsPayload = {
   }
   default_dataset: string; engine_cycle_seconds: number
   engine_max_strategies: number; databento_max_cost_usd: number
-  research_loop: { enabled: boolean; interval_minutes: number; topics: string[] }
+  research_loop: {
+    enabled: boolean; interval_minutes: number; topics: string[]
+    categories: string[]; freshness: string; depth: string
+  }
   models: ModelInfo[]; roles: RoleInfo[]; credentials: CredentialInfo[]
   providers: ProviderInfo[]
+  routing_roles: RoutingRole[]; routing_modes: RoutingMode[]
+  routing_preview: RoutingDecision[]
+  safety_limits: SafetyLimit[]
+  research_options: {
+    categories: ResearchOption[]; freshness: ResearchOption[]; depths: ResearchOption[]
+  }
 }
 export type ResearchLoopStatus = {
   enabled: boolean; running: boolean; in_flight: boolean; interval_minutes: number
