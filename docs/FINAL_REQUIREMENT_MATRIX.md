@@ -5,8 +5,8 @@ against the repository rather than against the first audit, and for enough
 evidence that another engineer can see what is complete without trusting the
 narrative.
 
-**Audited at** `767884f`, 32 commits ahead of `main` (`fd69333`), working tree
-clean.
+**Audited at** `8baae2c`, 33 commits ahead of `main` (`fd69333`), working tree
+clean, pushed.
 
 ---
 
@@ -35,13 +35,13 @@ fresh; where a row moved, the commit that moved it is named.
 | 35 | Freshness enforced | Partial | **Partial** | `data/freshness.py` exists; still not wired into the chart path |
 | 41 | Six named documents | Partial | **Complete** | All six present |
 | 43 | Real E2E | Partial | **Complete** | 47 browser + 17 real-Electron journeys |
-| 45 | Windows verified | Partial | **Partial** | Green on `81549ea`; **still running** on `767884f` at audit time |
+| 45 | Windows verified | Partial | **Complete** | `python (windows-latest, 3.13)` **success** on `8baae2c`, the audited head |
 | 53 | Phases A–H | Partial | **Complete** | A and B done late and recorded as such |
 | 56 | QA report answers the questions | Partial | **Complete** | The TradingAgents questions are answerable now |
 | 6 | Adversarial structured objections | Partial | **Partial** | Roles exist; the 14-category objection schema does not |
 | — | All other D1 rows | Complete | **Complete** | Unchanged |
 
-**Document 1: 40 complete, 8 partial, 0 deferred, 0 missing.**
+**Document 1: 41 complete, 7 partial, 0 deferred, 0 missing.**
 
 ### Document 2 — product and workstation
 
@@ -96,7 +96,7 @@ Unchanged except where the reconciliation touched it.
 
 | | Complete | Partial | Deferred | Missing |
 | --- | --- | --- | --- | --- |
-| **117 requirements** | **92** | **16** | **4** | **2** |
+| **117 requirements** | **93** | **15** | **4** | **2** |
 | First audit | 79 | 27 | 3 | 8 |
 
 ---
@@ -109,7 +109,7 @@ Thirteen requirements moved from partial or missing to complete: D1 §1, §2, §
 
 ## 3. Remaining partial
 
-Sixteen, each with the reason in the tables above. The four that matter most:
+Fifteen, each with the reason in the tables above. The four that matter most:
 
 - **D1 §13** external research has no content hash or sanitisation stage.
 - **D1 §35** the freshness envelope is not enforced where it was designed to be.
@@ -164,7 +164,8 @@ database writes per operation, docking latency.
 
 ## 8. Known limitations
 
-1. Windows CI had not reported on this exact head at audit time.
+1. ~~Windows CI had not reported on this exact head.~~ It has since: green on
+   `8baae2c`.
 2. Eight browser E2E tests fail on a missing market-data key; attributed by diff,
    not assumed.
 3. `+107 MB` after four window cycles is within allocator behaviour and did not
@@ -205,8 +206,10 @@ vulnerabilities; two sub-threshold items were fixed anyway (`72fb970`,
 - Branch `claude/zen-hawking-nm63gx` at `767884f`, 32 commits ahead of `main`
   (`fd69333`), working tree clean, pushed.
 - PR #10 open as a draft, no merge conflict, no open review threads.
-- CI on `767884f`: `web` ✅, `python (ubuntu-latest, 3.13)` ✅ ×2,
-  `python (windows-latest, 3.13)` **in progress** at audit time.
+- CI on `8baae2c`: `web` ✅, `python (ubuntu-latest, 3.13)` ✅,
+  `python (windows-latest, 3.13)` ✅ — all three job types green on the audited
+  head. A duplicate Windows run from the second workflow was still in flight;
+  the same job had already passed on this commit.
 - `main` untouched; nothing merged automatically.
 
 ---
