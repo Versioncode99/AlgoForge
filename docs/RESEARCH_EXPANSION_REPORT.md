@@ -372,17 +372,18 @@ repository rather than from the isolated workspace.
 
 ## 19. Test and CI results
 
-* **Backend: 2,939 tests passing** (2,719 at the start of the phase; 220 added).
+* **Backend: 2,950 tests passing** (2,719 at the start of the phase; 231 added).
 * **Frontend: 141 tests passing** (121 at the start; 20 added).
 * `ruff check` clean.
-* `mypy --strict` clean across 194 source files.
+* `mypy --strict` clean across 195 source files.
 * TypeScript clean; production build passes.
 * New suites: `tests/strategy/test_primitives.py`,
   `tests/research/test_grammar.py`, `tests/research/test_leads.py`,
   `tests/research/test_adversarial_vocabulary.py`,
   `tests/research/test_expansion_boundaries.py`,
   `tests/data/test_validation_identity.py`,
-  `tests/research/test_effectiveness.py`, `tests/api/test_model_routing.py`,
+  `tests/research/test_effectiveness.py`,
+  `tests/research/test_retrieval_policy.py`, `tests/api/test_model_routing.py`,
   `tests/api/test_settings_surface.py`,
   `apps/web/src/views/model-routing.test.tsx`,
   `apps/web/src/views/agent-effectiveness.test.tsx`.
