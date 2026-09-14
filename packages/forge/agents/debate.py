@@ -28,6 +28,7 @@ verdict. The judge is deterministic and stays that way.
 from __future__ import annotations
 
 from forge.agents.models import AgentClaim, AgentRole
+from forge.agents.objections import Objection, Synthesis, object_to, synthesise
 from forge.contracts.hashing import stable_id
 from forge.contracts.models import FrozenModel
 from forge.judge.models import GateResult, Verdict
@@ -43,6 +44,13 @@ class DebateReport(FrozenModel):
     roles: tuple[AgentRole, ...]
     claims: tuple[AgentClaim, ...]
     dissent_present: bool
+    #: The fourteen threats §6 names, each answered. Always fourteen rows: a
+    #: checklist that only shows the boxes it ticked cannot distinguish "we
+    #: looked and it was fine" from "we never looked".
+    objections: tuple[Objection, ...] = ()
+    #: §6's record over the objections and the panel, derived rather than
+    #: written. It decides nothing; the gate ladder is authoritative.
+    synthesis: Synthesis | None = None
     numeric_verdict_locked: bool = True
     labels: tuple[str, ...] = ("DERIVED_FROM_VERDICT", "RESEARCH_ONLY")
 
@@ -243,6 +251,7 @@ def build_debate(verdict: Verdict) -> DebateReport:
         _risk_auditor(verdict),
         _arbiter(verdict),
     )
+    objections = object_to(verdict)
     stances = {claim.stance for claim in claims}
     return DebateReport(
         debate_id=stable_id(
@@ -251,6 +260,8 @@ def build_debate(verdict: Verdict) -> DebateReport:
         run_id=verdict.run_id,
         roles=_roles(),
         claims=claims,
+        objections=objections,
+        synthesis=synthesise(verdict, objections, claims),
         # Dissent is any disagreement, not only outright opposition: a panel
         # split between SUPPORT and CAUTION has told the reader something.
         dissent_present=len(stances) > 1,
