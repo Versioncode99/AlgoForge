@@ -82,7 +82,9 @@ test('dragging backwards loads history that was not on screen', async ({ page })
   const canvas = page.locator('.price-chart-canvas canvas').first()
   await expect(canvas).toBeVisible()
   const box = await canvas.boundingBox()
-  test.skip(!box, 'the chart never got a size to drag inside')
+  // The canvas is visible above, so it has a box. A null one is a chart that
+  // rendered at zero size, which is the failure, not a reason to stand down.
+  expect(box).not.toBeNull()
   if (!box) return
 
   const opening = pages.length

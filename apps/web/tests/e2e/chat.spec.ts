@@ -103,10 +103,9 @@ test('the console and the workspace panel are the same conversation', async ({ p
   await expect(page.getByText(marker)).toBeVisible({ timeout: 60_000 })
 
   await page.goto('/#workspace')
-  // The AI workspace seeds an agent panel; if this build's active workspace has
-  // none, the journey is not applicable rather than failed.
-  const panel = page.locator('.chat-panel')
-  if ((await panel.count()) === 0) test.skip(true, 'no conversation panel in the active workspace')
+  // AI mode is entered in `beforeEach` and its workspace seeds an agent panel,
+  // so an absent one is the shared component having stopped being shared.
+  await expect(page.locator('.chat-panel').first()).toBeVisible({ timeout: 30_000 })
   await expect(page.locator('.chat-history')).toBeVisible({ timeout: 30_000 })
 })
 

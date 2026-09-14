@@ -13,26 +13,33 @@ test.beforeEach(async ({ request }) => {
 })
 
 test('the port surface leads with what did not cross', async ({ page, request }) => {
-  const created = await request.post(`${API}/strategies`, {
-    data: { template: 'momentum_breakout' },
+  /* From a blueprint rather than a template: porting renders the Strategy IR,
+   * and `POST /strategies` writes hand-written Python, which has no canonical
+   * definition to carry across. A template-built strategy answers 404 here by
+   * design, so a test that used one could only ever skip -- which is what this
+   * one did, and why it never once checked the payload below. */
+  const created = await request.post(`${API}/strategies/from-blueprint`, {
+    data: { blueprint: 'london_breakout' },
   })
-  test.skip(!created.ok(), 'this build could not create a strategy to port')
+  expect(created.ok(), await created.text()).toBeTruthy()
   const strategyId = (await created.json()).data.strategy_id
 
   // Strategies opens on the catalogue; the panes are one row-click away.
   await page.goto('/#strategies')
   const rows = page.locator('.catalogue-table tbody tr:not([aria-hidden="true"])')
-  await expect(page.getByText('No strategies yet').or(rows.first())).toBeVisible({
-    timeout: 120_000,
-  })
-  test.skip(await page.getByText('No strategies yet').isVisible(), 'no strategies in this vault')
+  // One was just created, so the empty state is a catalogue that did not see
+  // it rather than a vault that has nothing.
+  await expect(rows.first()).toBeVisible({ timeout: 120_000 })
   await rows.first().click()
   await expect(page.getByRole('button', { name: 'Port', exact: true })).toBeVisible({
     timeout: 30_000,
   })
 
   const report = await request.get(`${API}/strategies/${strategyId}/port/pine`)
-  test.skip(report.status() === 404, 'this strategy is hand-written and has no canonical IR')
+  // Built from a blueprint, so it has a canonical IR; a 404 here means the port
+  // route lost sight of a strategy that has a definition.
+  expect(report.status(), await report.text()).not.toBe(404)
+  expect(report.ok(), await report.text()).toBeTruthy()
   const payload = (await report.json()).data
 
   // Whatever the status, it is never a claim that the logic survived unless
