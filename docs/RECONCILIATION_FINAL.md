@@ -1,7 +1,8 @@
 # Safe full reconciliation — final report
 
-Phases 0–14 of the reconciliation directive, scored against the repository at
-`5d05a75`, 48 commits ahead of `origin/main` (`fd69333`), working tree clean.
+Phases 0–14 of the reconciliation directive plus the final consolidation pass,
+scored against the repository at `8ad0aaf`, 51 commits ahead of `origin/main`
+(`fd69333`), working tree clean.
 
 Nothing was force-pushed, reset, rebased or deleted. Every branch that existed
 when this started still exists at the SHA `docs/BRANCH_RECONCILIATION.md`
@@ -45,20 +46,44 @@ mechanically.**
 | D4 — opening-context attachment | Deferred | **Complete** | "Ask about this" on the strategy, one subject chosen deterministically |
 | D2 §30 — performance dimensions | 4 unmeasured | **3 measured** | IPC volume, docking latency, writes per operation. Drag/pan latency still is not, and says so |
 
-## 3. What is still partial, and why
+## 3. Closed in the final pass
 
-Each of these is a real gap, stated rather than reclassified.
+| Requirement | Was | Now | Where |
+| --- | --- | --- | --- |
+| D4 §4F/4G — quantitative visualisations in the conversation | Partial | **Complete** | `chat-visuals.ts` + `ArtifactVisual.tsx`. Five kinds draw, each from the route that computed the number, rendered by the component the surface uses. Six kinds draw nothing and a test asserts it. The analysis artifact carries `artifact_id`, because a re-run could land on a different backtest and draw a different answer under the same title |
+| D2 §2 — AI horizontal, not a mode | Partial | **INTENTIONALLY_REJECTED, with the reason** | `docs/AI_HORIZONTAL_DETERMINATION.md` and `tests/modes/test_ai_horizontal.py` |
+
+### D2 §2, in full
+
+The capability **is** horizontal and is now tested as such: every mode reaches
+the assistant, every mode can place an agent panel, there is one action registry
+and no AI-only verb.
+
+The *mode* is the permission boundary. Two of the nine rules in
+`permissions.evaluate` read it, and they are the two that matter: an
+`AUTOMATION` action is allowed in AI mode and held everywhere else, and a
+`CONSEQUENTIAL` one is allowed only in AI mode on the autonomous stance. Making
+AI horizontal in the policy means an autonomy axis orthogonal to the mode — so
+that Prop-Firm-plus-autonomous becomes expressible, and an assistant could
+submit an order unattended in an environment where today no setting permits it.
+That widens the reachable set in the direction Doc 1 §37 forbids.
+
+Recorded as intentionally rejected with the architectural reason, which is the
+outcome the directive names when the boundary is the reason. Not scored
+complete, not scored missing.
+
+## 4. What is still partial, and why
+
+Four, stated rather than reclassified.
 
 | Requirement | State | What is actually missing |
 | --- | --- | --- |
-| **D2 §2 — AI horizontal, not a mode** | Partial | Chat is a panel everywhere and the action registry is shared, so the *capability* is horizontal. AI is still one of three top-level modes, because the mode is what decides an assistant's permissions and removing it would mean removing the boundary, not the label. Closing it properly is a permissions-model change, not a menu change. |
-| **D3 — progressive disclosure levels 6–7** | Partial | Levels 1–5 are reachable. Level 6 ("what does this mean for *this* account") and level 7 ("what would change my mind") are not a built path. Level 7 is the more interesting of the two and the structured objections are half of it — a reader can now see which of fourteen threats would have to change. |
+| **D3 — progressive disclosure levels 6–7** | Partial | Levels 1–5 are reachable. Level 7 ("what would change my mind") is now largely answered by the structured objections — a reader can see which of fourteen threats would have to move, and what experiment would move each. Level 6 ("what does this mean for *this* account") is answered for prop accounts by the journey and the matrix, and not for a portfolio. |
 | **D3 — per-surface analytical catalogue** | Partial | The thirteen questions are answered by area in `QUANTPAD_UX_RESEARCH.md`, not as a per-surface catalogue. |
-| **D4 — inline quantitative visualisation** | Partial | Artifacts link out to the surface that computed them. Nothing renders a chart inside a conversation turn. |
-| **D4 — cross-platform porting** | Partial, **structurally** | Pine is VERIFIED. NinjaScript, MQL5 and Python emit nothing verified, and that is a ceiling rather than a gap: verifying them needs an execution engine for each platform, which this build does not have and does not claim. |
+| **D4 — cross-platform porting** | Partial, **structurally** | Pine is VERIFIED. NinjaScript, MQL5 and Python emit nothing verified, and that is a ceiling rather than a gap: verifying them needs an execution engine per platform, which this build does not have and does not claim. |
 | **D4 — eleven user journeys** | Partial | Six chat journeys and two porting journeys are exercised end to end. |
 
-## 4. Declined, with the measurement
+## 5. Declined, with the measurement
 
 **Cross-window poll deduplication.** Re-checked against new evidence rather than
 restated: an active renderer issues ~11 requests per 6 seconds, a background one
@@ -74,7 +99,7 @@ needs frame timing rather than a wall clock around an IPC call. What is known
 now is the server half: a docking operation is single-digit milliseconds and four
 row writes, so a slow drag is in the browser and not behind the API.
 
-## 5. Bugs this phase found — none of which a passing test had caught
+## 6. Bugs this phase found — none of which a passing test had caught
 
 1. **A launch could erase the saved session before anything restored it.** The
    main window's placement fires `move`/`resize`, both of which persist the
@@ -96,18 +121,36 @@ row writes, so a slow drag is in the browser and not behind the API.
    data_version` reported a flattering zero writes per operation. Both attempts
    are written up in `PERFORMANCE_BASELINE.md`, because both looked like they
    worked.
+7. **The decision hash chain could fork under concurrent appends.**
+   `LedgerDatabase` opens its connection with `check_same_thread=False` so
+   routes can read it from request threads, and `append_decision` read the chain
+   head and then wrote against it with nothing in between. Two threads
+   interleaving there both pass the continuity check and both insert — a chain
+   with two records claiming one predecessor, which `verify_decision_chain`
+   reports as tampered forever on a ledger nobody tampered with. Found by the
+   adversarial pass over the directive's own list; the regression test fails
+   without the lock.
+8. **A malformed payload took down the conversation panel.** The inline chart
+   passed whatever a route returned straight into `AnalysisChart`, which reads
+   `axes` without guarding it. Shape-checked now; a bad payload reads as
+   "nothing to draw".
+9. **A stylesheet nobody imported.** Chart styles for the conversation panel
+   went into a new `chat.css` that `main.tsx` never imports, so every rule was
+   dead on arrival and the build said nothing. There is now a test that fails
+   when a sheet is reached by neither `main.tsx` nor a `@import`.
 
-## 6. Verification
+## 7. Verification
 
 | Suite | Result |
 | --- | --- |
-| Backend `pytest` | **3356 passed**, 0 failed |
-| Frontend `vitest` | **410 passed**, 37 files |
-| Electron, real shell under Xvfb | **20 passed** — four consecutive clean full-suite runs after the flakes were taken to root cause |
+| Backend `pytest` | **3375 passed**, 0 failed |
+| Frontend `vitest` | **436 passed**, 39 files |
+| Electron, real shell under Xvfb | **20 passed**, three consecutive full-suite runs |
 | `ruff` | clean |
 | `mypy --strict` | clean, 209 source files |
 | `tsc --noEmit` | clean |
 | `vite build` | clean |
+| CI (`web`, `python` ubuntu + windows) | green on the merged head |
 
 No test was weakened, skipped or deleted to reach this. Four tests changed
 shape because the thing they tested changed shape — the budget switch became
@@ -118,20 +161,24 @@ One near miss worth recording: a scripted edit to `chat-panel.test.tsx` silently
 removed thirteen tests, and the count in the suite output is what caught it. The
 file was restored and the edit redone.
 
-## 7. Git and CI
+## 8. Git and CI
 
-- Branch `claude/zen-hawking-nm63gx` at `5d05a75`, **48 commits ahead** of
+- Branch `claude/zen-hawking-nm63gx` at `8ad0aaf`, **51 commits ahead** of
   `origin/main` (`fd69333`), 0 behind, working tree clean, pushed.
-- PR #10 open as a draft. No merge conflict.
-- `main` untouched. Nothing was merged into it.
+- PR #10, no merge conflict, every required check green on the head that was
+  merged.
+- Every branch that existed when this began still exists at the SHA
+  `BRANCH_RECONCILIATION.md` records. Nothing was force-pushed, reset, rebased
+  or deleted.
 
-## 8. The ambiguity, reported rather than resolved
+## 9. The merge
 
-The directive asks that main become the canonical verified tree and Phase 14
-asks for a final main SHA. Doc 1 §54 says *"do not merge into main
-automatically unless explicitly instructed"*, and this session's branch
-requirement says never to push to another branch without permission.
+The repository owner authorised the merge explicitly in the final directive,
+which resolves the conflict this document previously reported between "main
+should become the canonical tree" and Doc 1 §54's "do not merge into main
+automatically unless explicitly instructed". With the instruction given and
+every acceptance condition met, PR #10 was merged into `main` through GitHub's
+normal merge — no force push, no history rewritten, no branch deleted.
 
-`origin/main` therefore stays at `fd69333` and everything stays on
-`claude/zen-hawking-nm63gx`. Merging PR #10 is the step that makes main
-canonical and is left to the repository owner on purpose.
+Original main: `fd69333`. Pre-merge branch head: `8ad0aaf`. The final main SHA
+and the post-merge verification are in the session's final report.
