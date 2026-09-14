@@ -104,6 +104,7 @@ from forge_api.routing_observations import (
 )
 from forge_api.settings_store import (
     ACCENTS,
+    BUDGET_MODES,
     DENSITIES,
     DEPTH_RESULTS,
     DEPTHS,
@@ -116,6 +117,7 @@ from forge_api.settings_store import (
     THEMES,
     AISettings,
     AppearanceSettings,
+    BudgetMode,
     BudgetSettings,
     ResearchLoopSettings,
     Settings,
@@ -285,6 +287,8 @@ class SettingsPatch(BaseModel):
     role_routing: dict[str, RolePatch] | None = None
     budget: dict[str, float] | None = None
     budget_enforced: bool | None = None
+    #: One of `BudgetMode`. Supersedes `budget_enforced` when both are sent.
+    budget_mode: str | None = None
     default_dataset: str | None = None
     engine_cycle_seconds: float | None = Field(default=None, ge=1.0, le=300.0)
     engine_max_strategies: int | None = Field(default=None, ge=1, le=500)
@@ -921,7 +925,19 @@ def build_control_router(
                     "base_url": current.ai.base_url,
                     "routing": current.ai.routing,
                     "model_routing": routing_to_dict(current.ai.model_routing),
-                    "budget": vars(current.ai.budget),
+                    # `vars` would emit the enum and omit `enforced`, which is
+                    # now derived. The payload keeps both: the mode is the
+                    # setting, and `enforced` is the question every existing
+                    # caller has always asked.
+                    "budget": {
+                        **{
+                            key: value
+                            for key, value in vars(current.ai.budget).items()
+                            if key != "mode"
+                        },
+                        "mode": str(current.ai.budget.mode),
+                        "enforced": current.ai.budget.enforced,
+                    },
                     "gateway": gateway_status,
                 },
                 "default_dataset": current.default_dataset,
@@ -938,6 +954,7 @@ def build_control_router(
                 # Data rather than prose, so the screen cannot drift from the
                 # limits that are actually in force.
                 "safety_limits": SAFETY_LIMITS,
+                "budget_modes": BUDGET_MODES,
                 "research_options": {
                     "categories": SOURCE_CATEGORIES,
                     "freshness": FRESHNESS,
@@ -1009,9 +1026,34 @@ def build_control_router(
         unknown = sorted(set(budget_changes) - known_budget)
         if unknown:
             raise HTTPException(422, {"code": "unknown_budget_field", "fields": unknown})
+        # `enforced` is a boolean the interface has always sent and is now one
+        # of three modes, so the old field is translated rather than dropped: a
+        # settings screen from before this change must not silently stop
+        # working. `budget_mode` wins when both arrive.
         if body.budget_enforced is not None:
-            budget_changes["enforced"] = body.budget_enforced
-        budget = BudgetSettings(**{**vars(current.ai.budget), **budget_changes})
+            budget_changes["mode"] = (
+                BudgetMode.ENFORCED
+                if body.budget_enforced
+                else BudgetMode.UNLIMITED_WITH_SAFETY_LIMITS
+            )
+        if body.budget_mode is not None:
+            try:
+                budget_changes["mode"] = BudgetMode(body.budget_mode)
+            except ValueError as exc:
+                raise HTTPException(
+                    422,
+                    {
+                        "code": "unknown_budget_mode",
+                        "given": body.budget_mode,
+                        "known": [str(mode) for mode in BudgetMode],
+                    },
+                ) from exc
+        budget = BudgetSettings(
+            **{
+                **{key: value for key, value in vars(current.ai.budget).items()},
+                **budget_changes,
+            }
+        )
 
         model_routing = _apply_routing(current.ai.model_routing, body, valid)
         # The flat mapping is what the existing callers read, so a change made

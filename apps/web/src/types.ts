@@ -275,9 +275,17 @@ export type RoleInfo = { key: string; label: string; detail: string }
 export type CredentialInfo = {
   key: string; label: string; detail: string; present: boolean; hint: string; source: string
 }
+/** §12's three modes. `ADAPTIVE` is the one a boolean could not carry: no
+ *  ceiling while the day's spend is under the soft threshold, every ceiling
+ *  once it crosses, and every ceiling when the spend cannot be read. */
+export type BudgetMode = 'ENFORCED' | 'UNLIMITED_WITH_SAFETY_LIMITS' | 'ADAPTIVE'
+
+export type BudgetModeInfo = { key: BudgetMode; label: string; detail: string }
+
 export type BudgetSettings = {
-  /** The master switch. Off means no research ceiling is applied at all; the
-   *  system safety limits are separate and hold regardless. */
+  mode: BudgetMode
+  /** Derived from `mode`: whether any research ceiling can bite at all. Read
+   *  it to answer that question; read `mode` to know when. */
   enforced: boolean
   daily_usd_hard: number; daily_usd_soft: number
   monthly_usd_hard: number; per_session_usd: number; halt_on_breach: boolean
@@ -332,6 +340,7 @@ export type SettingsPayload = {
   routing_roles: RoutingRole[]; routing_modes: RoutingMode[]
   routing_preview: RoutingDecision[]
   safety_limits: SafetyLimit[]
+  budget_modes: BudgetModeInfo[]
   research_options: {
     categories: ResearchOption[]; freshness: ResearchOption[]; depths: ResearchOption[]
   }

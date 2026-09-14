@@ -65,6 +65,7 @@ function payload(overrides: Partial<SettingsPayload> = {}): SettingsPayload {
         },
       },
       budget: {
+        mode: 'ENFORCED',
         enforced: true,
         daily_usd_hard: 12, daily_usd_soft: 9, monthly_usd_hard: 300,
         per_session_usd: 1.5, halt_on_breach: true,
@@ -111,6 +112,15 @@ function payload(overrides: Partial<SettingsPayload> = {}): SettingsPayload {
         reason: 'Review agent is assigned big-1 in settings.',
         substituted: false, considered: [],
       },
+    ],
+    budget_modes: [
+      { key: 'ENFORCED', label: 'Enforced', detail: 'The ceilings apply from the first call.' },
+      {
+        key: 'UNLIMITED_WITH_SAFETY_LIMITS',
+        label: 'Unlimited, with safety limits',
+        detail: 'No research ceiling.',
+      },
+      { key: 'ADAPTIVE', label: 'Adaptive', detail: 'Applies once the soft threshold is passed.' },
     ],
     safety_limits: [
       {
@@ -214,28 +224,57 @@ test('the routing mode is a control and carries its own explanation', () => {
   expect(patch).toHaveBeenCalledWith({ routing_mode: 'manual' })
 })
 
-/* ── budget enforcement is a switch, and safety is not budget ─────────────── */
+/* ── budget is three modes, and safety is not budget ──────────────────────── */
 
-test('budget enforcement can be turned off', () => {
+test('each of the three modes can be chosen', () => {
   const patch = vi.fn()
   draw(<BudgetPanel settings={payload()} patch={patch} />)
-  fireEvent.click(screen.getByText('Enforcement ON'))
-  expect(patch).toHaveBeenCalledWith({ budget_enforced: false })
+  const group = screen.getByRole('group', { name: 'Budget mode' })
+  expect(within(group).getAllByRole('button')).toHaveLength(3)
+
+  fireEvent.click(within(group).getByText('Adaptive'))
+  expect(patch).toHaveBeenCalledWith({ budget_mode: 'ADAPTIVE' })
+
+  fireEvent.click(within(group).getByText('Unlimited, with safety limits'))
+  expect(patch).toHaveBeenCalledWith({ budget_mode: 'UNLIMITED_WITH_SAFETY_LIMITS' })
 })
 
-test('with enforcement off the screen says no ceiling is applied', () => {
+test('the modes are rendered from the server list, not from a copy here', () => {
+  /* A screen with its own list can offer a mode the code no longer implements. */
+  const custom = payload()
+  custom.budget_modes = [{ key: 'ENFORCED', label: 'Only this one', detail: 'because' }]
+  draw(<BudgetPanel settings={custom} patch={vi.fn()} />)
+  const group = screen.getByRole('group', { name: 'Budget mode' })
+  expect(within(group).getAllByRole('button')).toHaveLength(1)
+  expect(within(group).getByText('Only this one')).toBeInTheDocument()
+})
+
+test('with no ceiling enforced the screen says so, and the numbers lock', () => {
   const off = payload()
+  off.ai.budget.mode = 'UNLIMITED_WITH_SAFETY_LIMITS'
   off.ai.budget.enforced = false
   draw(<BudgetPanel settings={off} patch={vi.fn()} />)
   expect(screen.getByText(/No research ceiling is being enforced/)).toBeInTheDocument()
   expect(screen.getByLabelText('Model calls per day')).toBeDisabled()
 })
 
-test('the limits that are not budget are listed beside the switch', () => {
+test('adaptive says when the ceilings start applying, and keeps them editable', () => {
+  /* Locking them would make the mode unconfigurable until it started biting. */
+  const adaptive = payload()
+  adaptive.ai.budget.mode = 'ADAPTIVE'
+  adaptive.ai.budget.enforced = true
+  draw(<BudgetPanel settings={adaptive} patch={vi.fn()} />)
+  expect(screen.getByText(/once today's spend passes/)).toBeInTheDocument()
+  expect(screen.getByText(/not the same as knowing it is low/)).toBeInTheDocument()
+  expect(screen.getByLabelText('Model calls per day')).not.toBeDisabled()
+})
+
+test('the limits that are not budget are listed beside the modes', () => {
   const off = payload()
+  off.ai.budget.mode = 'UNLIMITED_WITH_SAFETY_LIMITS'
   off.ai.budget.enforced = false
   draw(<BudgetPanel settings={off} patch={vi.fn()} />)
-  expect(screen.getByText('In force whatever this switch says')).toBeInTheDocument()
+  expect(screen.getByText('In force whatever mode is chosen')).toBeInTheDocument()
   expect(screen.getByText('Concurrent model requests')).toBeInTheDocument()
   expect(screen.getByText('Action permissions')).toBeInTheDocument()
 })
