@@ -5235,6 +5235,16 @@ class Actions:
             "calendars": calendars,
             # Stated rather than omitted. An absent row reads as "fine".
             "absent": ABSENT_CAPABILITIES,
+            # D1 §34's seven dimensions, said in the directive's own words and
+            # pointed at where each is already reported.
+            #
+            # Not a second data fabric. Every one of these was being tracked
+            # under a name of its own -- `first`/`last`/`span_days` is coverage,
+            # `findings` is completeness and timestamp quality -- and what was
+            # missing was a statement that all seven are covered, and a test
+            # that fails when one stops being. A parallel abstraction to hold
+            # the same numbers would be the thing §26 warns about.
+            "tracked": _fabric_contract(datasets, registry),
             "tiers": [
                 {"tier": str(tier), "rank": rank, "means": TIER_MEANING[tier]}
                 for tier, rank in sorted(RANK.items(), key=lambda item: -item[1])
@@ -5535,3 +5545,55 @@ def _bounded(value: Any, fallback: int, low: int, high: int, field: str) -> int:
     if not low <= number <= high:
         raise ActionError(f"'{field}' must be between {low} and {high}.")
     return number
+
+
+#: D1 §34's seven dimensions, and where each is reported.
+#:
+#: The directive asks for a contract over `coverage, freshness, source,
+#: entitlement, latency, timestamp quality, completeness`. All seven were
+#: already measured -- under names that came from what each measurement *is*
+#: rather than from this list -- and nothing said so, so nothing could fail when
+#: one quietly stopped being reported. This is that statement, and
+#: `tests/api/test_data_fabric_contract.py` is the thing that fails.
+FABRIC_DIMENSIONS: dict[str, str] = {
+    "coverage": "datasets[].first, .last, .span_days, .rows",
+    "freshness": "datasets[].last, read as an age by the chart (apps/web/src/freshness.ts)",
+    "source": "datasets[].provider and .authority; services[].name",
+    "entitlement": "services[].state UNCONFIGURED, and absent[] for what this build lacks",
+    "latency": "services[].last_latency_ms and .avg_latency_ms",
+    "timestamp_quality": "datasets[].findings — ordering, duplicate and gap findings",
+    "completeness": "datasets[].findings — gap findings, against .rows and .span_days",
+}
+
+
+def _fabric_contract(
+    datasets: list[dict[str, Any]], registry: ServiceRegistry
+) -> dict[str, dict[str, Any]]:
+    """Whether each of the seven is actually being reported right now.
+
+    `reported` is measured rather than asserted: a dimension whose source went
+    away reads as false here and fails the contract test, rather than staying
+    true because this dictionary still names it.
+    """
+    measurable = [row for row in datasets if row.get("measurable")]
+    services: list[dict[str, Any]] = list(registry.snapshot())
+
+    def on_dataset(field: str) -> bool:
+        return any(field in row for row in measurable)
+
+    def on_service(field: str) -> bool:
+        return any(field in row for row in services)
+
+    reported = {
+        "coverage": on_dataset("span_days") and on_dataset("rows"),
+        "freshness": on_dataset("last"),
+        "source": on_dataset("provider") or on_service("name"),
+        "entitlement": bool(services) or bool(ABSENT_CAPABILITIES),
+        "latency": on_service("last_latency_ms"),
+        "timestamp_quality": on_dataset("findings"),
+        "completeness": on_dataset("findings"),
+    }
+    return {
+        name: {"where": where, "reported": reported[name]}
+        for name, where in FABRIC_DIMENSIONS.items()
+    }
