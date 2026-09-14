@@ -329,3 +329,26 @@ def test_no_token_is_defined_in_terms_of_itself() -> None:
         body = strip_comments(path.read_text("utf-8"))
         for name, value in re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", body):
             assert f"var({name})" not in value, f"{path.name}: {name} references itself"
+
+
+def test_every_stylesheet_is_actually_imported() -> None:
+    """A stylesheet nobody imports is rules that never apply.
+
+    This caught one: chart styles for the conversation panel were appended to a
+    new `chat.css` that `main.tsx` never imported, so they were dead the moment
+    they were written and nothing in the build would have said so.
+    """
+    styles = {path.name for path in (WEB_SRC / "styles").glob("*.css")}
+    # Two routes in: `main.tsx` imports most sheets directly, and `base.css`
+    # pulls the token and motion layers in with `@import` so they land before
+    # anything that reads them. Both count as imported; only a sheet reached by
+    # neither is dead.
+    reached = (WEB_SRC / "main.tsx").read_text("utf-8")
+    for sheet in (WEB_SRC / "styles").glob("*.css"):
+        reached += sheet.read_text("utf-8")
+    imported = set(re.findall(r"(?:styles/|\./)([A-Za-z0-9_-]+\.css)", reached))
+    orphans = sorted(styles - imported)
+    assert not orphans, (
+        f"these stylesheets are never imported, so none of their rules apply: {orphans}. "
+        "Import them in main.tsx, or put the rules in a sheet that is."
+    )
