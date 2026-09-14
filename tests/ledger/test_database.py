@@ -78,10 +78,17 @@ def test_concurrent_appends_cannot_fork_the_decision_chain(tmp_path) -> None:
     def contend(index: int) -> None:
         start.wait()
         for attempt in range(40):
-            head = ledger.connection.execute(
-                "SELECT record_hash FROM decisions ORDER BY sequence DESC LIMIT 1"
-            ).fetchone()
-            previous = None if head is None else head["record_hash"]
+            # Through `chain_head`, not by reaching into `connection`.
+            #
+            # The first version of this test read the head with a raw `execute`
+            # on the shared connection, and failed intermittently with
+            # `IndexError` from a `sqlite3.Row` lookup -- a torn row, because a
+            # connection is not safe for concurrent statements at all, read or
+            # write. That was a fault in the ledger and not in the test: routes
+            # read this ledger and FastAPI runs sync handlers in a thread pool.
+            # Every use of the connection is behind the lock now, and this is
+            # the public way to ask.
+            previous = ledger.chain_head()
             record = DecisionRecord.append(
                 "RUN", f"run_{index}_{attempt}", {"worker": index}, previous, when
             )
@@ -102,9 +109,10 @@ def test_concurrent_appends_cannot_fork_the_decision_chain(tmp_path) -> None:
     assert len(appended) == 8, "a contending append was lost"
     assert ledger.verify_decision_chain(), "the chain forked under concurrent appends"
 
-    rows = ledger.connection.execute(
-        "SELECT previous_hash FROM decisions ORDER BY sequence"
-    ).fetchall()
+    with ledger._lock:
+        rows = ledger.connection.execute(
+            "SELECT previous_hash FROM decisions ORDER BY sequence"
+        ).fetchall()
     previous = [row["previous_hash"] for row in rows]
     assert len(previous) == len(set(previous)), (
         "two records claim the same predecessor, which is a forked chain"
