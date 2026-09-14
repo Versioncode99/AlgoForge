@@ -1,7 +1,7 @@
 import { type ElectronApplication, _electron, expect, test } from '@playwright/test'
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 /* The multi-window baseline Doc 2 asks for, measured rather than asserted.
  *
@@ -22,6 +22,15 @@ const ELECTRON = join(DESKTOP, 'node_modules', 'electron', 'dist', 'electron')
 const ROOT = join(process.cwd(), '..', '..')
 const SESSION = join(ROOT, 'data', 'runtime', 'workspace-session.json')
 const REPORT = join(ROOT, 'docs', 'PERFORMANCE_BASELINE.json')
+/* Where the measurement always lands. `REPORT` is tracked, so writing it on
+ * every run left the working tree dirty with re-measured latencies nobody asked
+ * for, and commits carried them along with unrelated changes. A baseline is
+ * useful because it is stable: a figure somebody deliberately re-recorded is
+ * something to compare against; one that moves on every run is not. The
+ * rendering still happens on every run, into `test-results`, so nothing about
+ * the measurement is conditional -- only publishing it is, under
+ * `ALGOFORGE_WRITE_BASELINE=1`. */
+const SCRATCH = join(process.cwd(), 'test-results', 'PERFORMANCE_BASELINE.json')
 const HEALTH = 'http://127.0.0.1:8765/api/v1/health'
 
 /** Every measurement taken, written out at the end. */
@@ -55,22 +64,22 @@ test.beforeAll(async () => {
 
 test.afterAll(() => {
   api?.kill('SIGTERM')
-  writeFileSync(
-    REPORT,
-    `${JSON.stringify(
-      {
-        note:
-          'Measured by apps/web/tests/electron/performance.spec.ts on one container. ' +
-          'A starting point for comparison, not a budget: see docs/PERFORMANCE_BASELINE.md.',
-        measured_at: new Date().toISOString(),
-        platform: `${process.platform} ${process.arch}`,
-        node: process.version,
-        ...measured,
-      },
-      null,
-      2,
-    )}\n`,
-  )
+  const report = `${JSON.stringify(
+    {
+      note:
+        'Measured by apps/web/tests/electron/performance.spec.ts on one container. ' +
+        'A starting point for comparison, not a budget: see docs/PERFORMANCE_BASELINE.md.',
+      measured_at: new Date().toISOString(),
+      platform: `${process.platform} ${process.arch}`,
+      node: process.version,
+      ...measured,
+    },
+    null,
+    2,
+  )}\n`
+  mkdirSync(dirname(SCRATCH), { recursive: true })
+  writeFileSync(SCRATCH, report)
+  if (process.env.ALGOFORGE_WRITE_BASELINE === '1') writeFileSync(REPORT, report)
 })
 
 test.beforeEach(() => {

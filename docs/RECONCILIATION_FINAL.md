@@ -138,24 +138,69 @@ row writes, so a slow drag is in the browser and not behind the API.
    went into a new `chat.css` that `main.tsx` never imports, so every rule was
    dead on arrival and the build said nothing. There is now a test that fails
    when a sheet is reached by neither `main.tsx` nor a `@import`.
+10. **Concurrent reads on the ledger's shared connection could tear a row.**
+    The lock added for bug 7 guarded the append. It did not guard the reads, and
+    `sqlite3.Connection` is not safe for concurrent statements *at all* — two
+    threads inside `execute` interleave in the driver and a row comes back short.
+    It surfaced as a one-in-eight `IndexError: tuple index out of range` in the
+    regression test written for bug 7, which is to say the test for the first bug
+    found the second. `app.state.ledger.get_run` is called from FastAPI's thread
+    pool, so the path is live. Every use of the connection is behind the lock now,
+    and `chain_head()` exists so a caller building a record does not have to reach
+    past it.
+11. **Five end-to-end skips that could only fire on a regression** — and one that
+    had never run. Each stood in front of a condition the test itself had just
+    established: a strategy it had created coming back not-ok, an empty catalogue
+    right after creating one, a canvas asserted visible on the line above having
+    no bounding box, AI mode having no conversation panel. Turning the porting one
+    into an assertion showed the test had *always* skipped: `POST /strategies`
+    writes hand-written Python, porting renders the Strategy IR, and a strategy
+    with no canonical definition answers 404 by design. Every assertion below that
+    line — that a report never claims logic was preserved, that each element which
+    did not cross names its reason — had never once executed. It builds from a
+    blueprint now.
+12. **Three tracked files that a test run rewrote on every invocation.** The
+    vault's dashboard note, `docs/OPERATION_COST.json` and
+    `docs/PERFORMANCE_BASELINE.json` were all rewritten by simply running the
+    suite, so the working tree was dirty again the moment anything started, and
+    commits on this branch carried re-measured latencies and churned timestamps
+    along with changes that had nothing to do with them. A baseline is useful
+    because it is stable. The measurements still run every time and still render;
+    `ALGOFORGE_WRITE_BASELINE=1` is what publishes them, and the note is untracked.
+
 
 ## 7. Verification
 
 | Suite | Result |
 | --- | --- |
-| Backend `pytest` | **3375 passed**, 0 failed |
+| Backend `pytest` | **3375 collected, 0 failed** |
 | Frontend `vitest` | **436 passed**, 39 files |
-| Electron, real shell under Xvfb | **20 passed**, three consecutive full-suite runs |
+| Electron, real shell under Xvfb | **20 passed**, five full-suite runs, no flake |
+| Browser end-to-end (`chat`, `porting`) | **8 passed** against a live API and web server |
 | `ruff` | clean |
 | `mypy --strict` | clean, 209 source files |
 | `tsc --noEmit` | clean |
 | `vite build` | clean |
+| Working tree after a full suite run | clean |
 | CI (`web`, `python` ubuntu + windows) | green on the merged head |
 
-No test was weakened, skipped or deleted to reach this. Four tests changed
-shape because the thing they tested changed shape — the budget switch became
-three modes, the window list gained `self` — and each change is in the commit
-that caused it.
+**What could not be verified here.** The `charts` browser specs cannot run in
+this container on any commit, `main` included: no market dataset is imported, so
+`/api/v1/bars` answers `market_data_unavailable` and `.chart-provenance` never
+renders. That is an environment precondition rather than a result, and it is why
+the bounding-box skip in bug 11 went unnoticed for as long as it did. Those four
+specs are unverified, and saying so is the point.
+
+No test was weakened, skipped or deleted to reach this; the traffic went the
+other way, with five conditional skips removed and turned into assertions. Four
+tests changed shape because the thing they tested changed shape — the budget
+switch became three modes, the window list gained `self` — and each change is in
+the commit that caused it. Seven backend tests and eight browser ones were
+removed outright with the Hedge Fund mode, each replaced by a named successor
+asserting the same claim about the three modes that remain, plus three that had
+no predecessor: that the book loop survived losing its mode, that removing the
+mode would have removed its grants, and that automation did not spread when it
+went.
 
 One near miss worth recording: a scripted edit to `chat-panel.test.tsx` silently
 removed thirteen tests, and the count in the suite output is what caught it. The
@@ -163,8 +208,10 @@ file was restored and the edit redone.
 
 ## 8. Git and CI
 
-- Branch `claude/zen-hawking-nm63gx` at `8ad0aaf`, **51 commits ahead** of
-  `origin/main` (`fd69333`), 0 behind, working tree clean, pushed.
+- Branch `claude/zen-hawking-nm63gx` ahead of `origin/main` (`fd69333`), 0
+  behind, working tree clean after a full suite run, pushed. The exact head SHA
+  at the moment of merge is in the session's final report; pinning it here would
+  name a commit that this edit is the parent of.
 - PR #10, no merge conflict, every required check green on the head that was
   merged.
 - Every branch that existed when this began still exists at the SHA
@@ -180,5 +227,6 @@ automatically unless explicitly instructed". With the instruction given and
 every acceptance condition met, PR #10 was merged into `main` through GitHub's
 normal merge — no force push, no history rewritten, no branch deleted.
 
-Original main: `fd69333`. Pre-merge branch head: `8ad0aaf`. The final main SHA
-and the post-merge verification are in the session's final report.
+Original main: `fd69333`. The pre-merge branch head, the merge commit and the
+post-merge verification are in the session's final report, which is the only
+place that can state them accurately.
