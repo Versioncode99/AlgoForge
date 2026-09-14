@@ -1,6 +1,6 @@
 ---
 type: "algoforge-index"
-updated: "2026-09-13T20:43:58+00:00"
+updated: "2026-09-14T01:11:17+00:00"
 tags:
   - "algoforge"
   - "index"
@@ -14,7 +14,7 @@ executable truth lives in `.store`, which Obsidian hides.
 | Folder | Holds | Count |
 | --- | --- | --- |
 | `Strategies` | one note per strategy the engine wrote | 0 |
-| `Research Papers` | curated and discovered references | 0 |
+| `Research Papers` | curated and discovered references | 8 |
 | `Backtests` | one note per completed run | 0 |
 | `Verdicts` | the deterministic judge's decisions | 0 |
 | `Families` | strategy families and their mechanisms | 12 |

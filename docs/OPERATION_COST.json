@@ -2,13 +2,13 @@
   "note": "Measured by tests/performance/test_operation_cost.py on one container. A starting point for comparison, not a budget.",
   "repeats": 9,
   "split_ms_median": {
-    "2": 6.7,
-    "10": 7.83
+    "2": 8.81,
+    "10": 12.23
   },
   "docking_ms": {
-    "split": 6.38,
-    "stack": 7.27,
-    "detach": 8.12
+    "split": 8.14,
+    "stack": 8.4,
+    "detach": 9.63
   },
   "writes_per_split": {
     "2": 4,

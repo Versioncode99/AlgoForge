@@ -1,5 +1,11 @@
 # Final requirement matrix
 
+> **Superseded in part.** This was scored at `8baae2c` during the master
+> reconciliation phase. The safe full reconciliation that followed moved
+> thirteen of these rows; `docs/RECONCILIATION_FINAL.md` is the current score
+> and names which moved and which did not. What stands here unchanged is the
+> method and the evidence for the rows nothing has touched since.
+
 Part 11 asks for a second complete audit against all three directives, done
 against the repository rather than against the first audit, and for enough
 evidence that another engineer can see what is complete without trusting the
