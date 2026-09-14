@@ -51,8 +51,11 @@ def _finished_backtest(client: TestClient) -> dict[str, Any]:
         f"/api/v1/strategies/{strategy_id}/backtest/async",
         json={"dataset": "synthetic", "bar_count": 800},
     )
-    if started.status_code != 200:
-        pytest.skip(f"the job route refused this fixture: {started.status_code}")
+    # Asserted rather than skipped. The fixture asks for synthetic bars, which
+    # are always available, so a refusal here is a regression in the route and
+    # not a missing dependency -- and a skip would hide it while the suite
+    # stayed green.
+    assert started.status_code == 200, started.text
     job_id = started.json()["data"]["job_id"]
     deadline = time.time() + 90
     while time.time() < deadline:
