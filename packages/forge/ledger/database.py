@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 
 from forge.contracts.models import DecisionRecord, Preregistration, RunRecord
@@ -13,6 +14,13 @@ class LedgerDatabase:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        # One connection, deliberately shared across threads -- and therefore one
+        # lock. `append_decision` reads the chain head and then writes against
+        # it, and two threads interleaving there both read the same head, both
+        # pass the continuity check, and both insert: a forked chain that
+        # `verify_decision_chain` then reports as tampered forever, on a ledger
+        # nobody actually tampered with.
+        self._lock = threading.Lock()
         self._migrate()
 
     def _migrate(self) -> None:
@@ -90,23 +98,31 @@ class LedgerDatabase:
         return None if row is None else RunRecord.model_validate(json.loads(row["payload"]))
 
     def append_decision(self, decision: DecisionRecord) -> None:
-        latest = self.connection.execute(
-            "SELECT record_hash FROM decisions ORDER BY sequence DESC LIMIT 1"
-        ).fetchone()
-        expected = None if latest is None else latest["record_hash"]
-        if decision.previous_hash != expected:
-            raise ValueError("decision chain mismatch")
-        self.connection.execute(
-            """INSERT INTO decisions(decision_id, record_hash, previous_hash, payload)
-            VALUES (?, ?, ?, ?)""",
-            (
-                decision.decision_id,
-                decision.record_hash,
-                decision.previous_hash,
-                decision.model_dump_json(),
-            ),
-        )
-        self.connection.commit()
+        """Append one decision, or refuse because the chain has moved.
+
+        Read and write under one lock. The check and the insert are a single
+        decision about the chain's head, and splitting them across two threads
+        turns "this record follows that one" from a guarantee into a race the
+        winner of which is arbitrary.
+        """
+        with self._lock:
+            latest = self.connection.execute(
+                "SELECT record_hash FROM decisions ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            expected = None if latest is None else latest["record_hash"]
+            if decision.previous_hash != expected:
+                raise ValueError("decision chain mismatch")
+            self.connection.execute(
+                """INSERT INTO decisions(decision_id, record_hash, previous_hash, payload)
+                VALUES (?, ?, ?, ?)""",
+                (
+                    decision.decision_id,
+                    decision.record_hash,
+                    decision.previous_hash,
+                    decision.model_dump_json(),
+                ),
+            )
+            self.connection.commit()
 
     def verify_decision_chain(self) -> bool:
         rows = self.connection.execute("SELECT payload FROM decisions ORDER BY sequence").fetchall()

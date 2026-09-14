@@ -81,12 +81,15 @@ _ARTIFACTS: dict[str, tuple[ArtifactKind, tuple[str, ...]]] = {
     # way back to the strategy it created -- a card that could only ever say
     # "no panel yet" about a strategy that certainly exists.
     "create_strategy_from_blueprint": (ArtifactKind.STRATEGY, ("blueprint_id", "strategy_id")),
-    "run_analysis": (ArtifactKind.ANALYSIS, ("strategy_id", "analysis")),
+    # `artifact_id` as well, so a conversation can render the analysis that was
+    # actually computed rather than recomputing one that might differ. The id is
+    # minted by the lab and only the result carries it.
+    "run_analysis": (ArtifactKind.ANALYSIS, ("strategy_id", "analysis", "artifact_id")),
     "parameter_surface": (
         ArtifactKind.PARAMETER_SURFACE,
         ("strategy_id", "x_parameter", "y_parameter"),
     ),
-    "analysis_trades": (ArtifactKind.ANALYSIS, ("strategy_id",)),
+    "analysis_trades": (ArtifactKind.ANALYSIS, ("strategy_id", "artifact_id")),
     "assess_prop_account": (ArtifactKind.PROP_SIMULATION, ("account_id",)),
     "export_strategy": (ArtifactKind.PORT, ("strategy_id", "target")),
     "build_workspace": (ArtifactKind.WORKSPACE, ("name",)),

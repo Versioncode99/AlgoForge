@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, MessageSquarePlus, Search, Trash2, X } from 'lucide-react'
 import { format } from '../route'
+import { ArtifactVisual } from './ArtifactVisual'
 import { useWorkstationContext } from '../workstation'
 import {
   STANDING,
@@ -161,6 +162,12 @@ function Artifacts({ artifacts }: { artifacts: Artifact[] }) {
                 the deterministic system says now, never a copy of what it said
                 then. */}
             <span className="art-refs mono">{refs}</span>
+            {/* The chart, where there is one that can honestly be drawn: the
+                same component the surface uses, fetched from the route that
+                computed it. §4F asks for quantitative visuals in the
+                conversation and forbids inventing them, so a kind with nothing
+                to fetch renders nothing at all. */}
+            <ArtifactVisual artifact={artifact} />
             {href ? (
               <a className="art-open" href={href}>
                 Open

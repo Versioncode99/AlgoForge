@@ -49,3 +49,63 @@ def test_decision_chain_rejects_wrong_previous_hash(tmp_path) -> None:
     with pytest.raises(ValueError, match="chain"):
         ledger.append_decision(wrong)
     assert ledger.verify_decision_chain()
+
+
+def test_concurrent_appends_cannot_fork_the_decision_chain(tmp_path) -> None:
+    """The race the shared connection makes possible, and the lock closes.
+
+    `LedgerDatabase` opens its connection with `check_same_thread=False`, which
+    is what lets routes read it from request threads. `append_decision` reads the
+    chain head and then writes against it, so two threads interleaving between
+    those two statements both read the same head, both pass the continuity check
+    and both insert -- a chain with two records claiming the same predecessor,
+    which `verify_decision_chain` then reports as tampered forever on a ledger
+    nobody tampered with.
+
+    Every thread here builds its record against the head it last saw and retries
+    when the chain moved, which is what a real caller does. Exactly one append
+    per round may win; the assertion is that the chain still verifies and holds
+    every record that reported success.
+    """
+    import threading
+
+    ledger = LedgerDatabase(tmp_path / "ledger.db")
+    when = datetime(2026, 1, 1, tzinfo=UTC)
+    appended: list[str] = []
+    guard = threading.Lock()
+    start = threading.Barrier(8)
+
+    def contend(index: int) -> None:
+        start.wait()
+        for attempt in range(40):
+            head = ledger.connection.execute(
+                "SELECT record_hash FROM decisions ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            previous = None if head is None else head["record_hash"]
+            record = DecisionRecord.append(
+                "RUN", f"run_{index}_{attempt}", {"worker": index}, previous, when
+            )
+            try:
+                ledger.append_decision(record)
+            except (ValueError, sqlite3.IntegrityError):
+                continue  # the chain moved under us; rebuild against the new head
+            with guard:
+                appended.append(record.record_hash)
+            return
+
+    workers = [threading.Thread(target=contend, args=(index,)) for index in range(8)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=30)
+
+    assert len(appended) == 8, "a contending append was lost"
+    assert ledger.verify_decision_chain(), "the chain forked under concurrent appends"
+
+    rows = ledger.connection.execute(
+        "SELECT previous_hash FROM decisions ORDER BY sequence"
+    ).fetchall()
+    previous = [row["previous_hash"] for row in rows]
+    assert len(previous) == len(set(previous)), (
+        "two records claim the same predecessor, which is a forked chain"
+    )
