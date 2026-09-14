@@ -160,12 +160,25 @@ def test_switching_enforcement_off_actually_lifts_every_research_ceiling(client)
     from forge_api.settings_store import BudgetSettings
 
     _patch(client, {"budget": {"model_calls_per_day": 50, "campaign_experiments": 9}})
-    on = BudgetSettings(**_settings(client)["ai"]["budget"])
+    # `enforced` is derived from `mode` now, so it comes back in the payload
+    # and is not a constructor argument.
+    stored = {
+        key: value
+        for key, value in _settings(client)["ai"]["budget"].items()
+        if key != "enforced"
+    }
+    on = BudgetSettings(**stored)
     assert on.limit("model_calls_per_day") == 50
     assert on.limit("campaign_experiments") == 9
 
     _patch(client, {"budget_enforced": False})
-    off = BudgetSettings(**_settings(client)["ai"]["budget"])
+    off = BudgetSettings(
+        **{
+            key: value
+            for key, value in _settings(client)["ai"]["budget"].items()
+            if key != "enforced"
+        }
+    )
     assert off.limit("model_calls_per_day") == 0
     assert off.limit("campaign_experiments") == 0
     # The stored numbers are kept, so turning it back on restores the ceilings

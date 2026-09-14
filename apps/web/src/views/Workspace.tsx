@@ -6,6 +6,7 @@ import { playSound } from '../sound'
 import { PanelBody } from '../components/PanelBody'
 import { symbolFor, useWorkstationContext } from '../workstation'
 import { WorkspaceManager } from '../components/WorkspaceManager'
+import { stackTarget } from '../docking'
 import type { DatasetInfo } from '../types'
 
 /* The workstation itself: panels on a grid, arranged by the operator.
@@ -31,6 +32,11 @@ type Panel = {
   settings: Record<string, unknown>
   link_group: string | null
   collapsed: boolean
+  /* Docking. Panels sharing a non-empty stack occupy one rectangle as tabs and
+   * only `active` one draws. Empty on every panel saved before docking, which
+   * is why both have defaults on the server rather than being required here. */
+  stack: string
+  active: boolean
 }
 
 type Workspace = {
@@ -71,16 +77,38 @@ const PANEL_KINDS = [
   'replay', 'agent', 'activity', 'logs', 'notes',
 ]
 
-export function WorkspaceView() {
+export function WorkspaceView({ workspaceId = '' }: { workspaceId?: string } = {}) {
   const client = useQueryClient()
   const surface = useRef<HTMLDivElement | null>(null)
   const [adding, setAdding] = useState(false)
   const [managing, setManaging] = useState(false)
 
-  const active = useQuery({
+  /* Which workspace this window is showing.
+   *
+   * A named one when the link says so, and the active one otherwise. The
+   * desktop shell has always opened a second window on
+   * `#workspace?workspace=<id>` -- its own comment says the id travels in the
+   * fragment "so a reload lands on the same workspace instead of on whatever
+   * was globally active" -- and this view read `/workspaces/active` regardless.
+   * So two windows opened on two workspaces both showed the same one, and
+   * whichever was opened last decided which. The guarantee was written down in
+   * the main process and implemented nowhere.
+   *
+   * Keyed by id so two windows do not share one cache entry, and a named
+   * workspace that no longer exists falls back rather than rendering nothing:
+   * a deleted desk should leave you somewhere, not on a blank screen. */
+  const named = useQuery({
+    queryKey: ['workspace-named', workspaceId],
+    queryFn: () => getJson<Workspace | null>(`/workspaces/${workspaceId}`),
+    enabled: Boolean(workspaceId),
+    retry: false,
+  })
+  const activeQuery = useQuery({
     queryKey: ['workspace-active'],
     queryFn: () => getJson<Workspace | null>('/workspaces/active'),
+    enabled: !workspaceId || named.isError,
   })
+  const active = workspaceId && !named.isError ? named : activeQuery
   const list = useQuery({
     queryKey: ['workspace-list'],
     queryFn: () => getJson<{ workspaces: WorkspaceSummary[]; active: string | null }>('/workspaces'),
@@ -96,6 +124,7 @@ export function WorkspaceView() {
 
   const refresh = useCallback(() => {
     void client.invalidateQueries({ queryKey: ['workspace-active'] })
+    void client.invalidateQueries({ queryKey: ['workspace-named'] })
     void client.invalidateQueries({ queryKey: ['workspace-list'] })
   }, [client])
 
@@ -174,6 +203,11 @@ export function WorkspaceView() {
   // hundred intermediate positions that were never intended.
   const drag = useRef<{ panel: Panel; startX: number; startY: number; mode: 'move' | 'resize' } | null>(null)
   const [preview, setPreview] = useState<Record<string, { x: number; y: number; width: number; height: number }>>({})
+  /* The panel a release would tab onto, or null for a plain move. Held in state
+   * rather than computed at render because the pointer is the only thing that
+   * knows it, and recomputing from the preview would be a second rule that can
+   * disagree with the one the drop uses. */
+  const [dockTarget, setDockTarget] = useState<string | null>(null)
 
   const columnWidth = () => (surface.current?.clientWidth ?? GRID_COLUMNS * 80) / GRID_COLUMNS
 
@@ -205,15 +239,35 @@ export function WorkspaceView() {
             height: Math.max(3, p.height + dy),
           }
     setPreview((current) => ({ ...current, [p.panel_id]: next }))
+    setDockTarget(
+      state.mode === 'move'
+        ? stackTarget(
+            next.x,
+            next.y,
+            (workspace?.panels ?? []).filter((other) => other.panel_id !== p.panel_id),
+          )
+        : null,
+    )
   }
 
   const onPointerUp = () => {
     const state = drag.current
     drag.current = null
+    const onto = dockTarget
+    setDockTarget(null)
     if (!state || !id) return
     const next = preview[state.panel.panel_id]
     setPreview({})
     if (!next) return
+    // Released over the middle of another panel: a tab, not a move.
+    if (state.mode === 'move' && onto) {
+      mutate.mutate({
+        path: `/workspaces/${id}/panels/${state.panel.panel_id}/stack`,
+        method: 'POST',
+        body: { onto },
+      })
+      return
+    }
     const unchanged =
       next.x === state.panel.x &&
       next.y === state.panel.y &&
@@ -337,16 +391,48 @@ export function WorkspaceView() {
         >
           {workspace.panels.map((panel) => {
             const shown = preview[panel.panel_id] ?? panel
+            /* A stack is one rectangle. Only the active tab draws a body; the
+             * rest exist as tabs on it, so a hidden tab must not also render a
+             * panel of its own on top of the visible one. */
+            if (panel.stack && !panel.active) return null
+            const siblings = panel.stack
+              ? workspace.panels.filter((other) => other.stack === panel.stack)
+              : []
             return (
               <section
                 key={panel.panel_id}
-                className={`wpanel${preview[panel.panel_id] ? ' dragging' : ''}`}
+                className={`wpanel${preview[panel.panel_id] ? ' dragging' : ''}${
+                  dockTarget === panel.panel_id ? ' dock-target' : ''
+                }`}
                 style={{
                   gridColumn: `${shown.x + 1} / span ${shown.width}`,
                   gridRow: `${shown.y + 1} / span ${shown.height}`,
                 }}
                 aria-label={`${panel.title} panel`}
               >
+                {siblings.length > 1 && (
+                  <div className="wpanel-tabs" role="tablist" aria-label="Panels here">
+                    {siblings.map((tab) => (
+                      <button
+                        key={tab.panel_id}
+                        type="button"
+                        role="tab"
+                        aria-selected={tab.active}
+                        className={`wpanel-tab${tab.active ? ' on' : ''}`}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={() =>
+                          mutate.mutate({
+                            path: `/workspaces/${id}/panels/${tab.panel_id}/show`,
+                            method: 'POST',
+                            body: {},
+                          })
+                        }
+                      >
+                        {tab.title}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <header className="wpanel-head" onPointerDown={onPointerDown(panel, 'move')}>
                   {/* The title follows what is *shown*, not what is stored.
                     * Caught in QA on the running application: a panel pinned to

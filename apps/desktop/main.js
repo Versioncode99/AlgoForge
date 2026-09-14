@@ -8,11 +8,14 @@
  * left running, no terminal window.
  */
 
-const { app, BrowserWindow, Menu, dialog, shell } = require('electron')
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const http = require('node:http')
 const path = require('node:path')
 const fs = require('node:fs')
+
+const { VISIBILITY, WindowRegistry, PLACEMENT } = require('./workspace-windows')
+const { CHANNEL_NAMES, VISIBILITY_CHANNEL, validate } = require('./ipc-contract')
 
 const ROOT = path.resolve(__dirname, '..', '..')
 const API_PORT = 8765
@@ -23,6 +26,22 @@ const DEV_URL = process.env.ALGOFORGE_DEV_URL // set to run against the Vite dev
 
 let apiProcess = null
 let mainWindow = null
+
+/* Which workspace is open in which window, held here rather than in a renderer.
+ *
+ * A renderer knows what it is showing; only this process can know what every
+ * window is showing, and without that there is no answer to "is this workspace
+ * already open somewhere" -- so a second window opens onto one layout and two
+ * windows edit it with no merge. The state machine is in
+ * `workspace-windows.js`, tested there, and free of any Electron import. */
+const windows = new WindowRegistry()
+
+/* Where the arrangement is written between sessions. Debounced rather than
+ * written per event: dragging a window emits `move` continuously, and a
+ * synchronous write per frame is how a window manager comes to feel heavy. */
+const SESSION_FILE = path.join(ROOT, 'data', 'runtime', 'workspace-session.json')
+const SESSION_DEBOUNCE_MS = 400
+let sessionTimer = null
 
 function pythonPath() {
   const candidates = [
@@ -104,6 +123,303 @@ function stopApi() {
   }
 }
 
+/* Has the saved arrangement been dealt with yet this run?
+ *
+ * Until it has, it is the only copy of what the operator left, and an empty
+ * snapshot must not be written over it. That is not hypothetical: the main
+ * window fires `move` and `resize` while it is being placed on screen, both of
+ * which persist the arrangement -- and at that moment no workspace window is
+ * open, so the snapshot is empty. A launch could therefore erase the session
+ * before anything had a chance to restore it, and whether it did came down to
+ * whether the debounce landed first. That is what made restore fail about one
+ * run in three.
+ *
+ * It stops mattering the moment the session has been restored or the operator
+ * has opened a workspace of their own: from then on an empty arrangement is a
+ * real statement about what is open, not a startup artefact. */
+let sessionConsumed = false
+
+/** Would writing now destroy an arrangement nobody has read yet? */
+function wouldEraseUnreadSession() {
+  return !sessionConsumed && windows.snapshot().windows.length === 0
+}
+
+/** Persist the arrangement, at most once per debounce window. */
+function rememberSession() {
+  if (wouldEraseUnreadSession()) return
+  if (sessionTimer) clearTimeout(sessionTimer)
+  sessionTimer = setTimeout(() => {
+    sessionTimer = null
+    try {
+      fs.mkdirSync(path.dirname(SESSION_FILE), { recursive: true })
+      fs.writeFileSync(SESSION_FILE, JSON.stringify(windows.snapshot(), null, 2))
+    } catch {
+      // A layout that could not be saved is not worth failing a session over,
+      // and the operator loses an arrangement rather than any work.
+    }
+  }, SESSION_DEBOUNCE_MS)
+}
+
+/** Flush immediately. Called on the way out, where a debounce would lose it. */
+/* Is the whole application going away, as opposed to one window being closed?
+ *
+ * The distinction decides what "restore my last session" means. A window the
+ * operator closed is one they are finished with and must not come back. Every
+ * window open when the app quit is the arrangement they left, and all of it
+ * should. Without the flag both look identical by the time the snapshot is
+ * taken, and the arrangement is lost. */
+let quitting = false
+
+function flushSession() {
+  if (sessionTimer) {
+    clearTimeout(sessionTimer)
+    sessionTimer = null
+  }
+  if (wouldEraseUnreadSession()) return
+  try {
+    fs.mkdirSync(path.dirname(SESSION_FILE), { recursive: true })
+    fs.writeFileSync(SESSION_FILE, JSON.stringify(windows.snapshot(), null, 2))
+  } catch {
+    /* as above */
+  }
+}
+
+function readSession() {
+  try {
+    return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The IPC surface, registered once.
+ *
+ * Registered in a loop over the contract's own channel list so a channel added
+ * to the table without a handler fails loudly here rather than silently at the
+ * call site, and so the reverse -- a handler for a channel nobody declared --
+ * is not expressible.
+ *
+ * Every payload goes through `validate` before a handler sees it, and handlers
+ * receive the *rebuilt* payload, so a field that was not declared cannot reach
+ * one even if the table and the handler drift apart.
+ */
+function installIpc() {
+  const handlers = {
+    'workspace:open': (event, payload) => {
+      const from = windowIdOf(event)
+      const decision = windows.placeOpen(payload.workspaceId, {
+        from,
+        intent: payload.intent ?? 'auto',
+      })
+      if (decision.placement === PLACEMENT.FOCUS) {
+        const target = BrowserWindow.fromId(decision.windowId)
+        if (target && !target.isDestroyed()) {
+          if (target.isMinimized()) target.restore()
+          target.focus()
+        }
+        return decision
+      }
+      if (decision.placement === PLACEMENT.CURRENT) {
+        windows.load(from, payload.workspaceId)
+        rememberSession()
+        return decision
+      }
+      const created = createWorkspaceWindow(payload.workspaceId)
+      return { ...decision, windowId: created ? created.id : null }
+    },
+    'workspace:close-window': (_event, payload) => {
+      const target = BrowserWindow.fromId(payload.windowId)
+      if (target && !target.isDestroyed()) target.close()
+      return { closed: Boolean(target) }
+    },
+    'workspace:remember-bounds': (_event, payload) => {
+      windows.remember(payload.windowId, payload.bounds)
+      rememberSession()
+      return { remembered: true }
+    },
+    'workspace:group': (_event, payload) => {
+      const groupId = windows.group(payload.windowIds)
+      rememberSession()
+      return { groupId, windowIds: windows.windowsInGroup(groupId) }
+    },
+    'workspace:ungroup': (_event, payload) => {
+      const groupId = windows.ungroup(payload.windowId)
+      rememberSession()
+      return { groupId }
+    },
+    // `self` so a renderer can tell which row is itself. Without it the window
+    // list is a set of numbers the operator has no way to match to the window
+    // they are looking at, and "group these two" becomes a guess.
+    'workspace:windows': (event) => ({
+      self: windowIdOf(event),
+      windows: windows.windowIds.map((id) => ({
+        windowId: id,
+        workspaceId: windows.workspaceIn(id),
+        groupId: windows.groupOf(id),
+      })),
+    }),
+    'workspace:restore-session': () => {
+      // Read before it is marked consumed: from here on the operator has been
+      // given their arrangement back, and what is open is the truth again.
+      const plan = windows.planRestore(readSession())
+      sessionConsumed = true
+      const opened = []
+      for (const item of plan) {
+        if (windows.windowFor(item.workspaceId) !== null) continue
+        const created = createWorkspaceWindow(item.workspaceId, item.bounds)
+        if (created) opened.push({ windowId: created.id, workspaceId: item.workspaceId })
+      }
+      return { restored: opened }
+    },
+  }
+
+  for (const channel of CHANNEL_NAMES) {
+    const handler = handlers[channel]
+    if (!handler) throw new Error(`no handler for declared channel '${channel}'`)
+    ipcMain.handle(channel, (event, payload) => {
+      const checked = validate(channel, payload)
+      if (!checked.ok) throw new Error(checked.reason)
+      return handler(event, checked.payload)
+    })
+  }
+}
+
+function windowIdOf(event) {
+  const sender = BrowserWindow.fromWebContents(event.sender)
+  return sender ? sender.id : null
+}
+
+/**
+ * A window for one workspace.
+ *
+ * The workspace id travels in the URL fragment rather than over a second
+ * channel, so a reload lands on the same workspace instead of on whatever was
+ * globally active — a window that forgets what it is showing when it refreshes
+ * is a window the operator cannot trust to keep their arrangement.
+ */
+function createWorkspaceWindow(workspaceId, bounds = null) {
+  // A workspace window exists, so what is open is now a real arrangement and
+  // persisting it can no longer destroy an unread one.
+  sessionConsumed = true
+  const window = new BrowserWindow({
+    ...(bounds ?? { width: 1360, height: 900 }),
+    minWidth: 900,
+    minHeight: 600,
+    show: false,
+    backgroundColor: '#0a0b0d',
+    title: 'AlgoForge',
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  })
+
+  windows.register(window.id, workspaceId)
+  window.webContents.setWindowOpenHandler(({ url }) => openExternally(url))
+  holdOrigin(window, DEV_URL || APP_URL)
+  window.once('ready-to-show', () => window.show())
+
+  // Geometry is recorded through the debounced path: `move` and `resize` fire
+  // continuously while dragging, and a write per event is hundreds per second.
+  const record = () => {
+    if (!window.isDestroyed()) windows.remember(window.id, window.getBounds())
+    rememberSession()
+  }
+  window.on('move', record)
+  window.on('resize', record)
+
+  // What the window is doing, for the renderer's periodic work.
+  //
+  // Chromium already marks a minimised window's document hidden, and the query
+  // layer already stops interval work on that. What it does not distinguish is
+  // a window that is on screen but not frontmost -- and that one must keep
+  // working, because several windows watched at once is the arrangement this
+  // product exists for. So `blur` is deliberately not a reason to stand down.
+  //
+  // `setVisibility` returns whether the state actually moved, so a window that
+  // is shown while already shown does not wake its renderer for nothing.
+  const visibility = (state) => {
+    if (window.isDestroyed()) return
+    if (!windows.setVisibility(window.id, state)) return
+    window.webContents.send(VISIBILITY_CHANNEL, { visibility: state })
+  }
+  window.on('focus', () => visibility(VISIBILITY.ACTIVE))
+  window.on('blur', () => visibility(VISIBILITY.BACKGROUND))
+  window.on('show', () => visibility(window.isFocused() ? VISIBILITY.ACTIVE : VISIBILITY.BACKGROUND))
+  window.on('restore', () => visibility(window.isFocused() ? VISIBILITY.ACTIVE : VISIBILITY.BACKGROUND))
+  window.on('hide', () => visibility(VISIBILITY.OBSCURED))
+  window.on('minimize', () => visibility(VISIBILITY.OBSCURED))
+
+  // `close` and `closed` are separate events with real time between them. A
+  // window is enumerable in that gap, so it is marked as leaving before it is
+  // forgotten -- otherwise an open request can focus a window that is
+  // disappearing and the operator sees a flash of a workspace and then nothing.
+  window.on('close', () => {
+    windows.closing(window.id)
+    // While quitting, the arrangement was already captured in `before-quit`,
+    // before anything was marked closing. Flushing again here would overwrite
+    // it with a snapshot that omits every window -- which is exactly what used
+    // to happen, so a normal quit always saved an empty session and restore
+    // could only ever work after a crash.
+    if (!quitting) flushSession()
+  })
+  window.on('closed', () => {
+    // Listeners go with the window. Left attached they would fire against a
+    // destroyed handle, which is the leak a soak test surfaces as growth.
+    window.removeAllListeners('move')
+    window.removeAllListeners('resize')
+    windows.closed(window.id)
+  })
+
+  const target = DEV_URL || APP_URL
+  window.loadURL(`${target}#workspace?workspace=${encodeURIComponent(workspaceId)}`)
+  return window
+}
+
+/**
+ * Hand a link to the operating system, or refuse it.
+ *
+ * `shell.openExternal` will hand anything to the OS handler for its scheme,
+ * and a page is what supplies the URL. On a local, first-party page that is a
+ * small surface; it is not one worth leaving open, because the cost of closing
+ * it is four lines and the cost of it being wrong is an arbitrary protocol
+ * handler invoked from a renderer.
+ *
+ * http and https only. Everything else is dropped rather than passed on --
+ * silently, because a page that just tried `file://` is not a page to put a
+ * dialog in front of the operator about.
+ */
+const EXTERNAL_SCHEMES = new Set(['http:', 'https:'])
+
+function openExternally(url) {
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch {
+    return { action: 'deny' }
+  }
+  if (EXTERNAL_SCHEMES.has(parsed.protocol)) shell.openExternal(parsed.toString())
+  return { action: 'deny' }
+}
+
+/**
+ * Keep a window on the page it was given.
+ *
+ * A renderer that navigates the window itself bypasses the open-handler above
+ * entirely: nothing is "opened", the existing window simply becomes something
+ * else, with the preload still attached. The app is served from one origin, so
+ * anything leaving it is refused.
+ */
+function holdOrigin(window, allowed) {
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith(allowed)) event.preventDefault()
+  })
+}
+
 function buildMenu() {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
@@ -153,21 +469,37 @@ async function createWindow() {
     icon: path.join(ROOT, 'apps', 'web', 'public', 'algoforge.ico'),
     autoHideMenuBar: true,
     webPreferences: {
-      // The renderer is our own local page; it needs no Node access.
+      // The renderer is our own local page; it needs no Node access. The
+      // preload is the only path from it to this process, and it exposes named
+      // window-management functions rather than a generic invoke.
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      preload: path.join(__dirname, 'preload.js'),
     },
   })
+  windows.register(mainWindow.id, null)
 
-  // External links open in the real browser, never inside the app shell.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
-    return { action: 'deny' }
-  })
+  // External links open in the real browser, never inside the app shell — and
+  // only http(s), so a page cannot reach an arbitrary OS protocol handler.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => openExternally(url))
+  holdOrigin(mainWindow, DEV_URL || APP_URL)
 
   mainWindow.once('ready-to-show', () => mainWindow.show())
+  const recordMain = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) windows.remember(mainWindow.id, mainWindow.getBounds())
+    rememberSession()
+  }
+  mainWindow.on('move', recordMain)
+  mainWindow.on('resize', recordMain)
+  mainWindow.on('close', () => {
+    windows.closing(mainWindow.id)
+    if (!quitting) flushSession()
+  })
   mainWindow.on('closed', () => {
+    mainWindow.removeAllListeners('move')
+    mainWindow.removeAllListeners('resize')
+    windows.closed(mainWindow.id)
     mainWindow = null
   })
 
@@ -205,6 +537,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     buildMenu()
+    installIpc()
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -212,9 +545,34 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.on('window-all-closed', () => {
+    /* No flush here, and that is the fix rather than an omission.
+     *
+     * Every window's own `close` handler has already written the arrangement as
+     * it shrank, so by this point the file says what the operator left -- which
+     * for a one-by-one close is nothing, correctly. Flushing again could only
+     * ever write the same empty snapshot.
+     *
+     * It could also write it at the wrong moment. When the windows are
+     * destroyed before `before-quit` runs -- which is how an external quit and
+     * Playwright's `app.close()` both behave -- this handler fired first with
+     * `quitting` still false and overwrote the arrangement with a snapshot in
+     * which every window was already closing. The restore test failed
+     * intermittently on exactly that race, and passed whenever `before-quit`
+     * happened to win.
+     *
+     * The flag is set here because this handler quits: from here on the
+     * application is on its way out, and nothing that runs afterwards should
+     * treat a disappearing window as an arrangement being abandoned. */
+    quitting = true
     stopApi()
     app.quit()
   })
-  app.on('before-quit', stopApi)
+  app.on('before-quit', () => {
+    // Order matters: capture the arrangement while every window still counts as
+    // open, then let the close handlers run.
+    quitting = true
+    flushSession()
+    stopApi()
+  })
   process.on('exit', stopApi)
 }

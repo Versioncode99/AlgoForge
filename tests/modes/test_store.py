@@ -26,9 +26,9 @@ def test_nothing_is_open_before_a_choice_is_made(store: ModeStore) -> None:
 
 
 def test_entering_a_mode_records_it_and_its_stance(store: ModeStore) -> None:
-    store.enter(WorkspaceMode.HEDGE_FUND, Stance.AUTONOMOUS)
+    store.enter(WorkspaceMode.AI, Stance.AUTONOMOUS)
     session = store.session()
-    assert session.mode is WorkspaceMode.HEDGE_FUND
+    assert session.mode is WorkspaceMode.AI
     assert session.stance is Stance.AUTONOMOUS
 
 
@@ -40,7 +40,7 @@ def test_a_mode_with_no_stances_records_none(store: ModeStore) -> None:
 def test_entering_the_fund_without_a_stance_takes_the_cautious_default(
     store: ModeStore,
 ) -> None:
-    store.enter(WorkspaceMode.HEDGE_FUND)
+    store.enter(WorkspaceMode.AI)
     assert store.session().stance is Stance.HUMAN_IN_THE_LOOP
 
 
@@ -52,14 +52,14 @@ def test_a_stance_on_a_mode_that_has_none_is_refused(store: ModeStore) -> None:
 def test_each_mode_remembers_its_own_layout_across_a_switch(store: ModeStore) -> None:
     store.enter(WorkspaceMode.NORMAL)
     store.remember_workspace(WorkspaceMode.NORMAL, "ws_normal")
-    store.enter(WorkspaceMode.HEDGE_FUND)
-    store.remember_workspace(WorkspaceMode.HEDGE_FUND, "ws_fund")
+    store.enter(WorkspaceMode.AI)
+    store.remember_workspace(WorkspaceMode.AI, "ws_fund")
 
     assert store.session().workspace_id == "ws_fund"
     store.enter(WorkspaceMode.NORMAL)
     assert store.session().workspace_id == "ws_normal"
     # Switching away did not disturb what the other mode holds.
-    assert store.workspace_for(WorkspaceMode.HEDGE_FUND) == "ws_fund"
+    assert store.workspace_for(WorkspaceMode.AI) == "ws_fund"
 
 
 def test_autonomy_is_never_resumed_implicitly(store: ModeStore) -> None:
@@ -69,16 +69,16 @@ def test_autonomy_is_never_resumed_implicitly(store: ModeStore) -> None:
     would mean the machine resumed reaching the book unattended without anybody
     saying so this time. The workspace pointer is a convenience; this is not.
     """
-    store.enter(WorkspaceMode.HEDGE_FUND, Stance.AUTONOMOUS)
+    store.enter(WorkspaceMode.AI, Stance.AUTONOMOUS)
     assert store.session().stance is Stance.AUTONOMOUS
     store.enter(WorkspaceMode.NORMAL)
-    store.enter(WorkspaceMode.HEDGE_FUND)
+    store.enter(WorkspaceMode.AI)
     assert store.session().stance is Stance.HUMAN_IN_THE_LOOP
 
 
 def test_the_stance_can_be_changed_from_inside_the_mode(store: ModeStore) -> None:
-    store.enter(WorkspaceMode.HEDGE_FUND)
-    assert store.set_stance(WorkspaceMode.HEDGE_FUND, Stance.AUTONOMOUS) is Stance.AUTONOMOUS
+    store.enter(WorkspaceMode.AI)
+    assert store.set_stance(WorkspaceMode.AI, Stance.AUTONOMOUS) is Stance.AUTONOMOUS
     assert store.session().stance is Stance.AUTONOMOUS
 
 
@@ -116,16 +116,16 @@ def test_an_unrecognised_stored_stance_falls_back_to_the_default_not_the_permiss
 ) -> None:
     import sqlite3
 
-    store.enter(WorkspaceMode.HEDGE_FUND)
+    store.enter(WorkspaceMode.AI)
     with sqlite3.connect(store.path) as db:
-        db.execute("INSERT OR REPLACE INTO mode_stance VALUES ('hedge_fund', 'unbounded')")
-    assert store.stance_for(WorkspaceMode.HEDGE_FUND) is Stance.HUMAN_IN_THE_LOOP
+        db.execute("INSERT OR REPLACE INTO mode_stance VALUES ('ai', 'unbounded')")
+    assert store.stance_for(WorkspaceMode.AI) is Stance.HUMAN_IN_THE_LOOP
 
 
 def test_the_session_survives_a_restart(tmp_path: Path) -> None:
     """A restart is not a re-entry: the stance the operator chose is still in force."""
     path = tmp_path / "modes.db"
-    ModeStore(path).enter(WorkspaceMode.HEDGE_FUND, Stance.AUTONOMOUS)
+    ModeStore(path).enter(WorkspaceMode.AI, Stance.AUTONOMOUS)
     reopened = ModeStore(path).session()
-    assert reopened.mode is WorkspaceMode.HEDGE_FUND
+    assert reopened.mode is WorkspaceMode.AI
     assert reopened.stance is Stance.AUTONOMOUS

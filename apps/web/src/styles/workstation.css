@@ -968,3 +968,117 @@
 @media (max-width: 620px) {
   .context-chip-sub { display: none; }
 }
+
+/* ── the inbox drawer ───────────────────────────────────────────────────────
+   A right-hand panel rather than a bottom one, because it sits beside the work
+   rather than under it: the question it answers arrives mid-task and the
+   answer is usually "open that". The event drawer takes the bottom edge and
+   the two must never fight for it. */
+.inbox-drawer {
+  position: fixed;
+  top: calc(var(--topbar-h) + var(--shell-gap));
+  right: var(--shell-gap);
+  bottom: calc(var(--statusbar-h) + var(--shell-gap));
+  width: min(420px, calc(100vw - 2 * var(--shell-gap)));
+  z-index: 26;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+  transform: translateX(calc(100% + var(--sp-6)));
+  visibility: hidden;
+  transition:
+    transform var(--t-slow) var(--ease-out),
+    visibility 0s linear var(--t-slow);
+}
+.inbox-drawer[data-open='yes'] {
+  transform: translateX(0);
+  visibility: visible;
+  transition-delay: 0s;
+}
+.inbox-drawer header {
+  flex: 0 0 auto;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+.inbox-drawer header svg { width: 15px; height: 15px; color: var(--fg-2); }
+.inbox-drawer header strong { color: var(--fg-0); font-size: var(--fs-xs); font-weight: 600; }
+.inbox-drawer header span { flex: 1 1 auto; color: var(--fg-3); font-size: var(--fs-nano); }
+.inbox-drawer header button {
+  height: 26px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  font-size: var(--fs-nano);
+}
+.inbox-drawer header button:disabled { opacity: .45; }
+.inbox-drawer > .state { padding: var(--sp-5); color: var(--fg-2); font-size: var(--fs-xs); line-height: 1.55; }
+
+.inbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 1px;
+  align-content: start;
+  background: var(--line);
+}
+.inbox-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: start;
+  padding: var(--sp-3);
+  background: var(--bg-1);
+  border-left: 2px solid transparent;
+}
+.inbox-row[data-unread='yes'] { background: var(--bg-2); border-left-color: var(--accent); }
+.inbox-dot { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--fg-3); }
+.inbox-dot.tone-good { background: var(--pass); }
+.inbox-dot.tone-bad { background: var(--fail); }
+.inbox-body { display: grid; gap: 2px; min-width: 0; }
+.inbox-body strong {
+  color: var(--fg-0); font-size: var(--fs-xs); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.inbox-detail { color: var(--fg-2); font-size: var(--fs-nano); line-height: 1.5; }
+.inbox-meta { color: var(--fg-3); font-size: var(--fs-nano); }
+.inbox-actions { display: flex; align-items: center; gap: var(--sp-1); }
+.inbox-actions button {
+  width: 24px; height: 24px; display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-2); color: var(--fg-2);
+}
+.inbox-open {
+  padding: 2px var(--sp-2); border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-2); color: var(--fg-1); font-size: var(--fs-nano); text-decoration: none;
+}
+.inbox-open.disabled { opacity: .5; }
+
+.context-inbox {
+  display: flex; align-items: center; gap: var(--sp-2);
+  height: 26px; padding: 0 var(--sp-2);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-2); color: var(--fg-1); font-size: var(--fs-nano);
+}
+.context-inbox svg { width: 13px; height: 13px; }
+.context-inbox-count {
+  min-width: 16px; padding: 0 4px; border-radius: var(--r-round);
+  background: var(--accent); color: var(--bg-0);
+  font-size: var(--fs-nano); text-align: center;
+}
+@media (max-width: 1100px) {
+  .context-inbox span { display: none; }
+}

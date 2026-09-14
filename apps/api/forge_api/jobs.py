@@ -72,6 +72,11 @@ class Job:
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
+    #: What the job is about -- a strategy id, an account id -- so anything
+    #: recording that it happened can offer a way back to the subject. Never
+    #: the result: that is the artifact's job, and a copy of it here would be a
+    #: second record able to disagree with the first.
+    refs: dict[str, str] = field(default_factory=dict)
 
     @property
     def fraction(self) -> float:
@@ -115,6 +120,7 @@ class Job:
             "elapsed_seconds": round(self.elapsed_seconds, 2),
             "eta_seconds": None if self.eta_seconds is None else round(self.eta_seconds, 1),
             "error": self.error,
+            "refs": dict(self.refs),
             "created_at": self.created_at,
         }
 
@@ -126,6 +132,40 @@ class JobRegistry:
         self._jobs: dict[str, Job] = {}
         self._cancelling: set[str] = set()
         self._lock = threading.Lock()
+        self._finished: Callable[[Job], Any] | None = None
+
+    def on_finish(self, observer: Callable[[Job], Any] | None) -> None:
+        """Be told when a job reaches a terminal state.
+
+        One observer, not a list. This registry is a module-level singleton and
+        an application can be constructed more than once in a process -- every
+        test suite does -- so a list would accumulate observers bound to
+        databases in directories that have since been deleted. A single slot
+        means the most recently built application is the one that hears, which
+        is the only one still able to act.
+
+        The registry stays unaware of what the observer does. Its own contract
+        is unchanged: jobs are recomputable and non-durable, and nothing here
+        starts persisting them.
+        """
+        self._finished = observer
+
+    def _announce(self, job: Job) -> None:
+        """Tell the observer, and never let it affect the job.
+
+        A worker thread has already finished its work by the time this runs.
+        An observer that raises -- a closed database, a deleted directory --
+        must not turn a completed job into a failed one, so the failure is
+        swallowed here rather than propagated into a result somebody is waiting
+        for.
+        """
+        observer = self._finished
+        if observer is None:
+            return
+        try:
+            observer(job)
+        except Exception:  # an observer must never be able to fail a finished job
+            traceback.print_exc()
 
     def submit(
         self,
@@ -133,9 +173,10 @@ class JobRegistry:
         label: str,
         total: int,
         work: Callable[[JobHandle], Any],
+        refs: dict[str, str] | None = None,
     ) -> Job:
         job_id = f"job_{uuid.uuid4().hex[:16]}"
-        job = Job(job_id=job_id, kind=kind, label=label, total=total)
+        job = Job(job_id=job_id, kind=kind, label=label, total=total, refs=dict(refs or {}))
         with self._lock:
             self._jobs[job_id] = job
             self._evict()
@@ -152,6 +193,7 @@ class JobRegistry:
                     job.status = "CANCELLED"
                     job.finished_at = time.time()
                     self._cancelling.discard(job_id)
+                self._announce(job)
                 return
             except Exception as exc:
                 with self._lock:
@@ -160,6 +202,7 @@ class JobRegistry:
                     job.finished_at = time.time()
                     self._cancelling.discard(job_id)
                 traceback.print_exc()
+                self._announce(job)
                 return
             with self._lock:
                 job.status = "DONE"
@@ -167,6 +210,7 @@ class JobRegistry:
                 job.done = job.total
                 job.finished_at = time.time()
                 self._cancelling.discard(job_id)
+            self._announce(job)
 
         threading.Thread(target=run, name=f"job-{kind}", daemon=True).start()
         return job

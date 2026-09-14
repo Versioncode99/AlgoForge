@@ -81,11 +81,13 @@ class PanelKind(StrEnum):
     DESK_ACTIVITY = "desk_activity"
     DESK_RISK = "desk_risk"
     DESK_AI = "desk_ai"
-    # Fund. The Hedge Fund loop's own surfaces, each backed by a deterministic
-    # engine rather than by a narrative: `forge.portfolio`, `forge.risk.portfolio`,
+    # The deterministic book loop, each surface backed by an engine rather than
+    # by a narrative: `forge.portfolio`, `forge.risk.portfolio`,
     # `forge.execution.gate` and the approval and audit stores. They are panel
-    # kinds and not merely screens so a fund operator can put the gate next to
-    # the portfolio it is refusing orders from.
+    # kinds and not merely screens so an operator can put the gate next to the
+    # portfolio it is refusing orders from. Built for the Hedge Fund mode and
+    # kept when that mode went: the engines were always the valuable part, and
+    # the label was always the disposable one.
     FUND_SUMMARY = "fund_summary"
     PORTFOLIO = "portfolio"
     PRETRADE_GATE = "pretrade_gate"
@@ -143,6 +145,18 @@ class Panel(FrozenModel):
     #: `None` means the panel is independent, which is the default.
     link_group: str | None = None
     collapsed: bool = False
+    #: Panels sharing a non-empty stack occupy **one** rectangle as tabs, and
+    #: only `active` one draws. Empty means the panel owns its rectangle alone,
+    #: which is what every panel written before docking existed says.
+    #:
+    #: This is the single primitive the grid did not already have. Splitting,
+    #: resizing and collapsing are all expressible as geometry on a 12-column
+    #: grid; two panels sharing one rectangle is not, because the grid has no
+    #: way to say "these overlap deliberately".
+    stack: str = Field(default="", max_length=120)
+    #: Which tab of a stack is showing. Meaningless outside a stack, where it
+    #: stays true so a panel pulled out of one is not invisible.
+    active: bool = True
 
     @model_validator(mode="after")
     def _fits_the_grid(self) -> Panel:
@@ -278,7 +292,38 @@ class Workspace(FrozenModel):
         duplicates = {panel_id for panel_id in seen if seen.count(panel_id) > 1}
         if duplicates:
             raise ValueError(f"duplicate panel ids: {', '.join(sorted(duplicates))}")
+        cls._stacks_are_sane(panels)
         return panels
+
+    @staticmethod
+    def _stacks_are_sane(panels: tuple[Panel, ...]) -> None:
+        """A stack is one rectangle with one visible tab.
+
+        Both halves are enforced here rather than trusted to the operations,
+        because a workspace arrives from storage and from the API as well as
+        from a docking call, and a stack whose members disagree about geometry
+        renders as panels drawn on top of each other -- which looks like a
+        painting bug and is a data one.
+        """
+        stacks: dict[str, list[Panel]] = {}
+        for panel in panels:
+            if panel.stack:
+                stacks.setdefault(panel.stack, []).append(panel)
+        for name, members in stacks.items():
+            first = members[0]
+            box = (first.x, first.y, first.width, first.height)
+            for member in members[1:]:
+                if (member.x, member.y, member.width, member.height) != box:
+                    raise ValueError(
+                        f"stack '{name}' has members in different places: "
+                        f"'{first.panel_id}' and '{member.panel_id}' must share one rectangle"
+                    )
+            showing = [member.panel_id for member in members if member.active]
+            if len(showing) != 1:
+                shown = ", ".join(showing) or "none"
+                raise ValueError(
+                    f"stack '{name}' must have exactly one active tab, has {len(showing)}: {shown}"
+                )
 
     # ── panel operations, all returning a new workspace ──────────────────────
     # Immutability is the point: a failed edit leaves the caller holding the

@@ -537,37 +537,238 @@ code {
   font-size: var(--fs-nano); color: var(--fg-0);
 }
 
-.chat-thread { display: grid; gap: var(--sp-4); min-height: 300px; max-height: 52vh; overflow-y: auto; }
-.chat-empty { display: grid; gap: var(--sp-3); justify-items: center; text-align: center; padding: var(--sp-8) var(--sp-4); }
-.chat-empty svg { width: 22px; height: 22px; color: var(--fg-3); }
-.chat-empty p { max-width: 52ch; font-size: var(--fs-sm); color: var(--fg-2); line-height: 1.7; }
-.chat-suggest { display: flex; gap: var(--sp-2); flex-wrap: wrap; justify-content: center; }
-.chat-turn { display: grid; gap: var(--sp-2); }
-.chat-q {
-  justify-self: end; max-width: 70%;
-  background: var(--bg-3); border: 1px solid var(--line);
-  border-radius: var(--r) var(--r) 2px var(--r);
-  padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm);
+/* ── the conversation panel ───────────────────────────────────────────────────
+   Two columns at panel width and above: history on the left, the thread on the
+   right. The whole thing has to work inside a workspace tile, which is why the
+   history collapses rather than the layout changing -- a panel that needs a
+   full screen is a screen with a panel's name on it.
+
+   No bubbles. The old console gave the operator a rounded speech shape and the
+   assistant a bordered card, which is a messaging app's vocabulary: it says
+   "two people are talking" where the honest thing to say is "you asked, and
+   this is what the system produced and how". A message is a paragraph with a
+   label, and the label is the part that matters. */
+.chat-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 232px) minmax(0, 1fr);
+  gap: var(--sp-3);
+  min-height: 0;
+  height: 100%;
 }
-.chat-a {
-  max-width: 82%; border-left: 2px solid var(--brand);
-  background: var(--bg-2); border-radius: 0 var(--r) var(--r) 0;
-  padding: var(--sp-3);
+
+.chat-panel.compact { grid-template-columns: minmax(0, 1fr); }
+.chat-panel.compact .chat-history {
+  /* At panel width the history overlays rather than squeezing the thread into
+     something unreadable. */
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--bg-1);
 }
-.chat-a p { font-size: var(--fs-sm); line-height: 1.75; color: var(--fg-0); white-space: pre-wrap; }
+
+.chat-main {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.chat-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--fg-0);
+}
+
+/* ── history ── */
+.chat-history {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--sp-2);
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  padding-right: var(--sp-2);
+}
+
+.ch-head { display: flex; gap: var(--sp-2); align-items: center; }
+
+.ch-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 0 var(--sp-2);
+  background: var(--bg-0);
+}
+.ch-search svg { width: 12px; height: 12px; color: var(--fg-3); flex: none; }
+.ch-search input {
+  flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg-0);
+  padding: 4px 0; font-size: var(--fs-micro);
+}
+.ch-search input:focus { outline: none; }
+
+.chat-history ul { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; }
+.chat-history li {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+}
+.chat-history li.on { border-color: var(--line-strong); background: var(--bg-2); }
+.chat-history li:hover .ch-tools { opacity: 1; }
+
+.ch-open {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: var(--sp-2);
+}
+.ch-open strong {
+  font-size: var(--fs-micro); color: var(--fg-0);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ch-preview {
+  font-size: var(--fs-nano); color: var(--fg-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ch-meta { font-size: var(--fs-nano); color: var(--fg-3); }
+
+.ch-tools { display: flex; flex-direction: column; gap: 1px; opacity: 0; transition: opacity var(--t-fast); }
+.ch-tools button {
+  border: 0; background: transparent; color: var(--fg-3); cursor: pointer; padding: 3px;
+}
+.ch-tools button:hover { color: var(--fg-0); }
+.ch-tools svg { width: 12px; height: 12px; }
+.ch-none { padding: var(--sp-3); font-size: var(--fs-micro); color: var(--fg-3); }
+
+/* ── attached context ── */
+.chat-context { display: flex; flex-wrap: wrap; gap: 4px; padding: var(--sp-2) 0; }
+.chat-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--line); border-radius: var(--r-round);
+  padding: 2px var(--sp-2); font-size: var(--fs-nano); color: var(--fg-1);
+}
+.chat-chip i {
+  font-style: normal; font-family: var(--font-label);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3);
+}
+.chat-chip button { border: 0; background: transparent; color: var(--fg-3); cursor: pointer; padding: 0; display: flex; }
+.chat-chip button:hover { color: var(--fail); }
+.chat-chip svg { width: 10px; height: 10px; }
+
+/* ── the thread ── */
+.chat-thread {
+  display: grid; gap: var(--sp-4);
+  align-content: start;
+  overflow-y: auto; min-height: 0;
+  padding: var(--sp-3) 0;
+}
+.chat-empty { display: grid; gap: var(--sp-3); padding: var(--sp-6) 0; }
+.chat-empty p { max-width: 60ch; font-size: var(--fs-micro); color: var(--fg-2); line-height: var(--lh-loose); }
+.chat-suggest { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+
+.chat-msg { display: grid; gap: 6px; }
+.chat-msg > header { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+.chat-who {
+  font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3);
+}
+.chat-text {
+  margin: 0; font-size: var(--fs-sm); line-height: var(--lh-loose);
+  color: var(--fg-0); white-space: pre-wrap;
+}
+.chat-msg.user .chat-text { color: var(--fg-1); }
+
+/* The standing. Distinct colours, because the distinction is the feature: a
+   stated belief must not be able to pass for a judged result by being in the
+   same typeface. */
+.chat-standing {
+  padding: 0 6px; border-radius: var(--r-round);
+  border: 1px solid var(--line-strong);
+  font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .04em; color: var(--fg-2); cursor: help;
+}
+.chat-standing.deterministic { border-color: var(--verdict-pass); color: var(--verdict-pass); }
+.chat-standing.action_result { border-color: var(--info); color: var(--info); }
+.chat-standing.model_prose { border-color: var(--verdict-unknown); color: var(--verdict-unknown); }
+.chat-standing.user_statement { border-color: var(--line-strong); color: var(--fg-3); }
+
 .chat-model {
-  display: inline-block; margin-bottom: 6px;
-  font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano);
-  letter-spacing: .1em; text-transform: uppercase; color: var(--fg-3);
+  font-size: var(--fs-nano); color: var(--fg-3);
 }
-.chat-note { display: block; margin-top: var(--sp-2); font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); color: var(--warn); }
-.chat-pending { font-family: var(--font-label); font-weight: 600; font-size: var(--fs-nano); color: var(--fg-3); }
-.chat-input { display: flex; gap: var(--sp-2); border-top: 1px solid var(--line); padding: var(--sp-3); }
+
+/* ── what it did ── */
+.chat-activity { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.chat-activity li {
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  font-size: var(--fs-nano); color: var(--fg-2);
+}
+.chat-activity code { background: transparent; padding: 0; color: var(--fg-1); }
+.ca-mark { width: 10px; }
+.chat-activity li.ok .ca-mark { color: var(--pass); }
+/* A refusal and a failure mean opposite things about the system. One grey
+   "error" row for both would teach somebody to ignore both. */
+.chat-activity li.refused .ca-mark, .chat-activity li.refused .ca-word { color: var(--warn); }
+.chat-activity li.failed .ca-mark, .chat-activity li.failed .ca-word { color: var(--fail); }
+.ca-word { font-family: var(--font-label); letter-spacing: .04em; }
+.ca-ms { color: var(--fg-3); }
+.ca-reason { flex-basis: 100%; margin: 0 0 0 16px; color: var(--fg-3); line-height: var(--lh); }
+
+/* ── artifacts ── */
+.chat-artifacts { display: grid; gap: 4px; }
+.chat-artifact {
+  display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: var(--sp-2); background: var(--bg-2);
+}
+.art-kind {
+  font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3);
+}
+.chat-artifact strong { font-size: var(--fs-micro); color: var(--fg-0); }
+.art-refs { font-size: var(--fs-nano); color: var(--fg-3); }
+.art-open { margin-left: auto; font-size: var(--fs-nano); color: var(--accent); }
+.art-open.disabled { color: var(--fg-3); }
+
+.chat-working, .chat-failed {
+  margin: 0; font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .04em; color: var(--fg-3);
+}
+.chat-failed { color: var(--fail); }
+
+/* ── the composer ── */
+.chat-input { display: flex; gap: var(--sp-2); border-top: 1px solid var(--line); padding-top: var(--sp-3); }
 .chat-input input {
-  flex: 1; background: var(--bg-0); border: 1px solid var(--line); color: var(--fg-0);
+  flex: 1; min-width: 0;
+  background: var(--bg-0); border: 1px solid var(--line); color: var(--fg-0);
   border-radius: var(--r-sm); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm);
 }
 .chat-input input:focus { outline: none; border-color: var(--brand); }
+
+/* The console route is the same panel with room to breathe. */
+.console-view .chat-panel { min-height: 62vh; }
 
 /* Research integrity cockpit */
 .research-title, .prop-title { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-4); }
@@ -750,3 +951,128 @@ code {
 @media (max-width: 900px) {
   .appearance-row { grid-template-columns: 1fr; gap: 4px; }
 }
+
+/* ── cross-platform porting ───────────────────────────────────────────────────
+   The differences lead and the code follows. A panel that put a Generate button
+   first would be the shape of the problem it exists to prevent: somebody pastes
+   a file that compiles and trades a strategy that is not the one they
+   validated. What did not cross is three lines, and it is the part that decides
+   whether the port is usable. */
+.port-panel { display: grid; gap: var(--sp-3); }
+
+.port-targets { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.port-target {
+  display: grid; gap: 1px; text-align: left; cursor: pointer;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-2); color: var(--fg-1);
+}
+.port-target.active { border-color: var(--accent); background: var(--bg-raised); }
+.port-target strong { font-size: var(--fs-micro); color: var(--fg-0); }
+/* Whether a target is generated or only analysed is a different offer, so it
+   is on the chooser rather than discovered after picking one. */
+.port-target span {
+  font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .04em; color: var(--fg-3);
+}
+
+.port-note, .port-status-note, .port-caveat, .port-nocode {
+  margin: 0; font-size: var(--fs-micro); line-height: var(--lh); color: var(--fg-2);
+}
+.port-caveat { color: var(--fg-3); }
+
+.port-head { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
+
+/* Four states, four colours. Structural and verified rendered as adjacent green
+   badges would be read as the same claim, and the gap between "the pieces line
+   up" and "somebody ran both and compared the trades" is the whole panel. */
+.port-status {
+  padding: 2px var(--sp-2); border-radius: var(--r-round);
+  border: 1px solid var(--line-strong);
+  font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .06em; text-transform: uppercase; cursor: help;
+}
+.port-status.verified { border-color: var(--verdict-pass); color: var(--verdict-pass); }
+.port-status.structural { border-color: var(--info); color: var(--info); }
+.port-status.approximate { border-color: var(--verdict-unknown); color: var(--verdict-unknown); }
+.port-status.incomplete { border-color: var(--verdict-fail); color: var(--verdict-fail); }
+.port-counts { font-size: var(--fs-nano); color: var(--fg-3); }
+
+.port-elements ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.port-elements li {
+  display: grid; gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line); border-left-width: 2px; border-radius: var(--r-sm);
+  background: var(--bg-2);
+}
+.port-elements li.equivalent { border-left-color: var(--verdict-pass); }
+.port-elements li.approximated { border-left-color: var(--verdict-unknown); }
+.port-elements li.unsupported { border-left-color: var(--verdict-fail); }
+.pe-fidelity, .pe-part {
+  font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3);
+}
+.port-elements li strong { font-size: var(--fs-micro); color: var(--fg-0); }
+.pe-detail { margin: 0; font-size: var(--fs-nano); line-height: var(--lh); color: var(--fg-2); }
+
+.port-clean { margin: 0; font-size: var(--fs-micro); color: var(--fg-2); }
+.port-toggle {
+  justify-self: start; padding: 0; border: 0; background: transparent;
+  color: var(--fg-2); cursor: pointer;
+  font-family: var(--font-label); font-size: var(--fs-nano); letter-spacing: .04em;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.port-toggle:hover { color: var(--fg-0); }
+
+.port-code summary {
+  cursor: pointer; font-family: var(--font-label); font-size: var(--fs-nano);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--fg-2);
+}
+.port-code pre {
+  margin: var(--sp-2) 0 0; padding: var(--sp-3); overflow: auto;
+  max-height: 40vh;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-0);
+  font-size: var(--fs-nano); line-height: var(--lh);
+}
+
+/* Only rendered inside the desktop shell: a browser cannot give a workspace its
+   own OS window, and a button that silently does nothing is worse than absent. */
+.ws-window {
+  border: 0; background: transparent; color: var(--fg-3); cursor: pointer;
+  padding: var(--sp-1); display: flex; align-items: center;
+}
+.ws-window:hover { color: var(--fg-0); }
+.ws-window svg { width: 13px; height: 13px; }
+
+/* ── routing recommendations ────────────────────────────────────────────────
+   A row that suggests a change looks different from one that says there is not
+   enough evidence yet, because they are opposite statements and a uniform list
+   makes the second read as the first. */
+.routing-advice {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 2px solid var(--line);
+  background: var(--bg-1);
+}
+.routing-advice[data-actionable='yes'] { border-left-color: var(--accent); background: var(--bg-2); }
+.routing-advice-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+.routing-advice-head strong { color: var(--fg-0); font-size: var(--fs-xs); }
+.routing-advice-head .mono { color: var(--fg-2); font-size: var(--fs-nano); }
+.routing-advice-head .suggested { color: var(--fg-0); }
+
+/* ── a chart inside a turn ───────────────────────────────────────────────────
+   Collapsed by default: a thread is a record of a session's work, and a wall of
+   charts is not readable. The reader opens the one they want. */
+.art-visual { grid-column: 1 / -1; display: grid; gap: var(--sp-2); }
+.art-visual-toggle {
+  justify-self: start;
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-2); color: var(--fg-2); font-size: var(--fs-nano);
+}
+.art-visual-toggle:hover { border-color: var(--line-strong); color: var(--fg-0); }
+.art-visual-body { display: grid; gap: var(--sp-1); }
+.art-visual-caption { margin: 0; color: var(--fg-3); font-size: var(--fs-nano); line-height: 1.5; }
+.art-visual-state { margin: 0; color: var(--fg-3); font-size: var(--fs-nano); line-height: 1.5; }

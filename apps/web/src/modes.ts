@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getJson, postJson } from './api'
 
-/* The four operating environments, as the interface sees them.
+/* The three operating environments, as the interface sees them.
  *
  * Every shape here mirrors what `forge.modes` declares. The shell does not hold
  * its own copy of the navigation, the taglines or the limitations: it renders
@@ -9,7 +9,7 @@ import { getJson, postJson } from './api'
  * without an edit, and one removed cannot linger in a rail pointing at nothing.
  */
 
-export type ModeKey = 'normal' | 'prop_firm' | 'ai' | 'hedge_fund'
+export type ModeKey = 'normal' | 'prop_firm' | 'ai'
 export type Stance = 'human_in_the_loop' | 'autonomous'
 
 export type Section = {

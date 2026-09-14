@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from forge.contracts.hashing import stable_id
+from forge.research import identity
 from forge.research.allocation import Bucket, ResearchAllocation
 
 SCHEMA_VERSION = 1
@@ -181,6 +182,11 @@ class Campaign:
     archived_at: str = ""
     parent_campaign_id: str = ""
     tags: tuple[str, ...] = ()
+    #: The identity of the configuration this campaign last *ran* under, as
+    #: `forge.research.identity` serialises it. Empty until it has run once,
+    #: and empty on every campaign created before identities existed -- both of
+    #: which compare as UNKNOWN and are allowed to resume.
+    run_identity: str = ""
 
     @property
     def archived(self) -> bool:
@@ -348,6 +354,9 @@ class CampaignStore:
         # The campaign this was duplicated from, for provenance.
         ("parent_campaign_id", "TEXT", "''"),
         ("tags", "TEXT", "'[]'"),
+        # The configuration the campaign last ran under, so a resume can tell a
+        # continuation from a different question wearing the same id.
+        ("run_identity", "TEXT", "''"),
     )
 
     def _migrate(self, db: sqlite3.Connection) -> None:
@@ -450,8 +459,8 @@ class CampaignStore:
                 "start_date, end_date, allocation, stopping, capabilities, web_research, "
                 "seed, status, progress, stopped_reason, schema_version, created_at, "
                 "updated_at, description, priority, agent_target, archived_at, "
-                "parent_campaign_id, tags) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "parent_campaign_id, tags, run_identity) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     campaign.campaign_id,
                     campaign.name,
@@ -479,6 +488,7 @@ class CampaignStore:
                     campaign.archived_at,
                     campaign.parent_campaign_id,
                     json.dumps(list(campaign.tags)),
+                    campaign.run_identity,
                 ),
             )
         return campaign
@@ -553,10 +563,31 @@ class CampaignStore:
             campaign = self.get(campaign_id)
             if campaign is None:
                 raise CampaignError(f"No campaign '{campaign_id}'.")
-            if status == "running" and campaign.archived:
-                raise CampaignError(
-                    f"'{campaign.name}' is archived. Restore it before running it again."
-                )
+            if status == "running":
+                if campaign.archived:
+                    raise CampaignError(
+                        f"'{campaign.name}' is archived. Restore it before running it again."
+                    )
+                # A campaign re-attaches to its frontier, hypotheses, agent
+                # claims and skip ledger by id alone. If the configuration that
+                # decides what the research *means* has changed since it last
+                # ran, that accumulated state answers a different question --
+                # and nothing about the resumed run looks wrong, which is what
+                # makes it worth refusing rather than warning about.
+                #
+                # Refusing rather than clearing: `duplicate` already exists for
+                # carrying a configuration forward with a clean slate, and
+                # deleting a research programme to let a start succeed would be
+                # the destructive reading of an ambiguous request.
+                current = identity.of(campaign)
+                outcome = identity.compare(identity.parse(campaign.run_identity), current)
+                if not outcome.resumable:
+                    raise CampaignError(
+                        f"'{campaign.name}' cannot resume because {outcome.reason()}. "
+                        "Duplicate it to research the new configuration from a clean "
+                        "frontier, or put the previous configuration back."
+                    )
+                campaign.run_identity = current.as_json()
             campaign.status = status
             campaign.stopped_reason = reason
             return self.save(campaign)
@@ -738,6 +769,7 @@ def _to_campaign(row: sqlite3.Row) -> Campaign:
         archived_at=_column(row, "archived_at", "") or "",
         parent_campaign_id=_column(row, "parent_campaign_id", "") or "",
         tags=tuple(json.loads(_column(row, "tags", "[]") or "[]")),
+        run_identity=_column(row, "run_identity", "") or "",
     )
 
 

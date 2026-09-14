@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from forge.modes.models import MODE_ORDER, Stance, WorkspaceMode
+from forge.modes.models import MODE_ORDER, MODES, Stance, WorkspaceMode
 from forge.modes.permissions import ActionFacts, Actor, Ruling, evaluate
 from forge.prop.account import AccountRules, AccountState
 from forge.prop.accounts import PropAccountStore
@@ -468,11 +468,11 @@ def test_no_ai_actor_may_write_to_the_desk_in_any_mode(registry, name) -> None:
     open.
     """
     for mode in MODE_ORDER:
-        stances: tuple[Stance | None, ...] = (
-            (None, Stance.HUMAN_IN_THE_LOOP, Stance.AUTONOMOUS)
-            if mode is WorkspaceMode.HEDGE_FUND
-            else (None,)
-        )
+        # Read out of the manifest rather than naming the mode that carries
+        # stances: which one that is has already changed once, and a test that
+        # knows the answer stops covering the configurations when it changes
+        # again.
+        stances: tuple[Stance | None, ...] = MODES[mode].stances or (None,)
         for stance in stances:
             judgement = evaluate(
                 facts(registry, name), actor=Actor.AI, mode=mode, stance=stance
@@ -816,9 +816,7 @@ def test_the_risk_writing_actions_are_denied_to_ai_in_every_mode(tmp_path, monke
             protected=action.protected,
         )
         for mode in MODE_ORDER:
-            for stance in (None, Stance.HUMAN_IN_THE_LOOP, Stance.AUTONOMOUS):
-                if stance is not None and mode is not WorkspaceMode.HEDGE_FUND:
-                    continue
+            for stance in MODES[mode].stances or (None,):
                 ruling = evaluate(facts, actor=Actor.AI, mode=mode, stance=stance)
                 assert ruling.ruling is Ruling.DENY, f"{name} reachable in {mode}/{stance}"
 

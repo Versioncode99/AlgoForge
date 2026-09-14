@@ -1,4 +1,6 @@
+import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { getJson } from '../api'
 import type {
   ModelInfo,
   RoutingDecision,
@@ -6,6 +8,33 @@ import type {
   RoutingRole,
   SettingsPayload,
 } from '../types'
+
+/** One role's reading, as `/routing/recommendations` returns it. */
+export type Recommendation = {
+  role: string
+  assigned: string
+  suggested: string
+  reason: string
+  actionable: boolean
+  assigned_calls: number
+  suggested_calls: number
+  assigned_rate: number
+  suggested_rate: number
+}
+
+/** One role-and-model row of `/routing/observations`. */
+export type RoutingSummaryRow = {
+  role: string
+  model: string
+  provider: string
+  calls: number
+  ok: number
+  refused: number
+  failed: number
+  success_rate: number
+  latency_ms: number
+  with_outcome: number
+}
 
 /** Model routing, budget enforcement, and external research.
  *
@@ -237,6 +266,115 @@ export function ModelRoutingPanel({
   )
 }
 
+/** What the models actually did, and what that suggests.
+ *
+ * §24 wants routing that can be learned from and cannot quietly learn, so this
+ * is a reading surface with a button the operator presses. There is no code
+ * path from a recommendation to a setting, and the panel says so rather than
+ * leaving it to be assumed — a screen that showed "recommended" next to a
+ * silent auto-apply would be the opaque self-modifying system the directive
+ * rules out, wearing an honest label.
+ *
+ * A role with too little evidence still gets a row, saying how many more calls
+ * would settle it. An absent row reads as "nothing to see", which is a
+ * different claim from "not enough to say yet".
+ */
+export function RoutingEvidencePanel({ patch }: { patch: Patch }) {
+  const advice = useQuery({
+    queryKey: ['routing-recommendations'],
+    queryFn: () => getJson<{
+      recommendations: Recommendation[]
+      actionable: number
+    }>('/routing/recommendations'),
+  })
+  const observed = useQuery({
+    queryKey: ['routing-observations'],
+    queryFn: () => getJson<{ summary: RoutingSummaryRow[] }>('/routing/observations'),
+  })
+
+  const rows = advice.data?.recommendations ?? []
+  const summary = observed.data?.summary ?? []
+
+  return (
+    <div className="panel">
+      <header>
+        <h2>Model evidence · what each one did</h2>
+        <span className="sub">
+          {advice.data?.actionable
+            ? `${advice.data.actionable} worth acting on`
+            : 'nothing worth changing'}
+        </span>
+      </header>
+      <div className="panel-body stack">
+        {summary.length === 0 && (
+          <p className="sub">
+            No model calls recorded yet. Every call an agent makes is written down with its
+            role, model, provider, outcome and latency; recommendations appear once there
+            are enough of them to mean something.
+          </p>
+        )}
+
+        {rows.map((row) => (
+          <div key={row.role} className="routing-advice" data-actionable={row.actionable ? 'yes' : undefined}>
+            <div className="routing-advice-head">
+              <strong>{row.role}</strong>
+              <span className="mono">{row.assigned}</span>
+              {row.actionable && (
+                <>
+                  <span aria-hidden="true">→</span>
+                  <span className="mono suggested">{row.suggested}</span>
+                </>
+              )}
+            </div>
+            <p className="sub">{row.reason}</p>
+            {row.actionable && (
+              <button
+                className="btn tiny"
+                onClick={() => patch({ ai: { model_routing: { roles: { [row.role]: { model: row.suggested } } } } })}
+              >
+                Use {row.suggested} for {row.role}
+              </button>
+            )}
+          </div>
+        ))}
+
+        {summary.length > 0 && (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Role</th><th>Model</th>
+                  <th className="num">Calls</th><th className="num">Succeeded</th>
+                  <th className="num">Latency</th><th className="num">With outcome</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.map((row) => (
+                  <tr key={`${row.role}/${row.model}`}>
+                    <td>{row.role}</td>
+                    <td className="mono">{row.model}</td>
+                    <td className="mono num">{row.calls}</td>
+                    <td className="mono num">{Math.round(row.success_rate * 100)}%</td>
+                    <td className="mono num">{Math.round(row.latency_ms)}ms</td>
+                    {/* Blank where nothing downstream was ever attached, rather
+                        than a zero: unmeasured and none are different facts. */}
+                    <td className="mono num">{row.with_outcome || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p className="warning">
+          Nothing on this screen changes routing. A recommendation is a reading of the rows
+          above it, and applying one is an edit you make.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 /** Budget enforcement, and what it is not.
  *
  * The switch is the feature. An operator running an overnight campaign on a
@@ -248,26 +386,50 @@ export function BudgetPanel({
   settings, patch,
 }: { settings: SettingsPayload; patch: Patch }) {
   const budget = settings.ai.budget
-  const on = budget.enforced
+  const modes = settings.budget_modes ?? []
+  const current = budget.mode
+  const chosen = modes.find((row) => row.key === current)
   return (
     <div className="panel">
       <header>
         <h2>Research budget</h2>
-        <div className="panel-actions">
-          <button
-            className={on ? 'btn primary' : 'btn'}
-            onClick={() => patch({ budget_enforced: !on })}
-          >
-            {on ? 'Enforcement ON' : 'Enforcement OFF'}
-          </button>
-        </div>
       </header>
       <div className="panel-body">
-        {!on && (
+        {/* Three modes rather than a switch, because the middle one is the one
+            an operator wants: spend freely while it is cheap, stop when it is
+            not. Rendered from the server's own list, so the screen cannot offer
+            a mode the code no longer implements. */}
+        <div className="ctl range-ctl">
+          <span>Mode</span>
+          <div className="range-buttons" role="group" aria-label="Budget mode">
+            {modes.map((row) => (
+              <button
+                key={row.key}
+                className={row.key === current ? 'active af-press' : 'af-press'}
+                aria-pressed={row.key === current}
+                title={row.detail}
+                onClick={() => patch({ budget_mode: row.key })}
+              >
+                {row.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {chosen && <p className="sub">{chosen.detail}</p>}
+
+        {current === 'UNLIMITED_WITH_SAFETY_LIMITS' && (
           <p className="warning">
             <b>No research ceiling is being enforced.</b> Campaigns run until they finish
             or you stop them. Accounting still runs, so what was spent is still measured;
             the system safety limits below are unaffected.
+          </p>
+        )}
+        {current === 'ADAPTIVE' && (
+          <p className="warning">
+            <b>The ceilings below apply once today's spend passes
+            ${budget.daily_usd_soft}.</b> Until then nothing stops a campaign. If the day's
+            spend cannot be read, the ceilings apply — not knowing what has been spent is
+            not the same as knowing it is low.
           </p>
         )}
         <div className="stack">
@@ -282,8 +444,11 @@ export function BudgetPanel({
           ] as const).map(([key, label, note]) => (
             <label className="budget-row" key={key}>
               <span>{label}<small>{note}</small></span>
+              {/* Editable under ADAPTIVE too: these are the numbers that will
+                  apply once the threshold is crossed, and locking them would
+                  make the mode unconfigurable until it started biting. */}
               <input
-                type="number" step="1" min="0" disabled={!on}
+                type="number" step="1" min="0" disabled={!budget.enforced}
                 defaultValue={budget[key]}
                 aria-label={label}
                 onBlur={(e) => {
@@ -294,7 +459,7 @@ export function BudgetPanel({
             </label>
           ))}
         </div>
-        <h3 className="sub">In force whatever this switch says</h3>
+        <h3 className="sub">In force whatever mode is chosen</h3>
         <table className="tbl">
           <tbody>
             {settings.safety_limits.map((limit) => (

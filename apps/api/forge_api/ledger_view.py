@@ -32,6 +32,7 @@ import threading
 from datetime import UTC, datetime
 from typing import Any
 
+from forge.analytics.reading import read as read_regimes
 from forge.analytics.regime import (
     SHORT_LABEL,
     Basis,
@@ -42,6 +43,7 @@ from forge.analytics.regime import (
     classify,
     summarise,
 )
+from forge.analytics.resample import compare as compare_resamples
 
 #: How many trades a single response will carry. A chart cannot usefully draw
 #: more, and a caller that wants the whole ledger should page.
@@ -462,9 +464,57 @@ class TradeLedgerService:
         report = summarise(trades, marks, own, attribution=attribution)  # type: ignore[arg-type]
         return {
             **report.model_dump(mode="json"),
+            # The grid, and what it says. Derived here rather than in the
+            # browser so the sentences a reader is shown and the numbers a test
+            # asserts on come out of the same function: a surface that composed
+            # its own prose from the cells would be a second, unversioned
+            # interpretation of the same evidence.
+            "reading": read_regimes(report).model_dump(mode="json"),
             "strategy_id": strategy_id,
             "backtest_id": payload.get("backtest_id"),
             "dataset_key": dataset,
+        }
+
+    #: Bounds on the path count a caller may ask for. Fewer than a hundred is
+    #: noise rather than a distribution; more than twenty thousand buys nothing
+    #: the trade count did not already limit.
+    RESAMPLE_MIN_PATHS = 100
+    RESAMPLE_MAX_PATHS = 20_000
+
+    def resample_report(
+        self,
+        strategy_id: str,
+        *,
+        backtest_id: str | None = None,
+        paths: int = 2000,
+        seed: int = 20260908,
+        attribution: str = "entry",
+    ) -> dict[str, Any]:
+        """One backtest read as a distribution, twice: IID and regime-aware.
+
+        Lives here rather than in the route because the route is no longer the
+        only caller -- the action registry reaches the same analysis, and two
+        copies of a Monte Carlo study are two studies that can disagree about
+        the same strategy. The route and the verb now return the same object.
+        """
+        payload = self.resolve(strategy_id, backtest_id)
+        series, times, _ = self.classified(payload)
+        trades = _TradeShim.many(payload)
+        if len(trades) < 2:
+            raise LedgerError("resampling needs at least two trades")
+        marks = attribute_at_times(trades, series, times)
+        comparison = compare_resamples(
+            trades,
+            marks,
+            series,
+            paths=max(self.RESAMPLE_MIN_PATHS, min(int(paths), self.RESAMPLE_MAX_PATHS)),
+            seed=int(seed),
+            attribution=attribution,
+        )
+        return {
+            **comparison.model_dump(mode="json"),
+            "strategy_id": strategy_id,
+            "backtest_id": payload.get("backtest_id"),
         }
 
 
@@ -490,7 +540,6 @@ def _matches(
     if start and str(row["exit_time"]) < start:
         return False
     return not (end and str(row["entry_time"]) > end)
-
 
 class _TradeShim:
     """A trade dict wearing the attribute access the analytics expect.

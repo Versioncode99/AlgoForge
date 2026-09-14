@@ -44,7 +44,7 @@ import sqlite3
 import threading
 from collections.abc import Iterable, Sequence
 from contextlib import closing
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -54,6 +54,7 @@ from xml.etree import ElementTree
 import httpx
 
 from forge.contracts.hashing import stable_id
+from forge.research.untrusted import digest, sanitise
 
 SCHEMA_VERSION = 1
 
@@ -167,6 +168,33 @@ class Source:
     #: the index; it never means the full paper was read.
     content_level: str
     evidence: str = "UNREVIEWED"
+    #: A digest over what was retrieved, taken at retrieval. The engine builds
+    #: hypotheses out of these abstracts, so an abstract edited afterwards
+    #: changes what gets researched from then on; this is what makes that
+    #: detectable rather than invisible.
+    content_hash: str = ""
+    #: Invisible characters sanitising took out, by name. Usually empty. A
+    #: source that arrives carrying a right-to-left override is a document that
+    #: displays differently from what it says, which is worth a person knowing.
+    sanitised: tuple[str, ...] = ()
+
+    def verify(self) -> bool:
+        """Does the stored text still hash to what was recorded at retrieval?
+
+        A source stored before hashing existed has no recorded digest, and reads
+        as unverifiable rather than as tampered -- absent evidence and failed
+        evidence are different findings.
+        """
+        return bool(self.content_hash) and self.content_hash == self.compute_hash()
+
+    def compute_hash(self) -> str:
+        return digest(
+            title=self.title,
+            authors=self.authors,
+            url=self.url,
+            published=self.published,
+            abstract=self.abstract,
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -183,6 +211,8 @@ class Source:
             "query": self.query,
             "content_level": self.content_level,
             "evidence": self.evidence,
+            "content_hash": self.content_hash,
+            "sanitised": list(self.sanitised),
             "origin": self.source,
             "templates": [],
             "replication_gap": (
@@ -192,10 +222,40 @@ class Source:
         }
 
 
-def _clean(text: str, limit: int = MAX_ABSTRACT) -> str:
-    """Strip markup and collapse whitespace, without rewording anything."""
+#: What sanitising a retrieval removed, accumulated across one source's fields.
+#: A module-level structure would be a shared mutable, so it is threaded through
+#: `_clean` by the caller instead.
+def _clean(
+    text: str, limit: int = MAX_ABSTRACT, removed: list[str] | None = None
+) -> str:
+    """Strip markup, invisible characters and whitespace, without rewording.
+
+    Sanitising runs *before* the length cap, so a source cannot pad itself past
+    the limit with zero-width characters and push the substantive end of its
+    abstract out of the stored text.
+
+    What was removed is appended to `removed` when a list is given. Silently
+    fixing an abstract that displays differently from what it says would make
+    this the only thing that ever noticed.
+    """
     stripped = re.sub(r"<[^>]+>", " ", text or "")
-    return re.sub(r"\s+", " ", stripped).strip()[:limit]
+    safe, taken = sanitise(stripped)
+    if removed is not None:
+        for name in taken:
+            if name not in removed:
+                removed.append(name)
+    return re.sub(r"\s+", " ", safe).strip()[:limit]
+
+
+
+def _hashed(source: Source) -> Source:
+    """Stamp a retrieved source with a digest of what was retrieved.
+
+    Taken here rather than at storage time, over the sanitised text that is
+    actually kept: hashing the raw response would record a digest of something
+    nothing ever reads back, and could never detect an edit to the stored copy.
+    """
+    return replace(source, content_hash=source.compute_hash())
 
 
 def extract_claims(abstract: str, *, query: str = "", limit: int = 4) -> tuple[Claim, ...]:
@@ -307,29 +367,34 @@ def search_arxiv(
     retrieved_at = datetime.now(UTC).isoformat()
     found: list[Source] = []
     for entry in root.findall(f"{_ATOM}entry"):
-        title = _clean(entry.findtext(f"{_ATOM}title", ""), 500)
+        removed: list[str] = []
+        title = _clean(entry.findtext(f"{_ATOM}title", ""), 500, removed)
         link = entry.findtext(f"{_ATOM}id", "") or ""
         if not title or not link:
             continue
-        abstract = _clean(entry.findtext(f"{_ATOM}summary", ""))
+        abstract = _clean(entry.findtext(f"{_ATOM}summary", ""), MAX_ABSTRACT, removed)
         authors = ", ".join(
-            _clean(a.findtext(f"{_ATOM}name", ""), 80) for a in entry.findall(f"{_ATOM}author")[:8]
+            _clean(a.findtext(f"{_ATOM}name", ""), 80, removed)
+            for a in entry.findall(f"{_ATOM}author")[:8]
         )
         published = (entry.findtext(f"{_ATOM}published", "") or "")[:10]
         found.append(
-            Source(
-                source_id=stable_id("arxiv", link),
-                title=title,
-                authors=authors,
-                source="arxiv",
-                url=link,
-                published=published,
-                retrieved_at=retrieved_at,
-                abstract=abstract,
-                claims=extract_claims(abstract, query=query),
-                relevance=score_relevance(title, abstract, query),
-                query=query,
-                content_level="abstract" if abstract else "metadata",
+            _hashed(
+                Source(
+                    source_id=stable_id("arxiv", link),
+                    title=title,
+                    authors=authors,
+                    source="arxiv",
+                    url=link,
+                    published=published,
+                    retrieved_at=retrieved_at,
+                    abstract=abstract,
+                    claims=extract_claims(abstract, query=query),
+                    relevance=score_relevance(title, abstract, query),
+                    query=query,
+                    content_level="abstract" if abstract else "metadata",
+                    sanitised=tuple(removed),
+                )
             )
         )
     return found
@@ -364,27 +429,32 @@ def search_crossref(
         titles = raw.get("title") or []
         if not doi or not titles:
             continue
-        title = _clean(str(titles[0]), 500)
-        abstract = _clean(str(raw.get("abstract", "")))
+        removed: list[str] = []
+        title = _clean(str(titles[0]), 500, removed)
+        abstract = _clean(str(raw.get("abstract", "")), MAX_ABSTRACT, removed)
         parts = (raw.get("published") or {}).get("date-parts") or [[]]
         published = "-".join(f"{p:02d}" if i else str(p) for i, p in enumerate(parts[0][:3]))
-        publisher = _clean(str(raw.get("publisher", "")), 120)
+        publisher = _clean(str(raw.get("publisher", "")), 120, removed)
         found.append(
-            Source(
-                source_id=stable_id("paper", doi.lower()),
-                title=title,
-                authors=", ".join(
-                    _clean(str(a.get("family", "")), 80) for a in (raw.get("author") or [])[:8]
-                ),
-                source=f"crossref:{publisher}" if publisher else "crossref",
-                url="https://doi.org/" + quote(doi, safe="/"),
-                published=published,
-                retrieved_at=retrieved_at,
-                abstract=abstract,
-                claims=extract_claims(abstract, query=query),
-                relevance=score_relevance(title, abstract, query),
-                query=query,
-                content_level="abstract" if abstract else "metadata",
+            _hashed(
+                Source(
+                    source_id=stable_id("paper", doi.lower()),
+                    title=title,
+                    authors=", ".join(
+                        _clean(str(a.get("family", "")), 80, removed)
+                        for a in (raw.get("author") or [])[:8]
+                    ),
+                    source=f"crossref:{publisher}" if publisher else "crossref",
+                    url="https://doi.org/" + quote(doi, safe="/"),
+                    published=published,
+                    retrieved_at=retrieved_at,
+                    abstract=abstract,
+                    claims=extract_claims(abstract, query=query),
+                    relevance=score_relevance(title, abstract, query),
+                    query=query,
+                    content_level="abstract" if abstract else "metadata",
+                    sanitised=tuple(removed),
+                )
             )
         )
     return found

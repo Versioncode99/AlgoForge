@@ -136,6 +136,8 @@ export function EvidenceView() {
   const provenance = d?.provenance
   const dissent = d?.dissent
   const claims = (dissent?.claims ?? []) as Array<Record<string, unknown>>
+  const objections = (dissent?.objections ?? []) as Array<Record<string, unknown>>
+  const synthesis = dissent?.synthesis as Record<string, unknown> | undefined
   const ancestors = (provenance?.ancestors ?? []) as Array<Record<string, unknown>>
 
   return <section className="stack evidence-view">
@@ -257,6 +259,61 @@ export function EvidenceView() {
                   </div>
                   <p>{String(claim.statement)}</p>
                 </div>)}
+            </div>
+          : <Absent reason={dissent?.reason} />}
+      </div>
+
+      {/* The fourteen threats §6 names, each answered. The NOT_MEASURED rows
+          are the reason this is a table rather than a paragraph: a reader has
+          to be able to tell "checked and fine" from "nobody could check". */}
+      <div className="panel">
+        <PanelHead
+          title="Structured objections"
+          meta={synthesis
+            ? `${objections.length} threats · ${Math.round(Number(synthesis.confidence) * 100)}% settled by a gate`
+            : 'fourteen threats'}
+        ><Users /></PanelHead>
+        {dissent?.available && objections.length > 0
+          ? <div className="panel-body stack">
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Threat</th><th>Finding</th><th>Gate</th><th>What it means</th></tr>
+                  </thead>
+                  <tbody>
+                    {objections.map(item => (
+                      <tr key={String(item.threat)} data-finding={String(item.finding)}>
+                        <th scope="row" className="mono">{String(item.threat).replace(/_/g, ' ').toLowerCase()}</th>
+                        <td className={`objection-${String(item.finding).toLowerCase()}`}>
+                          {String(item.finding).replace(/_/g, ' ').toLowerCase()}
+                        </td>
+                        <td className="mono">{String(item.gate) || '—'}</td>
+                        <td className="sub" title={String(item.statement)}>
+                          {String(item.finding) === 'NOT_MEASURED'
+                            ? String(item.required_experiment)
+                            : String(item.means)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {synthesis && Array.isArray(synthesis.contradictions)
+                && (synthesis.contradictions as string[]).length > 0 && (
+                <div>
+                  <h4 className="sub">Contradictions</h4>
+                  <ul className="prop-reasons">
+                    {(synthesis.contradictions as string[]).map(line => (
+                      <li key={line}><span>{line}</span></li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="sub">
+                Confidence here is the share of the fourteen a gate actually settled. It is
+                not a probability that the strategy makes money, and nothing downstream
+                reads it — the gate ladder decides.
+              </p>
             </div>
           : <Absent reason={dissent?.reason} />}
       </div>

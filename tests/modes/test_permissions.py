@@ -76,12 +76,12 @@ def test_ai_cannot_widen_its_own_permissions() -> None:
 
 def test_the_autonomous_stance_does_not_unlock_a_protected_control() -> None:
     """Autonomy moves the approval gate. It does not remove the deterministic ones."""
-    autonomous = rule(PROTECTED, WorkspaceMode.HEDGE_FUND, Stance.AUTONOMOUS)
-    supervised = rule(PROTECTED, WorkspaceMode.HEDGE_FUND, Stance.HUMAN_IN_THE_LOOP)
+    autonomous = rule(PROTECTED, WorkspaceMode.AI, Stance.AUTONOMOUS)
+    supervised = rule(PROTECTED, WorkspaceMode.AI, Stance.HUMAN_IN_THE_LOOP)
     assert autonomous is supervised is Ruling.DENY
 
 
-# ── the four profiles are genuinely different ────────────────────────────────
+# ── the profiles are genuinely different ─────────────────────────────────────
 
 
 def test_reading_is_free_everywhere() -> None:
@@ -96,21 +96,21 @@ def test_preparation_is_permitted_everywhere() -> None:
         assert rule(PREP, mode, stance) is Ruling.ALLOW
 
 
-def test_automation_belongs_to_the_two_modes_that_exist_to_run_it() -> None:
+def test_automation_belongs_to_the_mode_that_exists_to_run_it() -> None:
     assert rule(AUTOMATE, WorkspaceMode.NORMAL) is Ruling.REQUIRE_APPROVAL
     assert rule(AUTOMATE, WorkspaceMode.PROP_FIRM) is Ruling.REQUIRE_APPROVAL
     assert rule(AUTOMATE, WorkspaceMode.AI) is Ruling.ALLOW
-    assert rule(AUTOMATE, WorkspaceMode.HEDGE_FUND, Stance.HUMAN_IN_THE_LOOP) is Ruling.ALLOW
+    assert rule(AUTOMATE, WorkspaceMode.AI, Stance.HUMAN_IN_THE_LOOP) is Ruling.ALLOW
 
 
 def test_reaching_the_book_needs_the_autonomous_stance_and_nothing_less() -> None:
     for mode in (WorkspaceMode.NORMAL, WorkspaceMode.PROP_FIRM, WorkspaceMode.AI):
         assert rule(BOOK, mode) is Ruling.REQUIRE_APPROVAL
-    assert rule(BOOK, WorkspaceMode.HEDGE_FUND, Stance.HUMAN_IN_THE_LOOP) is Ruling.REQUIRE_APPROVAL
-    assert rule(BOOK, WorkspaceMode.HEDGE_FUND, Stance.AUTONOMOUS) is Ruling.ALLOW
+    assert rule(BOOK, WorkspaceMode.AI, Stance.HUMAN_IN_THE_LOOP) is Ruling.REQUIRE_APPROVAL
+    assert rule(BOOK, WorkspaceMode.AI, Stance.AUTONOMOUS) is Ruling.ALLOW
 
 
-def test_the_four_modes_do_not_all_rule_the_same_way() -> None:
+def test_the_modes_do_not_all_rule_the_same_way() -> None:
     """If every mode produced the same answers, the modes would be labels."""
     profiles = {
         (mode, stance): tuple(
@@ -158,8 +158,8 @@ def test_every_refusal_carries_a_reason_naming_the_rule_that_fired() -> None:
 
 
 def test_the_summary_says_something_different_for_each_stance() -> None:
-    supervised = summarise(WorkspaceMode.HEDGE_FUND, Stance.HUMAN_IN_THE_LOOP)["summary"]
-    autonomous = summarise(WorkspaceMode.HEDGE_FUND, Stance.AUTONOMOUS)["summary"]
+    supervised = summarise(WorkspaceMode.AI, Stance.HUMAN_IN_THE_LOOP)["summary"]
+    autonomous = summarise(WorkspaceMode.AI, Stance.AUTONOMOUS)["summary"]
     assert supervised != autonomous
     assert "approval" in str(supervised).lower()
     assert "kill switch" in str(autonomous).lower()
@@ -319,3 +319,93 @@ def test_the_newly_classified_verbs_rule_the_way_the_policy_says(tmp_path, monke
     # Still held, and by the rule that fires before any list.
     assert ruling_for("reset_sidebar", WorkspaceMode.AI) is Ruling.REQUIRE_APPROVAL
     assert ruling_for("archive_campaign", WorkspaceMode.AI) is Ruling.REQUIRE_APPROVAL
+
+
+# ── the boundary after the Hedge Fund mode was removed ───────────────────────
+#
+# Removing a mode is a change to this policy's input domain, and the risk is not
+# that something breaks — it is that the boundary quietly moves. Two directions
+# of drift are possible and both are silent:
+#
+#   *widening*, if a grant that used to need Hedge Fund + autonomous now fires
+#   somewhere easier to reach;
+#   *narrowing*, if the grant was dropped instead of moved, which removes a
+#   capability nobody agreed to remove and shows up only as a refusal much later.
+#
+# The tests below pin both ends. They are written against the shape of the
+# permission rather than against the old enum, so they keep meaning after the
+# name they were written about has gone.
+
+
+def test_exactly_one_configuration_reaches_the_book() -> None:
+    """Same count as before the mode was removed: one, behind two opt-ins.
+
+    Not "AI mode allows it" -- the property is that the set of configurations
+    granting it has exactly one member. A second one appearing is a widening
+    whatever it is called.
+    """
+    granting = [
+        (mode, stance) for mode, stance in STANCES if rule(BOOK, mode, stance) is Ruling.ALLOW
+    ]
+    assert len(granting) == 1, granting
+    mode, stance = granting[0]
+    assert stance is Stance.AUTONOMOUS, "reaching the book must require an explicit stance"
+    assert MODES[mode].stances, "the granting mode must offer the choice, not assume it"
+    assert MODES[mode].default_stance is not Stance.AUTONOMOUS, (
+        "entering the mode must not enter the stance: autonomy is opted into"
+    )
+
+
+def test_the_book_grant_did_not_move_somewhere_easier_to_reach() -> None:
+    """Every other configuration still holds it for a person."""
+    for mode, stance in STANCES:
+        if stance is Stance.AUTONOMOUS:
+            continue
+        assert rule(BOOK, mode, stance) is Ruling.REQUIRE_APPROVAL, (
+            f"{mode.value}/{stance} reaches the book without an explicit stance"
+        )
+
+
+def test_automation_did_not_spread_when_a_mode_was_removed() -> None:
+    """It was granted in two modes and one of them no longer exists.
+
+    The surviving grant is one mode, which is a narrowing of *where* and not of
+    *what*: everything Hedge Fund could automate, AI could already automate.
+    """
+    granting = {mode for mode, stance in STANCES if rule(AUTOMATE, mode, stance) is Ruling.ALLOW}
+    assert granting == {WorkspaceMode.AI}
+
+
+def test_no_configuration_gained_anything_it_did_not_have() -> None:
+    """The full policy surface, enumerated, against what it was.
+
+    Written out rather than derived so that a future edit to the rules has to
+    change this table deliberately. Each row is (mode, stance) -> the ruling for
+    (read, prepare, automate, book, protected, destructive, live).
+    """
+    expected = {
+        (WorkspaceMode.NORMAL, None): (
+            Ruling.ALLOW, Ruling.ALLOW, Ruling.REQUIRE_APPROVAL, Ruling.REQUIRE_APPROVAL,
+            Ruling.DENY, Ruling.REQUIRE_APPROVAL, Ruling.DENY,
+        ),
+        (WorkspaceMode.PROP_FIRM, None): (
+            Ruling.ALLOW, Ruling.ALLOW, Ruling.REQUIRE_APPROVAL, Ruling.REQUIRE_APPROVAL,
+            Ruling.DENY, Ruling.REQUIRE_APPROVAL, Ruling.DENY,
+        ),
+        (WorkspaceMode.AI, Stance.HUMAN_IN_THE_LOOP): (
+            Ruling.ALLOW, Ruling.ALLOW, Ruling.ALLOW, Ruling.REQUIRE_APPROVAL,
+            Ruling.DENY, Ruling.REQUIRE_APPROVAL, Ruling.DENY,
+        ),
+        (WorkspaceMode.AI, Stance.AUTONOMOUS): (
+            Ruling.ALLOW, Ruling.ALLOW, Ruling.ALLOW, Ruling.ALLOW,
+            Ruling.DENY, Ruling.REQUIRE_APPROVAL, Ruling.DENY,
+        ),
+    }
+    actual = {
+        (mode, stance): tuple(
+            rule(facts, mode, stance)
+            for facts in (SAFE_READ, PREP, AUTOMATE, BOOK, PROTECTED, DESTRUCTIVE, LIVE)
+        )
+        for mode, stance in STANCES
+    }
+    assert actual == expected

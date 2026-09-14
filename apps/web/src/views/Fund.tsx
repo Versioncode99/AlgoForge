@@ -10,7 +10,7 @@ import {
   type GateCheck, type PortfolioProposal, type RiskMeasure, type ScreenedOrder, type StageState,
 } from '../fund'
 
-/* Hedge Fund mode: the loop, and its state.
+/* The deterministic book loop, and its state.
  *
  * The command centre is a status board rather than a diagram. Every stage
  * carries what it is actually doing — "3 candidates eligible", "within limits",

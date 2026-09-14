@@ -1,12 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bot, Check, KeyRound, RefreshCw, Send, Server, X } from 'lucide-react'
+import { Check, KeyRound, RefreshCw, Server, X } from 'lucide-react'
 import { useState } from 'react'
 import { getJson, patchJson, postJson } from '../api'
 import { AppearancePanel } from '../components/AppearancePanel'
+import { ChatPanel, type ChatOpening } from '../components/ChatPanel'
 import { StoragePanel } from '../components/StoragePanel'
 import { PanelHead, Stat } from '../components/ui'
-import { BudgetPanel, ModelRoutingPanel, ResearchPanel } from './ModelRouting'
-import type { AskResult, Evolution, OracleInfo, SettingsPayload } from '../types'
+import {
+  BudgetPanel,
+  ModelRoutingPanel,
+  ResearchPanel,
+  RoutingEvidencePanel,
+} from './ModelRouting'
+import type { Evolution, OracleInfo, SettingsPayload } from '../types'
 
 export function SettingsView() {
   const qc = useQueryClient()
@@ -104,6 +110,9 @@ export function SettingsView() {
       </div>
 
       <ModelRoutingPanel settings={s} patch={(body) => patch.mutate(body)} />
+
+      {/* Directly under the assignments it is evidence about. */}
+      <RoutingEvidencePanel patch={(body) => patch.mutate(body)} />
 
       <BudgetPanel settings={s} patch={(body) => patch.mutate(body)} />
 
@@ -216,70 +225,28 @@ function UpdatesPanel() {
 }
 
 /** Ask questions about this instance. Grounded in the local ledger; falls back to
- *  deterministic answers when no model is configured, and says so. */
-export function ConsoleView() {
-  const [question, setQuestion] = useState('')
-  const [thread, setThread] = useState<{ q: string; a: AskResult }[]>([])
-
-  const ask = useMutation({
-    mutationFn: (q: string) => postJson<AskResult>('/ask', { question: q }),
-    onSuccess: (a, q) => { setThread((prev) => [...prev, { q, a }]); setQuestion('') },
-  })
-
-  const suggestions = [
-    'How many strategies are there and are any profitable?',
-    'Why did the last candidates get rejected?',
-    'What families can you build?',
-  ]
-
+ *  deterministic answers when no model is configured, and says so.
+ *
+ *  `opening` is what a link asked the conversation to start knowing -- the
+ *  strategy somebody pressed "Ask about this" on. Without one the panel falls
+ *  back to whatever the workspace is pointed at, which is the right default and
+ *  was, until now, the only thing that ever happened: the panel had accepted an
+ *  opening context since it was written and no caller had ever passed one. */
+export function ConsoleView({ opening }: { opening?: ChatOpening } = {}) {
+  /* The console is the conversation panel at full width.
+   *
+   * It used to be its own implementation: a thread in `useState`, lost on
+   * reload, with no history and no way back to yesterday's research. Pointing
+   * it at the same component the workspace panel uses is what stops the two
+   * drifting into different products with the same name.
+   */
   return (
-    <section className="stack">
+    <section className="stack console-view">
       <div className="section-title">
         <p>CONSOLE</p>
         <h2>Ask about what this instance has actually done</h2>
       </div>
-
-      <div className="panel">
-        <div className="panel-body chat-thread">
-          {thread.length === 0 && (
-            <div className="chat-empty">
-              <Bot />
-              <p>Grounded in this machine&apos;s ledger — strategies, backtests, verdicts and
-                engine activity. It will not predict markets or suggest trades.</p>
-              <div className="chat-suggest">
-                {suggestions.map((s) => (
-                  <button key={s} className="btn tiny" onClick={() => ask.mutate(s)}>{s}</button>
-                ))}
-              </div>
-            </div>
-          )}
-          {thread.map((turn, i) => (
-            <div className="chat-turn" key={i}>
-              <p className="chat-q">{turn.q}</p>
-              <div className="chat-a">
-                <span className="chat-model">{turn.a.model}</span>
-                <p>{turn.a.answer}</p>
-                {turn.a.note && <small className="chat-note">{turn.a.note}</small>}
-              </div>
-            </div>
-          ))}
-          {ask.isPending && <p className="chat-pending">Thinking…</p>}
-        </div>
-        <form
-          className="chat-input"
-          onSubmit={(e) => { e.preventDefault(); if (question.trim()) ask.mutate(question.trim()) }}
-        >
-          <input
-            aria-label="Ask a question"
-            placeholder="Ask about strategies, verdicts or engine state…"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-          />
-          <button className="btn primary" type="submit" disabled={ask.isPending || !question.trim()}>
-            <Send /> Ask
-          </button>
-        </form>
-      </div>
+      <ChatPanel opening={opening} />
     </section>
   )
 }

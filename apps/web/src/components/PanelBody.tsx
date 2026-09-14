@@ -14,6 +14,7 @@ import {
 } from '../propdesk'
 import { StatusPill } from './measures'
 import { ChartPanel, type TimeframeKey } from './PriceChart'
+import { ChatPanel } from './ChatPanel'
 import type { DatasetInfo } from '../types'
 
 /* What goes inside a panel.
@@ -817,6 +818,11 @@ export function PanelBody({ kind, settings, datasets, onSetting }: PanelProps) {
       return <PortfolioPanel />
     case 'pretrade_gate':
       return <PretradeGatePanel />
+    case 'agent':
+      // The AGENT panel kind has been in the registry and in the AI template
+      // since the workstation shipped, rendering "not built yet". It is the
+      // conversation, at panel width: history collapses, the composer stays.
+      return <ChatPanel compact />
     case 'approvals':
       return <ApprovalsPanel />
     case 'audit':

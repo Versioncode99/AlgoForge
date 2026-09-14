@@ -25,7 +25,7 @@ def submit(queue: ApprovalQueue, **overrides: object):
         "action": "submit_orders",
         "arguments": {"order_ids": ["o1"]},
         "reason": "reaches the book",
-        "mode": "hedge_fund",
+        "mode": "ai",
         "stance": "human_in_the_loop",
     }
     return queue.submit(**{**base, **overrides})  # type: ignore[arg-type]

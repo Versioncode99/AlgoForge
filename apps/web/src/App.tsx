@@ -1,12 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  Activity, Grid2x2, LockKeyhole, Menu, PanelBottomOpen, RotateCw, ScrollText, Search,
+  Activity, Grid2x2, Inbox, LockKeyhole, Menu, PanelBottomOpen, RotateCw, ScrollText, Search,
   ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { getJson } from './api'
+import { parse, routeOf } from './route'
+import { chatOpening } from './opening'
 import { CommandPalette } from './components/CommandPalette'
 import { ContextBar } from './components/ContextBar'
+import { InboxDrawer, useInbox } from './components/InboxDrawer'
 import { Wordmark } from './components/Logo'
 import { ViewErrorBoundary } from './components/ViewErrorBoundary'
 import { sectionIcon } from './components/icons'
@@ -77,12 +80,15 @@ export const MAIN_LANDMARK_ID = 'main-content'
  *
  * Keyed by mode first so the same word can mean different things in different
  * environments without either one being renamed into something worse: "Risk" in
- * Prop Firm is an account's exposure against its contract, and in Hedge Fund it
- * is the book against the fund's limits. Falling through to the shared map is
+ * Prop Firm is an account's exposure against its contract, and in Normal it is
+ * the book against the limits you set. Falling through to the shared map is
  * what keeps Strategies, Validation and Evidence a single implementation in all
- * four.
+ * three.
  */
-function viewFor(mode: ModeKey, route: string): React.ReactNode {
+function viewFor(mode: ModeKey, hash: string): React.ReactNode {
+  /* The section, without whatever the link asked it to open. A view keyed by
+   * the whole hash would miss on every deep link and render nothing. */
+  const { path: route, params } = parse(hash)
   const perMode: Record<string, React.ReactNode> = {
     'prop_firm/account': <PropAccountView section="account" />,
     'prop_firm/rules': <PropAccountView section="rules" />,
@@ -99,29 +105,29 @@ function viewFor(mode: ModeKey, route: string): React.ReactNode {
     'prop_firm/desk_activity': <PropDeskView section="desk_activity" />,
     'prop_firm/risk_management': <PropDeskView section="risk_management" />,
     'prop_firm/ai_management': <PropDeskView section="ai_management" />,
-    'ai/assistant': <ConsoleView />,
+    'ai/assistant': <ConsoleView opening={chatOpening(params)} />,
     'ai/actions': <ActionsView />,
     'ai/activity': <OperatingLogView />,
-    'hedge_fund/fund': <FundView section="fund" />,
-    'hedge_fund/data': <DataWorkspaceView />,
-    'hedge_fund/research': <ExperimentsView mode="experiments" />,
-    'hedge_fund/alpha': <FundView section="alpha" />,
-    'hedge_fund/portfolio': <FundView section="portfolio" />,
-    'hedge_fund/risk': <FundView section="risk" />,
-    'hedge_fund/gate': <FundView section="gate" />,
-    'hedge_fund/execution': <FundView section="execution" />,
-    'hedge_fund/operations': <FundView section="operations" />,
-    'hedge_fund/performance': <FundView section="performance" />,
-    'hedge_fund/orchestrator': <OperatingLogView />,
-    'hedge_fund/approvals': <FundView section="approvals" />,
-    'hedge_fund/audit': <FundView section="audit" />,
+    // The oversight surfaces built for the Hedge Fund mode, now where the actor
+    // they exist to watch actually lives.
+    'ai/orchestrator': <OperatingLogView />,
+    'ai/approvals': <FundView section="approvals" />,
+    'ai/audit': <FundView section="audit" />,
+    // The deterministic book loop, likewise: same engines, same views, in the
+    // environment for somebody trading their own book.
+    'normal/book': <FundView section="fund" />,
+    'normal/portfolio': <FundView section="portfolio" />,
+    'normal/risk': <FundView section="risk" />,
+    'normal/gate': <FundView section="gate" />,
+    'normal/execution': <FundView section="execution" />,
+    'normal/operations': <FundView section="operations" />,
   }
   const shared: Record<string, React.ReactNode> = {
     overview: <OverviewView onRoute={(id) => { window.location.hash = id }} />,
-    workspace: <WorkspaceView />,
+    workspace: <WorkspaceView workspaceId={params.workspace ?? ''} />,
     charts: <ChartsView />,
     trades: <StrategyChartView />,
-    strategies: <StrategiesView />,
+    strategies: <StrategiesView open={params.strategy ?? ''} pane={params.pane ?? ''} />,
     runs: <RunsView />,
     validation: <ValidationLabView />,
     evidence: <EvidenceView />,
@@ -134,7 +140,7 @@ function viewFor(mode: ModeKey, route: string): React.ReactNode {
     experiments: <ExperimentsView mode="experiments" />,
     lineage: <ExperimentsView mode="lineage" />,
     memory: <ResearchMemoryView />,
-    assistant: <ConsoleView />,
+    assistant: <ConsoleView opening={chatOpening(params)} />,
     agents: <AgentCommandView />,
     missions: <MissionsView />,
     campaigns: <ResearchCampaignView />,
@@ -163,6 +169,7 @@ export function App() {
   const [railOpen, setRailOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [eventsOpen, setEventsOpen] = useState(false)
+  const [inboxOpen, setInboxOpen] = useState(false)
   const [switcherOpen, setSwitcherOpen] = useState(false)
   /* The active workspace, for its rail. Fetched here rather than inside the
    * sidebar so the shell can decide *which* rail to draw before drawing one —
@@ -170,6 +177,9 @@ export function App() {
    * page load. */
   const activeWorkspace = useActiveWorkspace()
   const railWorkspace = activeWorkspace.data ?? null
+  // Read in the shell rather than in the drawer: the count is on the badge,
+  // and a drawer that has never been opened cannot report one.
+  const unread = useInbox().data?.unread ?? 0
 
   const sections = useMemo<Section[]>(() => session.data?.descriptor.sections ?? [], [session.data])
   const groups = useMemo(() => {
@@ -207,10 +217,15 @@ export function App() {
      * manifest does not list — that is the entire purpose of it. Correcting
      * against the manifest would bounce somebody straight back out of the
      * research screen they just added to their prop workspace. */
+    /* Compared without its parameters. `#strategies?strategy=abc` names the
+     * same section as `#strategies`, and treating the whole hash as the route
+     * is what made every deep link redirect to the mode's first section --
+     * which looked deliberate and explained nothing. */
+    const here = routeOf(route)
     const inRail = railWorkspace?.sidebar?.groups?.some(
-      (group) => group.items.some((item) => item.route === route),
+      (group) => group.items.some((item) => item.route === here),
     )
-    const known = inRail || sections.some((section) => section.route === route)
+    const known = inRail || sections.some((section) => section.route === here)
     if (!known) {
       const first = sections[0].route
       window.history.replaceState(null, '', `#${first}`)
@@ -325,7 +340,7 @@ export function App() {
         * destinations from is the same category error the modes themselves
         * were. The mode is still shown, smaller, because it decides what an
         * assistant may do on your behalf. */}
-      <div className="mode-badge">
+      <div className="mode-badge" data-testid="mode-badge">
         {railWorkspace?.sidebar_is_custom
           ? <b title={railWorkspace.description || undefined}>
               {railWorkspace.icon && <i className="mode-badge-icon" aria-hidden="true">{railWorkspace.icon}</i>}
@@ -352,6 +367,19 @@ export function App() {
         <span>OOS <b className={!counted ? 'unknown' : oos ? 'good' : undefined}>{counted ? oos : '—'}</b></span>
         <span><LockKeyhole /> PAPER ONLY</span>
       </div>
+      {/* Global, and in every mode: "did that finish?" is a question that
+        * arrives while you are in the middle of something else, so answering it
+        * must not cost you the screen you are on. */}
+      <button
+        className="context-inbox"
+        aria-expanded={inboxOpen}
+        aria-label={unread ? `Finished work, ${unread} unread` : 'Finished work'}
+        onClick={() => setInboxOpen(value => !value)}
+      >
+        <Inbox aria-hidden="true" />
+        <span>Finished</span>
+        {unread > 0 && <b className="context-inbox-count">{unread > 99 ? '99+' : unread}</b>}
+      </button>
       <button className="context-search" onClick={() => setPaletteOpen(true)}><Search /><span>Find</span><kbd>Ctrl K</kbd></button>
     </header>
 
@@ -381,6 +409,7 @@ export function App() {
       </div>
     )}
     <EventDrawer events={events.data ?? []} open={eventsOpen} onClose={() => setEventsOpen(false)} />
+    <InboxDrawer open={inboxOpen} onClose={() => setInboxOpen(false)} />
     <CommandPalette open={paletteOpen} routes={paletteRoutes} strategies={list} onClose={() => setPaletteOpen(false)} onRoute={navigate} />
   </div>
 }

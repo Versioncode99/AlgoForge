@@ -1,3 +1,4 @@
+import type { FanPoint } from './fan'
 export type Run = {
   run_id: string; preregistration_id: string; preregistration_hash: string
   tier: string; source_hash: string; data_hash: string; cost_hash: string
@@ -233,6 +234,13 @@ export type PropResult = {
     var_95: number; cvar_95: number; skewness: number; excess_kurtosis: number
     terminal_p05: number; terminal_median: number; terminal_p95: number
   }
+  /* The band over *every* path, day by day. `equity_paths` above is a sample of
+     individual accounts; this is the population. */
+  equity_fan: FanPoint[]
+  payout: {
+    mean: number; median: number; p05: number; p95: number; best: number
+    any_probability: number
+  }
   labels: string[]; interval_width: number; resample_ratio: number
 }
 
@@ -267,9 +275,17 @@ export type RoleInfo = { key: string; label: string; detail: string }
 export type CredentialInfo = {
   key: string; label: string; detail: string; present: boolean; hint: string; source: string
 }
+/** §12's three modes. `ADAPTIVE` is the one a boolean could not carry: no
+ *  ceiling while the day's spend is under the soft threshold, every ceiling
+ *  once it crosses, and every ceiling when the spend cannot be read. */
+export type BudgetMode = 'ENFORCED' | 'UNLIMITED_WITH_SAFETY_LIMITS' | 'ADAPTIVE'
+
+export type BudgetModeInfo = { key: BudgetMode; label: string; detail: string }
+
 export type BudgetSettings = {
-  /** The master switch. Off means no research ceiling is applied at all; the
-   *  system safety limits are separate and hold regardless. */
+  mode: BudgetMode
+  /** Derived from `mode`: whether any research ceiling can bite at all. Read
+   *  it to answer that question; read `mode` to know when. */
   enforced: boolean
   daily_usd_hard: number; daily_usd_soft: number
   monthly_usd_hard: number; per_session_usd: number; halt_on_breach: boolean
@@ -324,6 +340,7 @@ export type SettingsPayload = {
   routing_roles: RoutingRole[]; routing_modes: RoutingMode[]
   routing_preview: RoutingDecision[]
   safety_limits: SafetyLimit[]
+  budget_modes: BudgetModeInfo[]
   research_options: {
     categories: ResearchOption[]; freshness: ResearchOption[]; depths: ResearchOption[]
   }
@@ -364,6 +381,27 @@ export type BacktestJobResult = {
 }
 
 /* ── Prop matrix ─────────────────────────────────────────────────────────── */
+/* One provider's challenge and funded phases as a single simulated history.
+   `reached` differs per leg on purpose: only the accounts that cleared the
+   challenge ever start the funded one, and each rate is against the accounts
+   that actually got that far. */
+export type JourneyStage = {
+  rule_id: string; display_name: string; phase: 'CHALLENGE' | 'FUNDED'
+  reached: number; cleared: number; failed: number; timed_out: number
+  days_p10: number | null; days_median: number | null; days_p90: number | null
+}
+export type PropJourney = {
+  journey_id: string; strategy_id: string; provider: string
+  challenge: JourneyStage; funded: JourneyStage
+  path_count: number; seed: number; trading_days: number
+  payout_probability: number; payout_interval_low: number; payout_interval_high: number
+  payout: { mean: number; median: number; p05: number; p95: number; best: number; any_probability: number }
+  days_to_payout_p10: number | null
+  days_to_payout_median: number | null
+  days_to_payout_p90: number | null
+  labels: string[]
+  source_labels: string[]
+}
 export type MatrixCell = {
   strategy_id: string; strategy_name: string
   rule_id: string; rule_name: string; provider: string; phase: string

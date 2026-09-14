@@ -26,6 +26,8 @@ from forge.vault import resolve as resolve_workspace
 from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.catalog import build_catalog_router
 from forge_api.control import build_control_router
+from forge_api.inbox import Inbox, build_inbox_router
+from forge_api.jobs import REGISTRY
 from forge_api.missions import build_mission_router
 from forge_api.propdesk import build_propdesk_router
 from forge_api.research_loop import ResearchLoop, build_research_loop_router
@@ -365,6 +367,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     app.state.mirror = mirror
     app.state.research_loop = research_loop
     app.state.actions = surface.actions
+    app.state.assistant = surface.assistant
     app.include_router(
         build_router(
             workspace.store, library, store, log, market, research_ledger, surface.actions
@@ -380,6 +383,15 @@ def create_app(database_path: Path | None = None) -> FastAPI:
             workspace, mirror, log, library, store, families, surface.agents.research
         )
     )
+
+    # Finished work lands here whether or not anybody was watching. The registry
+    # keeps forty jobs in memory and loses them on restart, which is right for a
+    # recomputable result and useless as a record that the work happened -- so a
+    # job reaching a terminal state is written down, once, keyed by its id.
+    inbox = Inbox(workspace.data / "inbox.db")
+    app.state.inbox = inbox
+    REGISTRY.on_finish(inbox.arrive)
+    app.include_router(build_inbox_router(inbox))
 
     # A vault that has never been opened should still land somewhere useful.
     mirror.index(workspace.counts())

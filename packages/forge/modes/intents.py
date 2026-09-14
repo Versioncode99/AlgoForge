@@ -45,10 +45,10 @@ class IntentDescriptor(FrozenModel):
     #: Registered action names, in the order they would run.
     actions: tuple[str, ...]
     #: Where the operator ends up, per mode. Keyed by mode because the same
-    #: intent lands in different places: "research" is a section in AI and Hedge
-    #: Fund, and Normal mode reaches the same material through "strategies".
-    #: A single list would have sent somebody to a route their mode does not
-    #: have, which is a dead end discovered by clicking it.
+    #: intent lands in different places: "research" is a section in AI, and
+    #: Normal mode reaches the same material through "strategies". A single list
+    #: would have sent somebody to a route their mode does not have, which is a
+    #: dead end discovered by clicking it.
     sections: dict[str, tuple[str, ...]]
     #: What this intent cannot do, stated at the front door rather than found
     #: three screens in.
@@ -84,7 +84,6 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "normal": ("strategies", "evidence"),
                 "prop_firm": ("strategies", "validation"),
                 "ai": ("research", "strategies"),
-                "hedge_fund": ("research", "alpha"),
             },
             caveat=(
                 "A paper's result is a claim about its own data. AlgoForge will not "
@@ -104,7 +103,6 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "normal": ("strategies", "validation", "evidence"),
                 "prop_firm": ("strategies", "validation"),
                 "ai": ("strategies", "validation", "evidence"),
-                "hedge_fund": ("alpha", "validation"),
             },
             caveat=(
                 "The hypothesis is frozen before the run. Changing it afterwards "
@@ -123,7 +121,6 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "normal": ("evidence", "validation", "trades"),
                 "prop_firm": ("validation", "performance"),
                 "ai": ("evidence", "validation", "experiments"),
-                "hedge_fund": ("validation", "performance"),
             },
             caveat="",
         ),
@@ -139,7 +136,6 @@ INTENTS: dict[Intent, IntentDescriptor] = {
             sections={
                 "normal": ("strategies", "validation", "evidence"),
                 "ai": ("experiments", "validation", "memory"),
-                "hedge_fund": ("research", "validation", "memory"),
             },
             caveat=(
                 "Re-running a failed strategy with different parameters is another "
@@ -169,8 +165,11 @@ INTENTS: dict[Intent, IntentDescriptor] = {
             ),
             actions=("prepare_orders", "screen_orders"),
             sections={
+                # Normal reaches the same ladder through the book surfaces that
+                # came out of the Hedge Fund mode. The engines did not move; only
+                # the environment they are offered in did.
+                "normal": ("portfolio", "gate", "execution"),
                 "prop_firm": ("allocation", "desk_activity", "book"),
-                "hedge_fund": ("portfolio", "gate", "execution"),
             },
             caveat=(
                 "Execution is simulated. `forge.execution.lifecycle` refuses the "
@@ -189,7 +188,6 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "normal": ("charts", "data"),
                 "prop_firm": ("performance",),
                 "ai": ("research", "memory"),
-                "hedge_fund": ("data", "research"),
             },
             caveat="",
         ),

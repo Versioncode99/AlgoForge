@@ -9,10 +9,9 @@ from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from forge.analytics.regime import attribute_at_times as attribute_trades
-from forge.analytics.resample import compare as compare_resamples
 from forge.capabilities import nautilus_capability
 from forge.contracts.models import ApiEnvelope
+from forge.conversation import ContextKind, ConversationError, ConversationStore
 from forge.data.live import ProviderError
 from forge.execution.oms import ExecutionStore
 from forge.explain import Depth as PassportDepth
@@ -30,7 +29,12 @@ from forge.modes.models import MODE_ORDER
 from forge.modes.models import catalogue as mode_catalogue
 from forge.modes.permissions import Actor
 from forge.modes.store import ModeStore
-from forge.prop import assess_day_coverage, load_rules, simulate_prop_paths
+from forge.prop import (
+    assess_day_coverage,
+    load_rules,
+    simulate_prop_journey,
+    simulate_prop_paths,
+)
 from forge.prop.accounts import PropAccountStore
 from forge.prop.engine import MAX_BACKTEST_BARS, MIN_TRADING_DAYS
 from forge.propdesk import PropDeskStore
@@ -58,12 +62,12 @@ from forge_api.activity import ActivityLog, BacktestStore
 from forge_api.agent_service import AgentService
 from forge_api.assistant import Assistant
 from forge_api.campaigns import CampaignService, build_campaign_router
+from forge_api.chat import ChatService
 from forge_api.director import ResearchDirector
 from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.fund import FundService
 from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.ledger_view import LedgerError, TradeLedgerService
-from forge_api.ledger_view import _TradeShim as _Shim
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
 from forge_api.model_routing import (
     ROLES_BY_KEY,
@@ -90,8 +94,17 @@ from forge_api.providers import (
     status_for,
 )
 from forge_api.research_lab import ArtifactStore, LabError, ResearchLab
+from forge_api.routing_observations import (
+    FIELDS as OBSERVED_FIELDS,
+)
+from forge_api.routing_observations import (
+    MATERIAL_MARGIN,
+    MINIMUM_OBSERVATIONS,
+    recommend,
+)
 from forge_api.settings_store import (
     ACCENTS,
+    BUDGET_MODES,
     DENSITIES,
     DEPTH_RESULTS,
     DEPTHS,
@@ -104,6 +117,7 @@ from forge_api.settings_store import (
     THEMES,
     AISettings,
     AppearanceSettings,
+    BudgetMode,
     BudgetSettings,
     ResearchLoopSettings,
     Settings,
@@ -273,6 +287,8 @@ class SettingsPatch(BaseModel):
     role_routing: dict[str, RolePatch] | None = None
     budget: dict[str, float] | None = None
     budget_enforced: bool | None = None
+    #: One of `BudgetMode`. Supersedes `budget_enforced` when both are sent.
+    budget_mode: str | None = None
     default_dataset: str | None = None
     engine_cycle_seconds: float | None = Field(default=None, ge=1.0, le=300.0)
     engine_max_strategies: int | None = Field(default=None, ge=1, le=500)
@@ -289,9 +305,43 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
 
 
+class ConversationRequest(BaseModel):
+    title: str = Field(default="", max_length=200)
+
+
+class MessageRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class AttachRequest(BaseModel):
+    kind: str
+    ref: str = Field(min_length=1, max_length=200)
+    label: str = Field(default="", max_length=200)
+
+
 class PropRequest(BaseModel):
     rule_id: str
     paths: int = Field(default=1000, ge=100, le=10_000)
+    seed: int = 20260901
+
+
+class PropJourneyRequest(BaseModel):
+    """One provider's two phases, played through as one account's history.
+
+    `paths` is capped far below the single-leg simulation's ceiling: a journey
+    is two replays per path plus a double-bootstrap interval that runs the
+    whole journey again forty times over. Ten thousand paths here is minutes of
+    compute for an interval that a longer track record would narrow far more
+    cheaply.
+    """
+
+    challenge_rule_id: str
+    funded_rule_id: str
+    paths: int = Field(default=500, ge=100, le=2_000)
     seed: int = 20260901
 
 
@@ -348,6 +398,22 @@ class WorkspaceDescribeRequest(BaseModel):
 class ImportWorkspaceRequest(BaseModel):
     document: dict[str, Any]
     name: str | None = None
+
+
+class SplitPanelRequest(BaseModel):
+    kind: str
+    #: 'row' for side by side, 'column' for one above the other.
+    along: str = "row"
+    title: str = ""
+
+
+class StackPanelRequest(BaseModel):
+    #: The panel whose rectangle this one joins as a tab.
+    onto: str
+
+
+class DetachPanelRequest(BaseModel):
+    along: str = "row"
 
 
 class CollapsePanelRequest(BaseModel):
@@ -585,6 +651,7 @@ class ControlSurface:
     audit: AuditLog
     campaigns: CampaignService
     prop_desk: PropDeskService
+    assistant: Assistant
 
 
 def build_control_router(
@@ -797,6 +864,9 @@ def build_control_router(
     actions.ledger = ledger_view
     actions.lab = research_lab
     assistant = Assistant(root, library, store, log, settings_store, actions)
+    # Conversations are application state, not research: this database can be
+    # deleted and the operator loses their dialogue history and nothing else.
+    chat = ChatService(ConversationStore(workspace.data / "conversations.db"), assistant)
     agents.context = lambda: {
         "running": engine.state.running,
         "dataset": engine.state.config.dataset,
@@ -855,7 +925,19 @@ def build_control_router(
                     "base_url": current.ai.base_url,
                     "routing": current.ai.routing,
                     "model_routing": routing_to_dict(current.ai.model_routing),
-                    "budget": vars(current.ai.budget),
+                    # `vars` would emit the enum and omit `enforced`, which is
+                    # now derived. The payload keeps both: the mode is the
+                    # setting, and `enforced` is the question every existing
+                    # caller has always asked.
+                    "budget": {
+                        **{
+                            key: value
+                            for key, value in vars(current.ai.budget).items()
+                            if key != "mode"
+                        },
+                        "mode": str(current.ai.budget.mode),
+                        "enforced": current.ai.budget.enforced,
+                    },
                     "gateway": gateway_status,
                 },
                 "default_dataset": current.default_dataset,
@@ -872,6 +954,7 @@ def build_control_router(
                 # Data rather than prose, so the screen cannot drift from the
                 # limits that are actually in force.
                 "safety_limits": SAFETY_LIMITS,
+                "budget_modes": BUDGET_MODES,
                 "research_options": {
                     "categories": SOURCE_CATEGORIES,
                     "freshness": FRESHNESS,
@@ -943,9 +1026,34 @@ def build_control_router(
         unknown = sorted(set(budget_changes) - known_budget)
         if unknown:
             raise HTTPException(422, {"code": "unknown_budget_field", "fields": unknown})
+        # `enforced` is a boolean the interface has always sent and is now one
+        # of three modes, so the old field is translated rather than dropped: a
+        # settings screen from before this change must not silently stop
+        # working. `budget_mode` wins when both arrive.
         if body.budget_enforced is not None:
-            budget_changes["enforced"] = body.budget_enforced
-        budget = BudgetSettings(**{**vars(current.ai.budget), **budget_changes})
+            budget_changes["mode"] = (
+                BudgetMode.ENFORCED
+                if body.budget_enforced
+                else BudgetMode.UNLIMITED_WITH_SAFETY_LIMITS
+            )
+        if body.budget_mode is not None:
+            try:
+                budget_changes["mode"] = BudgetMode(body.budget_mode)
+            except ValueError as exc:
+                raise HTTPException(
+                    422,
+                    {
+                        "code": "unknown_budget_mode",
+                        "given": body.budget_mode,
+                        "known": [str(mode) for mode in BudgetMode],
+                    },
+                ) from exc
+        budget = BudgetSettings(
+            **{
+                **{key: value for key, value in vars(current.ai.budget).items()},
+                **budget_changes,
+            }
+        )
 
         model_routing = _apply_routing(current.ai.model_routing, body, valid)
         # The flat mapping is what the existing callers read, so a change made
@@ -1102,7 +1210,136 @@ def build_control_router(
     # ── assistant ────────────────────────────────────────────────────────────
     @router.post("/ask", response_model=ApiEnvelope[dict[str, Any]])
     def ask(body: AskRequest) -> ApiEnvelope[dict[str, Any]]:
+        """One question, answered and not remembered.
+
+        Kept for callers that genuinely want a single shot -- the command
+        palette, a script. A dialogue somebody will come back to belongs in a
+        conversation, below, where it survives a reload.
+        """
         return ApiEnvelope(data=assistant.ask(body.question))
+
+    # ── conversations ────────────────────────────────────────────────────────
+    # A durable research thread. Nothing stored here is evidence: every turn
+    # carries the provenance of its own text, and there is no operation anywhere
+    # that promotes one kind into another. See `forge.conversation.models`.
+
+    @router.get("/conversations", response_model=ApiEnvelope[list[dict[str, Any]]])
+    def conversations(
+        query: str = "", include_archived: bool = False
+    ) -> ApiEnvelope[list[dict[str, Any]]]:
+        rows = chat.list(query=query, include_archived=include_archived)
+        return ApiEnvelope(
+            data=[row.model_dump(mode="json") for row in rows],
+            meta={"total": len(rows), "query": query},
+        )
+
+    @router.post("/conversations", response_model=ApiEnvelope[dict[str, Any]], status_code=201)
+    def create_conversation(body: ConversationRequest) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=chat.create(body.title).model_dump(mode="json"))
+
+    @router.get("/conversations/{conversation_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def conversation(conversation_id: str) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            return ApiEnvelope(data=chat.get(conversation_id))
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+
+    @router.post(
+        "/conversations/{conversation_id}/messages", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def send_message(
+        conversation_id: str, body: MessageRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """Ask, inside a thread that remembers."""
+        try:
+            return ApiEnvelope(data=chat.send(conversation_id, body.message))
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+
+    @router.patch("/conversations/{conversation_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def rename_conversation(
+        conversation_id: str, body: RenameRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            renamed = chat.rename(conversation_id, body.title)
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+        return ApiEnvelope(data=renamed.model_dump(mode="json"))
+
+    @router.post(
+        "/conversations/{conversation_id}/archive", response_model=ApiEnvelope[dict[str, Any]]
+    )
+    def archive_conversation(
+        conversation_id: str, archived: bool = True
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """Hide a thread, reversibly. The destructive verb is DELETE."""
+        try:
+            payload = chat.set_archived(conversation_id, archived)
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+        return ApiEnvelope(data=payload.model_dump(mode="json"))
+
+    @router.delete("/conversations/{conversation_id}", response_model=ApiEnvelope[dict[str, Any]])
+    def delete_conversation(conversation_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Discard a thread.
+
+        It references strategies, backtests and findings; it does not own them,
+        and deleting it leaves every one of them where it was.
+        """
+        if not chat.delete(conversation_id):
+            raise HTTPException(404, {"code": "conversation_not_found"})
+        return ApiEnvelope(
+            data={"conversation_id": conversation_id, "deleted": True},
+            meta={"note": "Nothing the conversation referenced was touched."},
+        )
+
+    @router.post(
+        "/conversations/{conversation_id}/context",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def attach_context(conversation_id: str, body: AttachRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Put a subject in scope for one conversation, and only that one."""
+        try:
+            kind = ContextKind(body.kind)
+        except ValueError:
+            valid = ", ".join(k.value for k in ContextKind)
+            raise HTTPException(
+                422, {"code": "unknown_context_kind", "reason": f"one of {valid}"}
+            ) from None
+        try:
+            attached = chat.attach(conversation_id, kind, body.ref, body.label)
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+        return ApiEnvelope(data=attached.model_dump(mode="json"))
+
+    @router.delete(
+        "/conversations/{conversation_id}/context/{kind}/{ref}",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def detach_context(
+        conversation_id: str, kind: str, ref: str
+    ) -> ApiEnvelope[dict[str, Any]]:
+        try:
+            parsed = ContextKind(kind)
+        except ValueError:
+            valid = ", ".join(k.value for k in ContextKind)
+            raise HTTPException(
+                422, {"code": "unknown_context_kind", "reason": f"one of {valid}"}
+            ) from None
+        removed = chat.detach(conversation_id, parsed, ref)
+        if not removed:
+            raise HTTPException(404, {"code": "context_not_attached"})
+        return ApiEnvelope(data={"kind": kind, "ref": ref, "detached": True})
 
     # ── datasets ─────────────────────────────────────────────────────────────
     @router.get("/datasets", response_model=ApiEnvelope[list[dict[str, Any]]])
@@ -1511,9 +1748,14 @@ def build_control_router(
             },
         )
 
-    # ── prop simulation, linked to a real strategy ───────────────────────────
-    @router.post("/strategies/{strategy_id}/prop", response_model=ApiEnvelope[dict[str, Any]])
-    def strategy_prop(strategy_id: str, body: PropRequest) -> ApiEnvelope[dict[str, Any]]:
+    def _tradable_days(strategy_id: str) -> tuple[dict[str, Any], tuple[float, ...]]:
+        """The strategy's latest backtest and its daily P&L, or the refusal.
+
+        Shared by the single-leg simulation and the journey. Both need exactly
+        the same three guards, and two copies of a refusal are two refusals that
+        can drift apart -- one route telling a caller how many more bars it needs
+        while the other says "run a backtest first" for the same strategy.
+        """
         latest = store.latest(strategy_id)
         if latest is None:
             raise HTTPException(422, {"code": "no_backtest", "detail": "run a backtest first"})
@@ -1552,6 +1794,12 @@ def build_control_router(
                     "detail": coverage.explain(),
                 },
             )
+        return latest, daily
+
+    # ── prop simulation, linked to a real strategy ───────────────────────────
+    @router.post("/strategies/{strategy_id}/prop", response_model=ApiEnvelope[dict[str, Any]])
+    def strategy_prop(strategy_id: str, body: PropRequest) -> ApiEnvelope[dict[str, Any]]:
+        latest, daily = _tradable_days(strategy_id)
 
         rules = {rule.rule_id: rule for rule in load_rules(root / "rules")}
         rule = rules.get(body.rule_id)
@@ -1614,6 +1862,135 @@ def build_control_router(
             },
         )
 
+    # ── what the models actually did, and what that suggests ────────────────
+    @router.get("/routing/observations", response_model=ApiEnvelope[dict[str, Any]])
+    def routing_observations(role: str = "", limit: int = 200) -> ApiEnvelope[dict[str, Any]]:
+        """Every recorded model call, and the per-role summary over them.
+
+        Read-only by construction: there is no route that writes one. An
+        observation is caused by a call happening, so a route able to post one
+        would let the evidence say a model did work it never did.
+        """
+        store = agents.observations
+        return ApiEnvelope(
+            data={
+                "rows": store.rows(role=role, limit=limit),
+                "summary": store.summary(),
+                "fields": list(OBSERVED_FIELDS),
+            },
+            meta={
+                "minimum_observations": MINIMUM_OBSERVATIONS,
+                "note": (
+                    "Quality and downstream outcome are empty where they are not known. "
+                    "They arrive after the call and often not at all, and a neutral default "
+                    "would put an unmeasured number into the comparison."
+                ),
+            },
+        )
+
+    @router.get("/routing/recommendations", response_model=ApiEnvelope[dict[str, Any]])
+    def routing_recommendations() -> ApiEnvelope[dict[str, Any]]:
+        """What the observations suggest. Applies nothing, ever.
+
+        The directive is explicit that routing must be learnable and must not
+        silently learn, so this returns rows an operator reads and a button they
+        press. There is no code path from here to a setting.
+        """
+        current = settings_store.load()
+        assigned = {
+            role["key"]: current.ai.model_routing.for_role(role["key"]).model
+            for role in role_rows()
+        }
+        found = recommend(agents.observations.summary(), assigned)
+        return ApiEnvelope(
+            data={
+                "recommendations": [item.as_dict() for item in found],
+                "actionable": sum(1 for item in found if item.actionable),
+            },
+            meta={
+                "minimum_observations": MINIMUM_OBSERVATIONS,
+                "material_margin": MATERIAL_MARGIN,
+                "note": (
+                    "Nothing here changes routing. Applying a recommendation is a settings "
+                    "edit the operator makes."
+                ),
+            },
+        )
+
+    # ── the journey: one provider's challenge and funded phases, joined ──────
+    @router.post(
+        "/strategies/{strategy_id}/prop/journey",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def strategy_prop_journey(
+        strategy_id: str, body: PropJourneyRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """What a funded-account trader is actually asking: do I ever get paid.
+
+        Neither leg answers it alone, and the two cannot be multiplied -- the
+        accounts that reach the funded leg are the ones that passed, which under
+        a resampling model are the luckier draws rather than a fair sample. The
+        engine plays the journey through instead, so the conditioning is real.
+        """
+        latest, daily = _tradable_days(strategy_id)
+        rules = {rule.rule_id: rule for rule in load_rules(root / "rules")}
+        challenge = rules.get(body.challenge_rule_id)
+        funded = rules.get(body.funded_rule_id)
+        for rule_id, rule in (
+            (body.challenge_rule_id, challenge),
+            (body.funded_rule_id, funded),
+        ):
+            if rule is None:
+                raise HTTPException(404, {"code": "rule_not_found", "rule_id": rule_id})
+        assert challenge is not None and funded is not None  # narrowed by the loop above
+
+        try:
+            journey = simulate_prop_journey(
+                latest["backtest_id"],
+                challenge,
+                funded,
+                daily,
+                seed=body.seed,
+                paths=body.paths,
+                allow_unverified=True,
+            )
+        except ValueError as exc:
+            # The engine's refusals are written for a person and name the rule
+            # that caused them, so they are passed through rather than replaced.
+            code = str(exc).split(":", 1)[0]
+            raise HTTPException(422, {"code": code.lower(), "detail": str(exc)}) from exc
+
+        log.record(
+            "PROP",
+            f"{strategy_id} — {challenge.provider} journey, "
+            f"{journey.payout_probability:.1%} reach a payout over "
+            f"{journey.path_count:,} accounts",
+            "pass" if journey.payout_probability > 0.1 else "warn",
+            journey.journey_id,
+        )
+
+        return ApiEnvelope(
+            data={
+                **journey.model_dump(mode="json"),
+                "strategy_id": strategy_id,
+                "provider": challenge.provider,
+                "trading_days": len(daily),
+                "source_labels": list(_source_labels(latest)),
+            },
+            meta={
+                "rules_verified": challenge.verified and funded.verified,
+                "note": (
+                    "The payout rate is over every simulated account, not over the ones that "
+                    "passed the challenge."
+                ),
+                "interval_method": (
+                    "Double bootstrap over the whole journey: the observed days are resampled "
+                    "before each batch, so the interval carries how little was observed rather "
+                    "than only how many accounts were drawn."
+                ),
+            },
+        )
+
     def _action(name: str, arguments: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
         """Call an action and turn its refusal into the right HTTP status.
 
@@ -1669,15 +2046,34 @@ def build_control_router(
         timeframe: str = "1m",
         limit: int = 1500,
         before: str | None = None,
+        after: str | None = None,
     ) -> ApiEnvelope[dict[str, Any]]:
-        """Candles for a chart.
+        """Candles for a chart, and where they sit in the archive.
 
         Real bars from a real archive or nothing at all. A dataset that is not
         present is a 409 naming it, never a generated stand-in -- a chart that
         silently invents prices is worse than a chart that refuses to draw.
+
+        `before` and `after` page the window in either direction, exclusive of
+        the cursor bar. They are mutually exclusive: passing both is a 422 that
+        says so rather than a window paged the way the server happened to check
+        first.
         """
+        if before and after:
+            raise HTTPException(
+                422,
+                {
+                    "code": "conflicting_cursors",
+                    "reason": (
+                        "pass 'before' or 'after', not both -- they page in "
+                        "opposite directions."
+                    ),
+                },
+            )
         try:
-            payload = market.chart_bars(dataset, timeframe, limit=limit, before=before)
+            payload = market.chart_bars(
+                dataset, timeframe, limit=limit, before=before, after=after
+            )
         except KeyError as exc:
             raise HTTPException(422, {"code": "unknown_timeframe", "reason": str(exc)}) from exc
         except ProviderError as exc:
@@ -1800,28 +2196,17 @@ def build_control_router(
         IID study of a regime-dependent strategy understates its drawdown.
         """
         try:
-            payload = ledger_view.resolve(strategy_id, backtest_id)
-            series, times, _ = ledger_view.classified(payload)
-            trades = _Shim.many(payload)
-            if len(trades) < 2:
-                raise LedgerError("resampling needs at least two trades")
-            marks = attribute_trades(trades, series, times)
-            comparison = compare_resamples(
-                trades,
-                marks,
-                series,
-                paths=max(100, min(int(paths), 20_000)),
-                seed=int(seed),
+            payload = ledger_view.resample_report(
+                strategy_id,
+                backtest_id=backtest_id,
+                paths=paths,
+                seed=seed,
                 attribution=attribution,
             )
         except (LedgerError, ValueError) as exc:
             raise HTTPException(409, {"code": "resample_unavailable", "reason": str(exc)}) from exc
         return ApiEnvelope(
-            data={
-                **comparison.model_dump(mode="json"),
-                "strategy_id": strategy_id,
-                "backtest_id": payload.get("backtest_id"),
-            },
+            data=payload,
             meta={
                 "note": (
                     "Resampling reorders the strategy's own realised trades. No "
@@ -1829,11 +2214,6 @@ def build_control_router(
                 )
             },
         )
-
-    # ── research lab ─────────────────────────────────────────────────────────
-    # Questions asked of a ledger that already exists. Nothing here runs a
-    # strategy, consumes a holdout, or produces a verdict — which is why it is
-    # cheap to ask, and why every stored artifact says it is not evidence.
 
     @router.get("/lab/analyses", response_model=ApiEnvelope[list[dict[str, Any]]])
     def lab_catalogue() -> ApiEnvelope[list[dict[str, Any]]]:
@@ -2484,6 +2864,65 @@ def build_control_router(
         )
 
     @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/split",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def split_panel(
+        workspace_id: str, panel_id: str, body: SplitPanelRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "split_panel",
+                {
+                    "workspace_id": workspace_id,
+                    "panel_id": panel_id,
+                    "kind": body.kind,
+                    "along": body.along,
+                    "title": body.title,
+                },
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/stack",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def stack_panel(
+        workspace_id: str, panel_id: str, body: StackPanelRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "stack_panel",
+                {"workspace_id": workspace_id, "panel_id": panel_id, "onto": body.onto},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/detach",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def detach_panel(
+        workspace_id: str, panel_id: str, body: DetachPanelRequest
+    ) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "detach_panel",
+                {"workspace_id": workspace_id, "panel_id": panel_id, "along": body.along},
+            )
+        )
+
+    @router.post(
+        "/workspaces/{workspace_id}/panels/{panel_id}/show",
+        response_model=ApiEnvelope[dict[str, Any]],
+    )
+    def show_panel_tab(workspace_id: str, panel_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(
+            data=_action(
+                "show_panel_tab", {"workspace_id": workspace_id, "panel_id": panel_id}
+            )
+        )
+
+    @router.post(
         "/workspaces/{workspace_id}/panels/{panel_id}/collapse",
         response_model=ApiEnvelope[dict[str, Any]],
     )
@@ -3075,4 +3514,5 @@ def build_control_router(
         audit=audit,
         campaigns=campaign_service,
         prop_desk=prop_desk,
+        assistant=assistant,
     )

@@ -10,7 +10,7 @@ import {
  * The rail used to carry its icons inline with the navigation, which worked
  * while there was one navigation. With four, the same route appears in more
  * than one mode and the icon has to be the same in each — a Validation entry
- * drawn with one glyph in Normal and another in Hedge Fund reads as two
+ * drawn with one glyph in Normal and another in Prop Firm reads as two
  * different screens.
  *
  * `Radar` is the fallback rather than a blank. A missing icon in a rail of

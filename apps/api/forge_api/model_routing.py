@@ -297,6 +297,15 @@ class RoleRouting:
     model: str = ""
     fallback: str = ""
     enabled: bool = True
+    #: Most tokens this role's answers may run to. Zero means "use the global
+    #: ceiling", which is what every role says until one is configured.
+    #:
+    #: A role that reasons at length and a role that returns a verdict were
+    #: sharing one number, so the verdict role's budget was set by the essay
+    #: role's needs. This narrows per role and can never widen: the global
+    #: ceiling in `SAFETY_LIMITS` is a safety limit, not a budget, and the
+    #: research-budget switch does not turn it off.
+    max_output_tokens: int = 0
 
 
 @dataclass
@@ -538,6 +547,17 @@ def normalise(raw: Any, *, known_models: Iterable[str]) -> RoutingSettings:
         text = str(value or "")
         return text if text in catalogue else ""
 
+    def _positive(value: Any) -> int:
+        """A stored token ceiling, or 0 for "not set".
+
+        Anything that is not a positive whole number reads as unset rather than
+        raising: a settings file is edited by hand, and a typo in one role's
+        ceiling must not stop every role from loading.
+        """
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0
+        return max(0, int(value))
+
     roles: dict[str, RoleRouting] = {}
     stored = raw.get("roles")
     stored = stored if isinstance(stored, dict) else {}
@@ -548,6 +568,7 @@ def normalise(raw: Any, *, known_models: Iterable[str]) -> RoutingSettings:
         roles[key] = RoleRouting(
             model=keep(entry.get("model")),
             fallback=keep(entry.get("fallback")),
+            max_output_tokens=_positive(entry.get("max_output_tokens")),
             # A role the system cannot run without is always on, whatever a
             # stored file says. A settings file that could switch off hypothesis
             # generation would stop every campaign with no message anywhere.
@@ -574,6 +595,19 @@ def to_dict(settings: RoutingSettings) -> dict[str, Any]:
         "allowed": list(settings.allowed),
         "roles": {key: asdict(value) for key, value in settings.roles.items()},
     }
+
+
+def output_ceiling(settings: RoutingSettings, role: str, global_ceiling: int) -> int:
+    """Tokens this role may produce, which is never more than the global ceiling.
+
+    Clamping rather than trusting the stored value: a role configured above the
+    safety limit would otherwise raise it, and a limit that a settings edit can
+    lift is not a safety limit.
+    """
+    configured = settings.for_role(role).max_output_tokens
+    if configured <= 0:
+        return global_ceiling
+    return min(configured, global_ceiling)
 
 
 def role_rows() -> list[dict[str, Any]]:

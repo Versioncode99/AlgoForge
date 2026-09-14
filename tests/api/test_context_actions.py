@@ -135,7 +135,7 @@ def test_data_health_reports_services_as_well_as_archives(actions) -> None:
     """The gap this closes: an operator could see a hole in the 2019 archive and
     could not find out that Databento had been refusing since lunchtime."""
     health = actions.call("data_health", {})
-    assert set(health) == {"datasets", "services", "calendars", "absent", "tiers"}
+    assert set(health) == {"datasets", "services", "calendars", "absent", "tiers", "tracked"}
     assert health["services"], "no service rows at all"
 
 

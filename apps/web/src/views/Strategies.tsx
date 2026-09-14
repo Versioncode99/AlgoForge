@@ -1,38 +1,55 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, ArrowLeft, Box, Check, FileCode2, Gavel, Play, Plus, ShieldCheck, Trash2,
-  Waves,
+  AlertTriangle, ArrowLeft, Box, Check, FileCode2, Gavel, MessagesSquare, Play, Plus,
+  ShieldCheck, Trash2, Waves,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { deleteJson, getJson, postJson, putJson } from '../api'
 import { computeStats, byPeriod, equityFrom, filterSide, type Side, type Stats } from '../analytics'
 import { CurveChart, SweepChart } from '../charts'
 import { AnalysisChart, type AnalysisResult } from '../components/AnalysisChart'
+import { PortPanel } from '../components/PortPanel'
+import { ResamplePane } from '../components/ResamplePane'
 import { JobBar } from '../components/JobBar'
 import { Empty, PanelHead, Rolling, Stat, TierPill, VerdictPill } from '../components/ui'
 import { useJob } from '../hooks/useJob'
 import { StrategyCatalogue } from './StrategyCatalogue'
 import { money, pct, shortHash, signed, stamp } from '../lib'
+import { format } from '../route'
 import type {
   BacktestJobResult, BacktestResult, DatasetInfo, Job, StrategyDetail, StrategyListItem,
   SweepResult, TemplateInfo, Trade, ValidationEvidence, Verdict,
 } from '../types'
 
-type Pane = 'summary' | 'trades' | 'periods' | 'gates' | 'validation' | 'code' | 'hypothesis'
+type Pane =
+  | 'summary' | 'trades' | 'periods' | 'gates' | 'validation' | 'resample' | 'code' | 'port'
+  | 'hypothesis'
 const PANES: { key: Pane; label: string }[] = [
   { key: 'summary', label: 'Summary' },
   { key: 'trades', label: 'Trades' },
   { key: 'periods', label: 'Periods' },
   { key: 'gates', label: 'Gates' },
   { key: 'validation', label: 'Validation' },
+  { key: 'resample', label: 'Resample' },
   { key: 'code', label: 'Code' },
+  { key: 'port', label: 'Port' },
   { key: 'hypothesis', label: 'Hypothesis' },
 ]
 
-export function StrategiesView() {
+/** What a link asked this view to open. Empty strings mean "nothing asked". */
+type Opening = { open?: string; pane?: string }
+
+export function StrategiesView({ open = '', pane: wanted = '' }: Opening = {}) {
   const qc = useQueryClient()
-  const [selected, setSelected] = useState<string | null>(null)
-  const [pane, setPane] = useState<Pane>('summary')
+  /* Seeded from the link rather than set by an effect afterwards.
+   *
+   * An effect would render the list first and then jump, which reads as the
+   * interface changing its mind -- and worse, would fight the operator the
+   * moment they clicked something else, because the link is still in the URL. */
+  const [selected, setSelected] = useState<string | null>(open || null)
+  const [pane, setPane] = useState<Pane>(
+    PANES.some((p) => p.key === wanted) ? (wanted as Pane) : 'summary',
+  )
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
   const [dataset, setDataset] = useState('')
@@ -264,6 +281,22 @@ export function StrategiesView() {
                     ])}>
                     <Box />{surfaceJob.active ? 'Mapping…' : 'Surface'}
                   </button>
+                  {/* The entry point the conversation panel had been waiting
+                      for. It accepted an opening subject since it was written
+                      and no caller passed one, so every thread started either
+                      blank or from whatever the workspace happened to be
+                      pointed at -- never from the strategy somebody was
+                      actually looking at. */}
+                  <a
+                    className="btn af-press"
+                    href={format('assistant', {
+                      strategy: spec.strategy_id,
+                      label: spec.name,
+                    })}
+                    title="Opens a conversation that already knows which strategy you mean."
+                  >
+                    <MessagesSquare />Ask about this
+                  </a>
                   <button className="btn danger af-press" aria-label="Delete strategy" onClick={() => remove.mutate(spec.strategy_id)}>
                     <Trash2 />
                   </button>
@@ -344,6 +377,8 @@ export function StrategiesView() {
                     onSave={(next) => saveSource.mutate(next)}
                   />
                 )}
+                {pane === 'resample' && selected && <ResamplePane strategyId={selected} />}
+                {pane === 'port' && selected && <PortPanel strategyId={selected} />}
                 {pane === 'hypothesis' && <HypothesisPane spec={spec} />}
               </div>
             </>

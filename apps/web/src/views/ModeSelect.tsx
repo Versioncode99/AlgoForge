@@ -23,14 +23,14 @@ import {
  *
  * Deliberately not a pricing page. There are no tiers, nothing is locked, and
  * every mode reaches the same judge and the same data — so the screen sells
- * nothing and explains four workflows instead. What each panel carries is the
+ * nothing and explains three workflows instead. What each panel carries is the
  * information a person actually chooses on: what the environment is for, and
  * which sections it opens with.
  *
- * The Hedge Fund panel is the only one that asks a second question, because it
- * is the only mode where the answer changes what an agent may do without you.
- * It is asked here rather than after entry: choosing it inside the mode would
- * mean the mode opens on a stance nobody picked.
+ * The AI panel is the only one that asks a second question, because it is the
+ * only mode where the answer changes what an agent may do without you. It is
+ * asked here rather than after entry: choosing it inside the mode would mean
+ * the mode opens on a stance nobody picked.
  *
  * Two bands sit around the grid.
  *
@@ -46,7 +46,10 @@ import {
  * about what the system will do, and no level hides a refusal.
  */
 
-const ORDER: ModeKey[] = ['normal', 'prop_firm', 'ai', 'hedge_fund']
+const ORDER: ModeKey[] = ['normal', 'prop_firm', 'ai']
+
+/** Small numbers read as words in a sentence. Beyond this the digit is fine. */
+const WORDS: Record<number, string> = { 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five' }
 
 export function ModeSelect() {
   const modes = useModes()
@@ -99,9 +102,13 @@ export function ModeSelect() {
         <Wordmark />
         <h1>Choose your workspace</h1>
         <p>
-          One platform, four operating environments. Every one reaches the same data, the same
-          strategies and the same judge — what changes is what the screen is arranged around, and
-          how much an assistant may do on your behalf.
+          {/* Counted from the manifest rather than written down. The sentence said
+              "four" for as long as the Hedge Fund mode had been gone, because a
+              number in prose has nothing to keep it honest. */}
+          One platform, {WORDS[modes.data?.modes.length ?? 0] ?? modes.data?.modes.length} operating
+          environments. Every one reaches the same data, the same strategies and the same judge —
+          what changes is what the screen is arranged around, and how much an assistant may do on
+          your behalf.
         </p>
       </header>
 

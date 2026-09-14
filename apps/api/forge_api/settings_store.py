@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,50 @@ ROLES: list[dict[str, str]] = [
 ]
 
 
+class BudgetMode(StrEnum):
+    """§12's three modes, named as the directive names them.
+
+    A boolean could carry two of these and the third is the one an operator
+    actually wants: spend freely while it is cheap, and stop when it is not.
+    """
+
+    #: The ceilings apply, always.
+    ENFORCED = "ENFORCED"
+    #: No research ceiling. `SAFETY_LIMITS` still hold -- they are about what
+    #: this process can survive, not about what the research is worth.
+    UNLIMITED_WITH_SAFETY_LIMITS = "UNLIMITED_WITH_SAFETY_LIMITS"
+    #: The ceilings apply once the day's spend crosses the soft threshold.
+    ADAPTIVE = "ADAPTIVE"
+
+
+#: What each mode does, for the surface that renders the choice. Data rather
+#: than prose in a component, so the screen cannot describe a mode the code no
+#: longer implements.
+BUDGET_MODES: list[dict[str, str]] = [
+    {
+        "key": str(BudgetMode.ENFORCED),
+        "label": "Enforced",
+        "detail": "The research ceilings below apply from the first call.",
+    },
+    {
+        "key": str(BudgetMode.UNLIMITED_WITH_SAFETY_LIMITS),
+        "label": "Unlimited, with safety limits",
+        "detail": (
+            "No research ceiling. The safety limits stay in force: they are about what "
+            "this process can survive, not about what the research is worth."
+        ),
+    },
+    {
+        "key": str(BudgetMode.ADAPTIVE),
+        "label": "Adaptive",
+        "detail": (
+            "No ceiling while today's spend is under the soft threshold, and the full "
+            "ceilings once it crosses. If the spend cannot be read, the ceilings apply."
+        ),
+    },
+]
+
+
 @dataclass
 class BudgetSettings:
     """What a campaign may spend, and whether that ceiling is enforced at all.
@@ -99,8 +144,15 @@ class BudgetSettings:
     than asserted.
     """
 
-    #: Master switch. Off means no research ceiling is applied.
-    enforced: bool = True
+    #: Which of §12's three modes is in force.
+    #:
+    #: `ENFORCED` applies the research ceilings below. `UNLIMITED_WITH_SAFETY_LIMITS`
+    #: applies none of them and leaves `SAFETY_LIMITS` in force. `ADAPTIVE` is the
+    #: middle one and is the reason the switch could not stay a boolean: it applies
+    #: nothing while the day's spend is below the soft threshold and everything once
+    #: it crosses, so an operator is not interrupted during ordinary work and is
+    #: stopped when the spending starts to matter.
+    mode: BudgetMode = BudgetMode.ENFORCED
     daily_usd_hard: float = 12.0
     daily_usd_soft: float = 9.0
     monthly_usd_hard: float = 300.0
@@ -115,14 +167,50 @@ class BudgetSettings:
     backtests_per_campaign: int = 0
     external_research_per_day: int = 0
 
-    def limit(self, name: str) -> int:
-        """The ceiling on one dimension, or 0 for none.
+    def __post_init__(self) -> None:
+        """Coerce a stored string back into the enum.
 
-        Returns 0 for everything when enforcement is off, which is the whole
-        behavioural difference and is asserted by a test rather than left to
-        each caller to remember.
+        Settings round-trip through JSON, so `mode` comes back as a plain
+        string. `StrEnum` members compare *equal* to their string and are not
+        *identical* to it, and every decision below is an `is` check -- so
+        without this the mode loaded from disk silently behaved as `ENFORCED`
+        whatever it said, which is the failure that looks like the setting not
+        saving.
         """
-        if not self.enforced:
+        if not isinstance(self.mode, BudgetMode):
+            try:
+                object.__setattr__(self, "mode", BudgetMode(str(self.mode)))
+            except ValueError:
+                # An unreadable mode enforces. A settings file with a mode this
+                # build does not know must not be the reason no ceiling applies.
+                object.__setattr__(self, "mode", BudgetMode.ENFORCED)
+
+    @property
+    def enforced(self) -> bool:
+        """Whether any research ceiling can bite at all.
+
+        Kept because callers and the settings payload have always asked this
+        question, and because the honest answer for `ADAPTIVE` is yes: its
+        ceilings are configured and can stop a campaign. *When* they bite is
+        `limit`'s business, and a caller that needed to know that was already
+        calling `limit`.
+        """
+        return self.mode is not BudgetMode.UNLIMITED_WITH_SAFETY_LIMITS
+
+    def limit(self, name: str, spent_usd: float | None = None) -> int:
+        """The ceiling on one dimension right now, or 0 for none.
+
+        `spent_usd` is today's spend and only `ADAPTIVE` reads it. **Not knowing
+        it enforces.** A caller that cannot say what has been spent has not
+        established that spending is low, and treating unknown as "under the
+        threshold" would make the safest-sounding mode the one that stops
+        applying the moment the accounting is unavailable -- which is exactly
+        when it should apply.
+        """
+        if self.mode is BudgetMode.UNLIMITED_WITH_SAFETY_LIMITS:
+            return 0
+        under_soft = spent_usd is not None and spent_usd < self.daily_usd_soft
+        if self.mode is BudgetMode.ADAPTIVE and under_soft:
             return 0
         return max(0, int(getattr(self, name, 0) or 0))
 

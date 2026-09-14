@@ -1,4 +1,4 @@
-"""The four operating environments, and what each one is for.
+"""The three operating environments, and what each one is for.
 
 AlgoForge is one platform. A *mode* is not a separate product and not a
 licence tier: it is a declaration of what the operator came here to do, and
@@ -17,6 +17,24 @@ every mode can reach the judge, and switching modes never deletes work. The
 restriction a mode carries applies to the *AI actor* — see
 `forge.modes.permissions` — because that is the actor whose reach has to be
 bounded rather than merely tidy.
+
+**Why there is no Hedge Fund mode.** There was one, and it was a product
+category rather than a capability: AlgoForge is not sold as hedge-fund
+infrastructure, and a top-level mode named after an institution told quants,
+traders and prop traders that the deepest part of the application was for
+somebody else. Nothing built for it was deleted. The deterministic loop it
+carried — portfolio construction, the risk engine, the pre-trade gate,
+execution, operations — moved into Normal, which is the environment for
+somebody trading their own book; its oversight surfaces — the orchestrator
+log, the approval queue, the audit trail — moved into AI, which is where the
+actor those surfaces exist to watch actually lives.
+
+**Where the autonomous stance went.** It moved with the oversight surfaces, to
+AI, and it grants exactly what it granted before. Autonomy was never a property
+of being a fund; it is a property of running unattended, which is what AI mode
+is for. The reachability is unchanged and deliberately so: the same two-step
+opt-in (choose the mode, then choose the stance) reaches the same single
+permission, and the same deterministic controls stand behind it.
 """
 
 from __future__ import annotations
@@ -27,22 +45,22 @@ from typing import Any
 
 
 class WorkspaceMode(StrEnum):
-    """The four environments the product opens into."""
+    """The three environments the product opens into."""
 
     NORMAL = "normal"
     PROP_FIRM = "prop_firm"
     AI = "ai"
-    HEDGE_FUND = "hedge_fund"
 
 
 class Stance(StrEnum):
     """How much an AI actor may do without a person in the way.
 
-    Only Hedge Fund mode offers the choice, because it is the only mode with a
-    workflow long enough for the distinction to mean anything. Both stances are
-    bounded by the same deterministic controls: *autonomous* moves the approval
-    gate, it does not remove the risk engine, the pre-trade gate or the kill
-    switch. See `forge.modes.permissions`.
+    Only AI mode offers the choice, because it is the only mode whose purpose is
+    unattended work — the distinction has nothing to say in an environment where
+    a person is driving. Both stances are bounded by the same deterministic
+    controls: *autonomous* moves the approval gate, it does not remove the risk
+    engine, the pre-trade gate or the kill switch. See
+    `forge.modes.permissions`.
     """
 
     HUMAN_IN_THE_LOOP = "human_in_the_loop"
@@ -87,8 +105,8 @@ class ModeDescriptor:
     #: the operator should not have to assemble their own tools to begin.
     workspace_template: str
     sections: tuple[Section, ...]
-    #: Empty for every mode but Hedge Fund. An empty tuple means "this mode has
-    #: no stance", which is different from "it has one and it is the default".
+    #: Empty for every mode but AI. An empty tuple means "this mode has no
+    #: stance", which is different from "it has one and it is the default".
     stances: tuple[Stance, ...] = ()
     #: Stated limitations, shown in the interface rather than discovered. A mode
     #: that cannot do something says so where the operator is standing.
@@ -148,6 +166,18 @@ _NORMAL = ModeDescriptor(
                 ("evidence",)),
         Section("positions", "Positions & Orders", "Paper book and working orders", "Book",
                 ("positions", "orders", "account")),
+        Section("portfolio", "Portfolio", "From signals to sizes, inside constraints", "Book",
+                ("portfolio", "positions")),
+        Section("risk", "Risk", "Exposure, leverage, concentration and tail", "Book",
+                ("risk",)),
+        Section("gate", "Pre-Trade Gate", "Every proposed order, checked", "Book",
+                ("pretrade_gate", "orders")),
+        Section("execution", "Execution", "Orders, fills and what they cost", "Book",
+                ("orders", "positions")),
+        Section("operations", "Operations", "Book, reconciliation, jobs and health", "Book",
+                ("positions", "account", "logs")),
+        Section("book", "Book Overview", "Capital, exposure and the state of the loop", "Book",
+                ("fund_summary", "activity")),
         Section("performance", "Performance", "Return, risk and where both came from", "Book",
                 ("runs",)),
         Section("data", "Data Health", "Coverage and provenance", "Data", ("data_health",)),
@@ -158,6 +188,9 @@ _NORMAL = ModeDescriptor(
     limitations=(
         "Paper only. No live-order path exists anywhere in this application.",
         "Fills are modelled from bar data, not calibrated against a broker.",
+        "Execution is simulated locally. No broker, OMS vendor or venue is connected.",
+        "No commercial factor model is installed. Factor exposure is reported only "
+        "against loadings you supply.",
     ),
 )
 
@@ -251,6 +284,12 @@ _AI = ModeDescriptor(
         Section("actions", "Actions", "The verbs, their schemas and who may call them",
                 "AI", ()),
         Section("activity", "Activity", "Every call, in order", "AI", ("activity",)),
+        Section("orchestrator", "Orchestrator", "What the AI did, and what it was refused",
+                "AI", ("agent", "activity")),
+        Section("approvals", "Approvals", "Consequential actions awaiting a person", "AI",
+                ("approvals",)),
+        Section("audit", "Audit Log", "Who did what, on what, and with what result", "AI",
+                ("audit",)),
         Section("strategies", "Strategies", "Build, run and judge", "Work", ("strategies",)),
         Section("research", "Research", "Sources and replication gaps", "Work",
                 ("research_library",)),
@@ -282,70 +321,21 @@ _AI = ModeDescriptor(
         Section("lab", "Research Lab", "Ask a question, get back to the trades", "Work", ()),
         Section("settings", "Settings", "Providers, data and storage", "System", ()),
     ),
+    stances=(Stance.HUMAN_IN_THE_LOOP, Stance.AUTONOMOUS),
     limitations=(
         "AI reaches only the registered actions. There is no arbitrary-code verb.",
         "A model that is not configured is reported as unavailable, never simulated.",
-    ),
-)
-
-_HEDGE_FUND = ModeDescriptor(
-    mode=WorkspaceMode.HEDGE_FUND,
-    name="Hedge Fund",
-    tagline="Research, construct, manage and execute quantitative portfolios.",
-    purpose=(
-        "An operating layer over the whole quantitative loop: point-in-time data, "
-        "alpha research, the judge, portfolio construction, a deterministic risk "
-        "engine, a pre-trade gate nothing routes around, and simulated execution "
-        "through an OMS. AI orchestrates the loop; it does not own the controls."
-    ),
-    workspace_template="fund_command",
-    sections=(
-        Section("fund", "Fund Overview", "NAV, exposure and the state of the loop",
-                "Command", ("activity",)),
-        Section("data", "Data", "Point-in-time datasets and their provenance", "Loop",
-                ("data_health",)),
-        Section("research", "Research", "Hypotheses and the experiments testing them",
-                "Loop", ("experiments", "research_library")),
-        Section("lab", "Research Lab", "Ask a question, get back to the trades", "Loop", ()),
-        Section("memory", "Research Memory", "What has already been disproven", "Loop",
-                ("research_memory",)),
-        Section("alpha", "Alpha", "Candidate signals and what supports them", "Loop",
-                ("strategies",)),
-        Section("validation", "Validation", "The G0-G13 ladder, unchanged", "Loop",
-                ("validation", "evidence")),
-        Section("portfolio", "Portfolio", "From signals to sizes, inside constraints",
-                "Loop", ("positions",)),
-        Section("risk", "Risk", "Exposure, leverage, concentration and tail", "Loop",
-                ("risk",)),
-        Section("gate", "Pre-Trade Gate", "Every proposed order, checked", "Loop",
-                ("orders",)),
-        Section("execution", "Execution", "Orders, fills and what they cost", "Loop",
-                ("orders", "positions")),
-        Section("operations", "Operations", "Book, reconciliation, jobs and health",
-                "Loop", ("positions", "account", "logs")),
-        Section("performance", "Performance", "Where the return came from", "Loop",
-                ("runs",)),
-        Section("orchestrator", "AI Orchestrator", "What the AI did, and what it was refused",
-                "Command", ("agent", "activity")),
-        Section("approvals", "Approvals", "Consequential actions awaiting a person",
-                "Command", ()),
-        Section("audit", "Audit Log", "Who did what, on what, and with what result",
-                "Command", ()),
-        Section("settings", "Settings", "Providers, data and storage", "System", ()),
-    ),
-    stances=(Stance.HUMAN_IN_THE_LOOP, Stance.AUTONOMOUS),
-    limitations=(
-        "Execution is simulated locally. No broker, OMS vendor or venue is connected.",
-        "No commercial factor model is installed. Factor exposure is reported only "
-        "against loadings you supply.",
-        "Point-in-time integrity is asserted per dataset, and datasets that cannot "
-        "guarantee it say so rather than being treated as though they could.",
+        "The autonomous stance moves the approval gate and nothing else. The risk "
+        "engine, the pre-trade gate and the kill switch stand in front of every "
+        "order either way, and AI cannot modify any of them.",
+        "Execution is simulated locally. No broker, OMS vendor or venue is connected, "
+        "so an autonomously submitted order reaches a simulator and says so.",
     ),
 )
 
 MODES: dict[WorkspaceMode, ModeDescriptor] = {
     descriptor.mode: descriptor
-    for descriptor in (_NORMAL, _PROP_FIRM, _AI, _HEDGE_FUND)
+    for descriptor in (_NORMAL, _PROP_FIRM, _AI)
 }
 
 #: Display order. Deliberately not `WorkspaceMode` iteration order by accident —
@@ -354,7 +344,6 @@ MODE_ORDER: tuple[WorkspaceMode, ...] = (
     WorkspaceMode.NORMAL,
     WorkspaceMode.PROP_FIRM,
     WorkspaceMode.AI,
-    WorkspaceMode.HEDGE_FUND,
 )
 
 

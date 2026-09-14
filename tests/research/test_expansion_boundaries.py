@@ -257,13 +257,15 @@ def test_turning_budget_enforcement_off_changes_no_permission() -> None:
     import inspect
 
     from forge.modes.permissions import evaluate
-    from forge_api.settings_store import BudgetSettings
+    from forge_api.settings_store import BudgetMode, BudgetSettings
 
     # The function's signature is the argument: it takes who, which mode, which
     # stance and which action, and there is nowhere for a budget to enter.
     parameters = set(inspect.signature(evaluate).parameters)
     assert not parameters & {"budget", "settings", "enforced", "limits"}
-    off = BudgetSettings(enforced=False, model_calls_per_day=100)
+    off = BudgetSettings(
+        mode=BudgetMode.UNLIMITED_WITH_SAFETY_LIMITS, model_calls_per_day=100
+    )
     assert off.limit("model_calls_per_day") == 0
     assert off.model_calls_per_day == 100
 

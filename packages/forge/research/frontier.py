@@ -65,6 +65,16 @@ class FrontierState(StrEnum):
     UNTESTED = "UNTESTED"
     PARTIALLY_EXPLORED = "PARTIALLY_EXPLORED"
     INCONCLUSIVE = "INCONCLUSIVE"
+    #: Something came back and could not be safely interpreted -- a malformed
+    #: structured output, a verdict that did not parse, an answer whose shape
+    #: no longer matches its schema.
+    #:
+    #: Deliberately not INCONCLUSIVE, which means the experiment ran and the
+    #: evidence was thin. This means nobody knows whether it ran, and collapsing
+    #: the two would turn a parsing failure into a measured result. It is the
+    #: same hazard as returning a neutral rating when a decision would not
+    #: parse: a plausible value in a field where the truth is "unknown".
+    NEEDS_REVIEW = "NEEDS_REVIEW"
     PROMISING = "PROMISING"
     VALIDATED = "VALIDATED"
     FAILED = "FAILED"
@@ -90,6 +100,16 @@ SCHEDULABLE_STATES: frozenset[FrontierState] = frozenset(
         FrontierState.PROMISING,
     }
 )
+
+#: `NEEDS_REVIEW` is deliberately in none of the sets above.
+#:
+#: Not open, because something was produced. Not schedulable, because running it
+#: again unattended would produce the same unreadable answer and bury the first
+#: one. Not settled, because nothing was decided. It needs a person, and the
+#: only way a state means that is by belonging to no automatic set -- a flag
+#: that some scheduler eventually treats as "close enough to retry" would undo
+#: the whole point.
+NEEDS_A_PERSON: frozenset[FrontierState] = frozenset({FrontierState.NEEDS_REVIEW})
 
 #: Terminal for this campaign's purposes. Reopening one is allowed — evidence
 #: can change — but it takes an explicit reason, which the transition log keeps.

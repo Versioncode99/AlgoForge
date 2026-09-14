@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 
 from forge.contracts.models import DecisionRecord, Preregistration, RunRecord
@@ -13,6 +14,30 @@ class LedgerDatabase:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        # One connection, deliberately shared across threads -- and therefore one
+        # lock around *every* use of it.
+        #
+        # Two failures, and the second is the one that is easy to miss.
+        #
+        # `append_decision` reads the chain head and then writes against it. Two
+        # threads interleaving there both read the same head, both pass the
+        # continuity check, and both insert: a forked chain that
+        # `verify_decision_chain` then reports as tampered forever, on a ledger
+        # nobody actually tampered with.
+        #
+        # And a `sqlite3.Connection` is not safe for *concurrent statements* at
+        # all, read or write. Two threads calling `execute` on one connection
+        # interleave inside the driver and a row can come back torn -- a
+        # `sqlite3.Row` whose columns are not there, raising `IndexError` from a
+        # plain lookup. Routes read this ledger, FastAPI runs sync handlers in a
+        # thread pool, so that is a live path and not a hypothetical one. It was
+        # found by a concurrency test written for the first failure.
+        #
+        # A lock rather than a connection per thread: this is a small, low-traffic
+        # ledger whose whole purpose is an append-ordered chain, and serialising
+        # it costs nothing that matters while making the ordering the type
+        # promises actually true.
+        self._lock = threading.RLock()
         self._migrate()
 
     def _migrate(self) -> None:
@@ -51,6 +76,10 @@ class LedgerDatabase:
         self.connection.commit()
 
     def add_preregistration(self, item: Preregistration) -> None:
+        with self._lock:
+            self._add_preregistration(item)
+
+    def _add_preregistration(self, item: Preregistration) -> None:
         self.connection.execute(
             "INSERT INTO preregistrations VALUES (?, ?, ?, ?)",
             (
@@ -63,6 +92,10 @@ class LedgerDatabase:
         self.connection.commit()
 
     def add_run(self, run: RunRecord) -> None:
+        with self._lock:
+            self._add_run(run)
+
+    def _add_run(self, run: RunRecord) -> None:
         known = self.connection.execute(
             "SELECT content_hash FROM preregistrations WHERE preregistration_id = ?",
             (run.preregistration_id,),
@@ -78,38 +111,64 @@ class LedgerDatabase:
         self.connection.commit()
 
     def list_runs(self) -> list[RunRecord]:
-        rows = self.connection.execute(
-            "SELECT payload FROM runs ORDER BY created_at DESC"
-        ).fetchall()
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT payload FROM runs ORDER BY created_at DESC"
+            ).fetchall()
         return [RunRecord.model_validate(json.loads(row["payload"])) for row in rows]
 
     def get_run(self, run_id: str) -> RunRecord | None:
-        row = self.connection.execute(
-            "SELECT payload FROM runs WHERE run_id = ?", (run_id,)
-        ).fetchone()
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT payload FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
         return None if row is None else RunRecord.model_validate(json.loads(row["payload"]))
 
     def append_decision(self, decision: DecisionRecord) -> None:
-        latest = self.connection.execute(
-            "SELECT record_hash FROM decisions ORDER BY sequence DESC LIMIT 1"
-        ).fetchone()
-        expected = None if latest is None else latest["record_hash"]
-        if decision.previous_hash != expected:
-            raise ValueError("decision chain mismatch")
-        self.connection.execute(
-            """INSERT INTO decisions(decision_id, record_hash, previous_hash, payload)
-            VALUES (?, ?, ?, ?)""",
-            (
-                decision.decision_id,
-                decision.record_hash,
-                decision.previous_hash,
-                decision.model_dump_json(),
-            ),
-        )
-        self.connection.commit()
+        """Append one decision, or refuse because the chain has moved.
+
+        Read and write under one lock. The check and the insert are a single
+        decision about the chain's head, and splitting them across two threads
+        turns "this record follows that one" from a guarantee into a race the
+        winner of which is arbitrary.
+        """
+        with self._lock:
+            latest = self.connection.execute(
+                "SELECT record_hash FROM decisions ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            expected = None if latest is None else latest["record_hash"]
+            if decision.previous_hash != expected:
+                raise ValueError("decision chain mismatch")
+            self.connection.execute(
+                """INSERT INTO decisions(decision_id, record_hash, previous_hash, payload)
+                VALUES (?, ?, ?, ?)""",
+                (
+                    decision.decision_id,
+                    decision.record_hash,
+                    decision.previous_hash,
+                    decision.model_dump_json(),
+                ),
+            )
+            self.connection.commit()
+
+    def chain_head(self) -> str | None:
+        """The hash a new decision must name as its predecessor, or None.
+
+        Public because a caller building a `DecisionRecord` has to know it, and
+        reaching into `connection` to find out is the unsafe read this class
+        exists to prevent.
+        """
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT record_hash FROM decisions ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+        return None if row is None else str(row["record_hash"])
 
     def verify_decision_chain(self) -> bool:
-        rows = self.connection.execute("SELECT payload FROM decisions ORDER BY sequence").fetchall()
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT payload FROM decisions ORDER BY sequence"
+            ).fetchall()
         previous: str | None = None
         for row in rows:
             decision = DecisionRecord.model_validate(json.loads(row["payload"]))
@@ -119,4 +178,5 @@ class LedgerDatabase:
         return True
 
     def close(self) -> None:
-        self.connection.close()
+        with self._lock:
+            self.connection.close()

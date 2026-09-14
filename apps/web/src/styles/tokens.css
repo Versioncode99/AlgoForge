@@ -190,6 +190,53 @@
   --tier-insample: #7fa7d4;
   --tier-synthetic: #6e7178;
 
+
+  /* ── quantitative intensity ───────────────────────────────────────────────
+     A signed quantity on a grid needs something a pair of state colours cannot
+     give it: magnitude. `--pass` and `--fail` say which side of zero a number
+     falls on and nothing about how far, so a cell that made a hundred dollars
+     and one that made forty thousand paint identically — and the whole reason
+     to draw a grid rather than print a table is to see which cell is the
+     outlier.
+
+     So this is a *diverging* scale, anchored at zero rather than at the
+     smallest value in the data. Anchoring at the minimum is the commoner
+     implementation and it lies: it paints the least-bad losing cell as though
+     it were neutral, and on an all-losing strategy it paints one of them green.
+     Zero is the only anchor that means the same thing in every dataset.
+
+     Five steps a side, not a continuous ramp. A reader comparing two cells is
+     doing an ordinal comparison — is this one worse — and discrete steps are
+     read reliably where a gradient is not. They are washes rather than solid
+     fills so the figure printed on top keeps its contrast at every step, which
+     is the failure mode of every heatmap that encodes into the background and
+     then writes text on it.
+
+     Hue is inherited from P&L on purpose. Introducing a third pair here would
+     put two green-ish languages on one screen, and the grid is P&L. */
+  --heat-pos-1: rgb(111 191 139 / 0.10);
+  --heat-pos-2: rgb(111 191 139 / 0.20);
+  --heat-pos-3: rgb(111 191 139 / 0.32);
+  --heat-pos-4: rgb(111 191 139 / 0.46);
+  --heat-pos-5: rgb(111 191 139 / 0.62);
+  --heat-neg-1: rgb(216 105 95 / 0.10);
+  --heat-neg-2: rgb(216 105 95 / 0.20);
+  --heat-neg-3: rgb(216 105 95 / 0.32);
+  --heat-neg-4: rgb(216 105 95 / 0.46);
+  --heat-neg-5: rgb(216 105 95 / 0.62);
+  /* Exactly zero, and "there is no value here", are different states and must
+     not share a fill: an empty cell painted neutral reads as a measured zero. */
+  --heat-zero: transparent;
+  --heat-empty: repeating-linear-gradient(
+    45deg,
+    transparent 0 5px,
+    rgb(138 141 148 / 0.14) 5px 10px
+  );
+  /* A cell whose sample is too small for its rates to be an estimate. Hatched
+     rather than dimmed, because dimming is already how this interface says
+     "disabled" and an unmeasured cell is not a disabled one. */
+  --heat-thin-line: rgb(138 141 148 / 0.34);
+
   /* ── chart ────────────────────────────────────────────────────────────────
      Named separately from the interface surfaces because a chart is read, not
      glanced at: its grid has to be present enough to measure against and quiet
@@ -262,6 +309,29 @@
   --glass-line: rgb(20 22 26 / 0.10);
   --glass-sheen: rgb(255 255 255 / 0.55);
 
+
+  /* Lighter ground, so the same ordinal steps need more ink to separate. */
+  --heat-pos-1: rgb(31 122 75 / 0.08);
+  --heat-pos-2: rgb(31 122 75 / 0.17);
+  --heat-pos-3: rgb(31 122 75 / 0.28);
+  --heat-pos-4: rgb(31 122 75 / 0.40);
+  --heat-pos-5: rgb(31 122 75 / 0.54);
+  --heat-neg-1: rgb(176 51 40 / 0.08);
+  --heat-neg-2: rgb(176 51 40 / 0.17);
+  --heat-neg-3: rgb(176 51 40 / 0.28);
+  --heat-neg-4: rgb(176 51 40 / 0.40);
+  --heat-neg-5: rgb(176 51 40 / 0.54);
+  --heat-empty: repeating-linear-gradient(
+    45deg,
+    transparent 0 5px,
+    rgb(98 101 109 / 0.16) 5px 10px
+  );
+  --heat-thin-line: rgb(98 101 109 / 0.40);
+  /* Restated rather than inherited: the completeness rule is mechanical, and
+     an exception for "this one happens to be theme-independent" is how the
+     next token that is not gets missed. */
+  --heat-zero: transparent;
+
   --chart-bg: transparent;
   --chart-grid: #e4e5e8;
   --chart-axis: #bcbec4;
@@ -331,6 +401,30 @@
   --glass-tint: rgb(20 20 22 / 0.97);
   --glass-line: rgb(255 255 255 / 0.34);
   --glass-sheen: rgb(255 255 255 / 0.05);
+
+
+  /* Wider gaps between steps, as everywhere else in this theme: the point of
+     it is that nothing depends on distinguishing two near-identical values. */
+  --heat-pos-1: rgb(78 224 138 / 0.14);
+  --heat-pos-2: rgb(78 224 138 / 0.28);
+  --heat-pos-3: rgb(78 224 138 / 0.44);
+  --heat-pos-4: rgb(78 224 138 / 0.62);
+  --heat-pos-5: rgb(78 224 138 / 0.82);
+  --heat-neg-1: rgb(255 107 96 / 0.14);
+  --heat-neg-2: rgb(255 107 96 / 0.28);
+  --heat-neg-3: rgb(255 107 96 / 0.44);
+  --heat-neg-4: rgb(255 107 96 / 0.62);
+  --heat-neg-5: rgb(255 107 96 / 0.82);
+  --heat-empty: repeating-linear-gradient(
+    45deg,
+    transparent 0 5px,
+    rgb(180 182 189 / 0.26) 5px 10px
+  );
+  --heat-thin-line: rgb(180 182 189 / 0.58);
+  /* Restated rather than inherited: the completeness rule is mechanical, and
+     an exception for "this one happens to be theme-independent" is how the
+     next token that is not gets missed. */
+  --heat-zero: transparent;
 
   --chart-bg: transparent;
   --chart-grid: #2c2c31;

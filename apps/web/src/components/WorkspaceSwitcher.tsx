@@ -1,5 +1,6 @@
-import { Check, Layers, Pin, Plus, X } from 'lucide-react'
+import { Check, Layers, Pin, Plus, SquareArrowOutUpRight, X } from 'lucide-react'
 import { useState } from 'react'
+import { canOpenWindows, openWorkspaceWindow } from '../desktop'
 import {
   useActiveWorkspace, useCreateWorkspace, useOpenWorkspace, usePinWorkspace, useWorkspaces,
   useSidebarDestinations, byGroup,
@@ -19,15 +20,14 @@ import {
  */
 
 const BUILT_INS: { mode: string; name: string; icon: string; detail: string }[] = [
-  { mode: 'normal', name: 'Normal', icon: '◈', detail: 'Charts, strategies and a paper book.' },
+  { mode: 'normal', name: 'Normal', icon: '◈', detail: 'Charts, strategies, the book and the gate.' },
   { mode: 'prop_firm', name: 'Prop Firm', icon: '◆', detail: 'Accounts, rules, drawdown and the desk.' },
   { mode: 'ai', name: 'AI', icon: '◇', detail: 'Campaigns, agents and the research record.' },
-  { mode: 'hedge_fund', name: 'Hedge Fund', icon: '◼', detail: 'Portfolio, risk, the gate and approvals.' },
 ]
 
 export function WorkspaceSwitcher({ onOpened, onLeaveMode }: {
   onOpened?: () => void
-  /** Return to the four-way chooser. Kept, and kept *here*, because changing
+  /** Return to the chooser. Kept, and kept *here*, because changing
    *  mode changes what an assistant may do on your behalf — it is a permissions
    *  decision, not a navigation one, and it belongs beside the arrangements
    *  rather than in the header where it read as "switch screens". */
@@ -64,6 +64,17 @@ export function WorkspaceSwitcher({ onOpened, onLeaveMode }: {
               </span>
               {row.workspace_id === activeId && <Check className="ws-current" aria-hidden="true" />}
             </button>
+            {/* Only inside the desktop shell. In a browser a workspace cannot
+                have its own OS window, and a button that silently does nothing
+                is worse than one that is not there. */}
+            {canOpenWindows() && (
+              <button
+                className="ws-window"
+                aria-label={`Open ${row.name} in a new window`}
+                title="Open in a new window. Workspaces can sit side by side."
+                onClick={() => { void openWorkspaceWindow(row.workspace_id) }}
+              ><SquareArrowOutUpRight aria-hidden="true" /></button>
+            )}
             <button
               className="ws-pin"
               aria-label={row.pinned ? `Unpin ${row.name}` : `Pin ${row.name}`}

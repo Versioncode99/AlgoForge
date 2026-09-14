@@ -1,4 +1,4 @@
-"""The four modes, end to end through the API the interface actually calls.
+"""The three modes, end to end through the API the interface actually calls.
 
 Everything below goes through HTTP or through the shared action registry, so a
 passing assertion here says the same thing about the interface and about an
@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from forge.modes.permissions import Actor
+from forge.workstation.templates import template
 from forge_api.actions import ActionError, ApprovalRequired
 from forge_api.main import create_app
 
@@ -41,11 +42,9 @@ def enter(client: Any, mode: str, stance: str | None = None) -> Any:
 # ── the manifest and the session ─────────────────────────────────────────────
 
 
-def test_the_api_serves_four_modes_and_the_loop(client: Any) -> None:
+def test_the_api_serves_three_modes_and_the_loop(client: Any) -> None:
     payload = data(client.get("/api/v1/modes"))
-    assert [mode["mode"] for mode in payload["modes"]] == [
-        "normal", "prop_firm", "ai", "hedge_fund"
-    ]
+    assert [mode["mode"] for mode in payload["modes"]] == ["normal", "prop_firm", "ai"]
     assert len(payload["loop"]) == 11
     assert payload["loop"][0]["stage"] == "data"
 
@@ -58,7 +57,7 @@ def test_nothing_is_open_until_a_mode_is_entered(client: Any) -> None:
     assert session["policy_applies"] is False
 
 
-@pytest.mark.parametrize("mode", ["normal", "prop_firm", "ai", "hedge_fund"])
+@pytest.mark.parametrize("mode", ["normal", "prop_firm", "ai"])
 def test_every_mode_opens_and_seeds_its_own_workspace(client: Any, mode: str) -> None:
     opened = enter(client, mode)
     assert opened["session"]["mode"] == mode
@@ -67,8 +66,8 @@ def test_every_mode_opens_and_seeds_its_own_workspace(client: Any, mode: str) ->
     assert opened["descriptor"]["sections"]
 
 
-def test_entering_the_fund_on_a_stance_records_it(client: Any) -> None:
-    opened = enter(client, "hedge_fund", "autonomous")
+def test_entering_ai_on_a_stance_records_it(client: Any) -> None:
+    opened = enter(client, "ai", "autonomous")
     assert opened["session"]["stance"] == "autonomous"
     assert "unattended" in opened["policy"]["summary"]
 
@@ -82,7 +81,7 @@ def test_a_stance_on_a_mode_that_has_none_is_refused(client: Any) -> None:
 def test_an_unknown_mode_is_refused_with_the_valid_set(client: Any) -> None:
     response = client.post("/api/v1/modes/day_trading/enter", json={})
     assert response.status_code == 409
-    assert "hedge_fund" in response.json()["detail"]["reason"]
+    assert "ai" in response.json()["detail"]["reason"]
 
 
 # ── switching does not corrupt anything ──────────────────────────────────────
@@ -90,7 +89,7 @@ def test_an_unknown_mode_is_refused_with_the_valid_set(client: Any) -> None:
 
 def test_each_mode_keeps_its_own_layout_across_a_switch(client: Any) -> None:
     normal = enter(client, "normal")["session"]["workspace_id"]
-    fund = enter(client, "hedge_fund")["session"]["workspace_id"]
+    fund = enter(client, "ai")["session"]["workspace_id"]
     assert normal and fund and normal != fund
 
     back = enter(client, "normal")
@@ -105,17 +104,29 @@ def test_leaving_returns_to_the_chooser_without_forgetting_a_layout(client: Any)
     assert enter(client, "prop_firm")["session"]["workspace_id"] == seeded
 
 
-def test_a_seeded_workspace_holds_the_panels_the_mode_declares(client: Any) -> None:
-    opened = enter(client, "hedge_fund")
-    kinds = {panel["kind"] for panel in opened["workspace"]["panels"]}
-    assert {"fund_summary", "portfolio", "pretrade_gate"} <= kinds
+@pytest.mark.parametrize("mode", ["normal", "prop_firm", "ai"])
+def test_a_seeded_workspace_holds_the_panels_the_mode_declares(
+    client: Any, mode: str
+) -> None:
+    """Entering a mode lands on the layout its manifest names, not a default.
+
+    Checked against the template the descriptor points at rather than a list of
+    panel kinds written out here: a hard-coded list is a second copy of the
+    manifest, and it is the copy that goes stale the day somebody edits a
+    template.
+    """
+    opened = enter(client, mode)
+    declared = template(opened["descriptor"]["workspace_template"])
+    seeded = [panel["kind"] for panel in opened["workspace"]["panels"]]
+    assert seeded == [panel.kind.value for panel in declared.panels]
+    assert seeded, f"{mode} opened on an empty layout"
 
 
 # ── the permission surface ───────────────────────────────────────────────────
 
 
 def test_the_permissions_endpoint_rules_on_every_registered_action(client: Any) -> None:
-    enter(client, "hedge_fund", "human_in_the_loop")
+    enter(client, "ai", "human_in_the_loop")
     payload = data(client.get("/api/v1/modes/permissions"))
     rulings = {row["action"]: row["ruling"] for row in payload["actions"]}
     assert set(rulings) == set(client.app_state.actions.names())
@@ -125,12 +136,12 @@ def test_the_permissions_endpoint_rules_on_every_registered_action(client: Any) 
 
 
 def test_the_permissions_endpoint_follows_the_stance(client: Any) -> None:
-    enter(client, "hedge_fund", "human_in_the_loop")
+    enter(client, "ai", "human_in_the_loop")
     supervised = {
         row["action"]: row["ruling"]
         for row in data(client.get("/api/v1/modes/permissions"))["actions"]
     }
-    enter(client, "hedge_fund", "autonomous")
+    enter(client, "ai", "autonomous")
     autonomous = {
         row["action"]: row["ruling"]
         for row in data(client.get("/api/v1/modes/permissions"))["actions"]
@@ -146,8 +157,8 @@ def test_the_permissions_endpoint_follows_the_stance(client: Any) -> None:
 
 def test_an_agent_cannot_change_a_protected_control_in_any_mode(client: Any) -> None:
     actions = client.app_state.actions
-    for mode in ("normal", "prop_firm", "ai", "hedge_fund"):
-        enter(client, mode, "autonomous" if mode == "hedge_fund" else None)
+    for mode in ("normal", "prop_firm", "ai"):
+        enter(client, mode, "autonomous" if mode == "ai" else None)
         with pytest.raises(ActionError, match="protected control"):
             actions.call("set_fund_config", {"config": {}}, actor=Actor.AI)
 
@@ -155,11 +166,11 @@ def test_an_agent_cannot_change_a_protected_control_in_any_mode(client: Any) -> 
 def test_an_agent_cannot_widen_its_own_permissions(client: Any) -> None:
     """The escape route: switch to autonomous, then do what autonomous permits."""
     actions = client.app_state.actions
-    enter(client, "hedge_fund", "human_in_the_loop")
+    enter(client, "ai", "human_in_the_loop")
     with pytest.raises(ActionError, match="protected control"):
         actions.call("set_stance", {"stance": "autonomous"}, actor=Actor.AI)
     with pytest.raises(ActionError, match="protected control"):
-        actions.call("enter_mode", {"mode": "hedge_fund", "stance": "autonomous"},
+        actions.call("enter_mode", {"mode": "ai", "stance": "autonomous"},
                      actor=Actor.AI)
     assert data(client.get("/api/v1/modes/session"))["session"]["stance"] == "human_in_the_loop"
 
@@ -175,7 +186,7 @@ def test_an_agent_cannot_write_a_prop_account_balance(client: Any) -> None:
 
 def test_a_consequential_action_is_held_rather_than_run_in_the_loop(client: Any) -> None:
     actions = client.app_state.actions
-    enter(client, "hedge_fund", "human_in_the_loop")
+    enter(client, "ai", "human_in_the_loop")
     with pytest.raises(ApprovalRequired) as held:
         actions.call("submit_orders", {"order_ids": ["o1"]}, actor=Actor.AI,
                      origin="test agent")
@@ -191,7 +202,7 @@ def test_approving_runs_the_action_as_the_operator_and_records_the_chain(
     client: Any,
 ) -> None:
     actions = client.app_state.actions
-    enter(client, "hedge_fund", "human_in_the_loop")
+    enter(client, "ai", "human_in_the_loop")
     with pytest.raises(ApprovalRequired) as held:
         actions.call("submit_orders", {"order_ids": ["never_screened"]}, actor=Actor.AI)
     request_id = held.value.request.request_id
@@ -208,7 +219,7 @@ def test_approving_runs_the_action_as_the_operator_and_records_the_chain(
 
 def test_rejecting_leaves_nothing_run(client: Any) -> None:
     actions = client.app_state.actions
-    enter(client, "hedge_fund", "human_in_the_loop")
+    enter(client, "ai", "human_in_the_loop")
     with pytest.raises(ApprovalRequired) as held:
         actions.call("submit_orders", {"order_ids": ["o1"]}, actor=Actor.AI)
     decided = data(
@@ -221,7 +232,7 @@ def test_rejecting_leaves_nothing_run(client: Any) -> None:
 def test_an_agent_may_run_the_preparatory_half_of_the_loop(client: Any) -> None:
     """The permission that has to work, or the assistant is decorative."""
     actions = client.app_state.actions
-    enter(client, "hedge_fund", "human_in_the_loop")
+    enter(client, "ai", "human_in_the_loop")
     for name in ("fund_state", "calculate_risk", "list_strategies"):
         assert actions.call(name, {}, actor=Actor.AI) is not None
 
@@ -231,7 +242,7 @@ def test_an_agent_may_run_the_preparatory_half_of_the_loop(client: Any) -> None:
 
 def test_every_call_is_audited_including_the_refusals(client: Any) -> None:
     actions = client.app_state.actions
-    enter(client, "hedge_fund", "human_in_the_loop")
+    enter(client, "ai", "human_in_the_loop")
     actions.call("fund_state", {}, actor=Actor.AI, origin="test agent")
     with pytest.raises(ActionError):
         actions.call("set_fund_config", {"config": {}}, actor=Actor.AI, origin="test agent")
@@ -248,10 +259,10 @@ def test_the_audit_records_which_mode_and_stance_a_call_was_made_under(
     client: Any,
 ) -> None:
     actions = client.app_state.actions
-    enter(client, "hedge_fund", "autonomous")
+    enter(client, "ai", "autonomous")
     actions.call("fund_state", {}, actor=Actor.AI)
     entry = data(client.get("/api/v1/audit"))["entries"][0]
-    assert entry["mode"] == "hedge_fund"
+    assert entry["mode"] == "ai"
     assert entry["stance"] == "autonomous"
 
 
@@ -259,14 +270,14 @@ def test_the_audit_records_which_mode_and_stance_a_call_was_made_under(
 
 
 def test_a_fund_with_no_universe_refuses_to_construct(client: Any) -> None:
-    enter(client, "hedge_fund")
+    enter(client, "ai")
     response = client.post("/api/v1/fund/portfolio", json={})
     assert response.status_code == 409
     assert "no universe" in response.json()["detail"]["reason"]
 
 
 def test_the_fund_reports_every_loop_stage_with_a_state(client: Any) -> None:
-    enter(client, "hedge_fund")
+    enter(client, "ai")
     state = data(client.get("/api/v1/fund/state"))
     assert len(state["stages"]) == 11
     assert all(stage["status"] for stage in state["stages"])
@@ -277,14 +288,14 @@ def test_the_fund_reports_every_loop_stage_with_a_state(client: Any) -> None:
 
 
 def test_the_fund_admits_it_cannot_mark_open_positions(client: Any) -> None:
-    enter(client, "hedge_fund")
+    enter(client, "ai")
     limitations = " ".join(data(client.get("/api/v1/fund/state"))["limitations"])
     assert "mark-to-market" in limitations
     assert "MTD" in limitations
 
 
 def test_configuring_the_fund_is_recorded_with_who_changed_it(client: Any) -> None:
-    enter(client, "hedge_fund")
+    enter(client, "ai")
     config = data(client.get("/api/v1/fund/config"))["config"]
     config["universe"] = [
         {"symbol": "NQ", "sector": "Equity Index", "region": "US", "multiplier": 20,
@@ -299,14 +310,14 @@ def test_configuring_the_fund_is_recorded_with_who_changed_it(client: Any) -> No
 
 def test_an_unscreened_order_cannot_be_submitted(client: Any) -> None:
     """The gate is not advisory, and this is the path that proves it over HTTP."""
-    enter(client, "hedge_fund")
+    enter(client, "ai")
     payload = data(client.post("/api/v1/fund/orders/submit", json={"order_ids": ["made_up"]}))
     assert payload["accepted"] == 0
     assert "not been screened" in payload["results"][0]["reason"]
 
 
 def test_the_operations_view_reports_a_simulated_book(client: Any) -> None:
-    enter(client, "hedge_fund")
+    enter(client, "ai")
     operations = data(client.get("/api/v1/fund/operations"))
     assert operations["execution_mode"] == "PAPER"
     assert operations["book"]["simulated"] is True

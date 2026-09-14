@@ -92,6 +92,8 @@ from forge.strategy.blueprints import blueprint as ir_blueprint
 from forge.strategy.blueprints import catalogue as blueprint_catalogue
 from forge.strategy.ir import IRError
 from forge.strategy.ir import SessionWindow as IRSessionWindow
+from forge.strategy.porting import TARGETS as PORT_TARGETS
+from forge.strategy.porting import port as port_definition
 from forge.vault import VaultMirror
 from forge.workstation import (
     GRID_COLUMNS,
@@ -104,6 +106,7 @@ from forge.workstation import (
     WorkspaceStore,
     catalogue,
     describe,
+    docking,
     layout_for,
     markets_for,
     new_panel_id,
@@ -177,6 +180,12 @@ class Action:
     #: every mode and every stance, which is what makes "AI cannot raise its own
     #: limits" a property of the code rather than an intention.
     protected: bool = False
+    #: This action's result contains text a stranger chose -- a retrieved title,
+    #: an abstract, a web page. Flagged on the action rather than guessed at the
+    #: call site, because whoever is about to put the result in front of a model
+    #: is the one place that cannot tell. Everything so flagged is fenced before
+    #: it reaches a prompt; see `forge.research.untrusted`.
+    external: bool = False
 
     def schema(self) -> dict[str, Any]:
         return {
@@ -185,6 +194,7 @@ class Action:
             "mutating": self.mutating,
             "risk": str(self.risk),
             "protected": self.protected,
+            "external": self.external,
             "requires_confirmation": self.risk is not ActionRisk.SAFE,
             "parameters": {
                 "type": "object",
@@ -546,9 +556,10 @@ class Actions:
         mutating: bool = False,
         risk: ActionRisk = ActionRisk.SAFE,
         protected: bool = False,
+        external: bool = False,
     ) -> None:
         self._registry[name] = Action(
-            name, summary, parameters, run, mutating, risk, protected
+            name, summary, parameters, run, mutating, risk, protected, external
         )
 
     def _register_all(self) -> None:
@@ -565,6 +576,7 @@ class Actions:
             },
             self.search_papers,
             mutating=True,
+            external=True,
         )
         self._add(
             "list_families",
@@ -735,6 +747,7 @@ class Actions:
                 "filter": {"type": "string", "optional": True},
             },
             self.read_research,
+            external=True,
         )
         self._register_ir()
         self._register_lab()
@@ -817,6 +830,29 @@ class Actions:
             self.export_strategy,
         )
         self._add(
+            "port_strategy",
+            "Carry a strategy to another platform and account for the crossing: every "
+            "feature, condition, exit and execution assumption classified equivalent, "
+            "approximated or unsupported, with the reason. The status is the worst "
+            "element's, and only Python can reach 'verified' because Python is the "
+            "only target this machine can execute.",
+            {
+                "strategy_id": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "description": "python | pine | ninjascript | mql5",
+                },
+            },
+            self.port_strategy,
+        )
+        self._add(
+            "port_targets",
+            "The platforms a strategy can be carried to, which of them this machine "
+            "generates code for, and the strongest claim each can ever support.",
+            {},
+            self.port_targets,
+        )
+        self._add(
             "strategy_trades",
             "The historical trades of a strategy's most recent run, with the regime "
             "each was taken in and the excursion each reached. Read from the backtest "
@@ -847,6 +883,26 @@ class Actions:
                 },
             },
             self.strategy_regimes,
+        )
+        self._add(
+            "strategy_resample",
+            "One backtest read as a distribution rather than as a single outcome: the "
+            "strategy's own trades resampled with and without their regime structure, "
+            "and the gap between the two worst-case drawdowns.",
+            {
+                "strategy_id": {"type": "string"},
+                "paths": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "100-20000, default 2000",
+                },
+                "attribution": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "entry | dominant | exit",
+                },
+            },
+            self.strategy_resample,
         )
 
     # ── implementations ──────────────────────────────────────────────────────
@@ -1305,6 +1361,32 @@ class Actions:
             )
         return report.as_dict()
 
+    def port_strategy(self, strategy_id: str, target: str) -> dict[str, Any]:
+        key = _str(strategy_id, "strategy_id", limit=120)
+        want = _str(target, "target", limit=32, lower=True)
+        try:
+            definition = self.library.get_definition(key)
+        except KeyError as exc:
+            raise ActionError(
+                f"Porting renders the Strategy IR, and '{key}' is hand-written Python. "
+                "There is no canonical definition to carry across."
+            ) from exc
+        try:
+            return port_definition(definition, want).as_dict()
+        except ValueError as exc:
+            raise ActionError(str(exc)) from exc
+
+    def port_targets(self) -> dict[str, Any]:
+        return {
+            "targets": [item.model_dump(mode="json") for item in PORT_TARGETS],
+            "note": (
+                "A target that does not generate is analysed rather than emitted: "
+                "the report says what would and would not carry, and no file is "
+                "produced, because a generator nobody can check is one nobody "
+                "should trade from."
+            ),
+        }
+
     def strategy_trades(
         self,
         strategy_id: str,
@@ -1337,6 +1419,23 @@ class Actions:
             raise ActionError("The trade ledger service is not attached to this registry.")
         try:
             report: dict[str, Any] = self.ledger.regime_report(key, attribution=basis)
+        except Exception as exc:
+            raise ActionError(str(exc)) from exc
+        return report
+
+    def strategy_resample(
+        self, strategy_id: str, paths: int | None = None, attribution: str | None = None
+    ) -> dict[str, Any]:
+        key = _str(strategy_id, "strategy_id", limit=120)
+        basis = _str(attribution or "entry", "attribution", limit=16, lower=True)
+        if basis not in ("entry", "dominant", "exit"):
+            raise ActionError("attribution must be one of entry, dominant, exit.")
+        if self.ledger is None:
+            raise ActionError("The trade ledger service is not attached to this registry.")
+        try:
+            report: dict[str, Any] = self.ledger.resample_report(
+                key, paths=int(paths or 2000), attribution=basis
+            )
         except Exception as exc:
             raise ActionError(str(exc)) from exc
         return report
@@ -1481,7 +1580,9 @@ class Actions:
                 "reached_validation": True,
             }
 
-        job = REGISTRY.submit("backtest", f"{spec.name} on {key}", 3, work)
+        job = REGISTRY.submit(
+            "backtest", f"{spec.name} on {key}", 3, work, refs={"strategy_id": sid}
+        )
         return {
             "job_id": job.job_id,
             "strategy_id": sid,
@@ -2048,6 +2149,74 @@ class Actions:
             mutating=True,
         )
         self._add(
+            "parameter_surface",
+            "Sweep two parameters against each other and map the landscape. Every "
+            "cell is a real backtest on the development partition, so the result is "
+            "exploration and can never promote a strategy - the cell count is the "
+            "trial count. Runs as a job.",
+            {
+                "strategy_id": {"type": "string"},
+                "x_parameter": {"type": "string"},
+                "y_parameter": {"type": "string"},
+                "dataset": {"type": "string", "optional": True},
+                "steps": {
+                    "type": "integer",
+                    "optional": True,
+                    "description": "Values per axis. Defaults to 6, giving 36 backtests.",
+                },
+            },
+            self.parameter_surface,
+            mutating=True,
+        )
+        self._add(
+            "split_panel",
+            "Split a panel's rectangle in two and put a new panel in the freed half. "
+            "Direction is 'row' for side by side or 'column' for one above the other.",
+            {
+                "panel_id": {"type": "string"},
+                "kind": {"type": "string"},
+                "along": {"type": "string", "optional": True},
+                "title": {"type": "string", "optional": True},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.split_panel,
+            mutating=True,
+        )
+        self._add(
+            "stack_panel",
+            "Make one panel a tab of another's rectangle. The moved panel becomes the "
+            "one showing, because asking to stack it is asking to see it.",
+            {
+                "panel_id": {"type": "string"},
+                "onto": {"type": "string"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.stack_panel,
+            mutating=True,
+        )
+        self._add(
+            "detach_panel",
+            "Pull a tab out of its stack into a rectangle of its own, beside the tabs "
+            "it came from.",
+            {
+                "panel_id": {"type": "string"},
+                "along": {"type": "string", "optional": True},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.detach_panel,
+            mutating=True,
+        )
+        self._add(
+            "show_panel_tab",
+            "Bring one tab of a stack to the front.",
+            {
+                "panel_id": {"type": "string"},
+                "workspace_id": {"type": "string", "optional": True},
+            },
+            self.show_panel_tab,
+            mutating=True,
+        )
+        self._add(
             "set_panel_setting",
             "Change one setting on a panel - a chart's symbol or timeframe, a table's "
             "filter. Use add_indicator for indicators.",
@@ -2119,6 +2288,11 @@ class Actions:
             "settings": panel.settings,
             "link_group": panel.link_group,
             "collapsed": panel.collapsed,
+            # Docking. Without these the interface cannot draw a tab bar: it
+            # would see two panels claiming one rectangle and no way to tell
+            # which of them is meant to be on top.
+            "stack": panel.stack,
+            "active": panel.active,
         }
 
     def _view(self, workspace: Workspace) -> dict[str, Any]:
@@ -2645,6 +2819,209 @@ class Actions:
             f"moved {moved.panel_id} to {moved.width}x{moved.height} at ({moved.x}, {moved.y})",
         )
 
+    def _new_panel(self, workspace: Workspace, kind: str, title: str) -> Panel:
+        """A panel to place, with geometry the caller is about to overwrite.
+
+        Split decides where it goes, so the size here is a placeholder that only
+        has to be valid. Kind is validated with the same message `add_panel`
+        gives, because a caller that got it wrong needs the same list either way.
+        """
+        try:
+            panel_kind = PanelKind(_str(kind, "kind", limit=40, lower=True))
+        except ValueError as exc:
+            raise ActionError(
+                f"'{kind}' is not a panel kind. Available: "
+                f"{', '.join(sorted(k.value for k in PanelKind))}."
+            ) from exc
+        return Panel(
+            panel_id=new_panel_id(panel_kind, tuple(p.panel_id for p in workspace.panels)),
+            kind=panel_kind,
+            title=_str(title, "title", limit=80) if title else "",
+            x=0,
+            y=0,
+            width=1,
+            height=1,
+        )
+
+    @staticmethod
+    def _along(value: str | None) -> docking.Along:
+        """'row' or 'column', refused by name rather than defaulted silently."""
+        if value is None or value == "":
+            return docking.Along.ROW
+        wanted = _str(value, "along", limit=10, lower=True)
+        try:
+            return docking.Along(wanted)
+        except ValueError as exc:
+            allowed = ", ".join(a.value for a in docking.Along)
+            raise ActionError(f"'{wanted}' is not a direction. Use one of: {allowed}.") from exc
+
+    def split_panel(
+        self,
+        panel_id: str,
+        kind: str,
+        along: str | None = None,
+        title: str = "",
+        workspace_id: str | None = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        target = self._panel_id(workspace, panel_id)
+        direction = self._along(along)
+        arriving = self._new_panel(workspace, kind, title)
+        try:
+            after = docking.split(workspace, target, direction, arriving)
+        except docking.DockingError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._save_workspace(
+            after, f"split {target} {direction.value}-wise and added {arriving.panel_id}"
+        )
+
+    def stack_panel(
+        self, panel_id: str, onto: str, workspace_id: str | None = None, **_: Any
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        moving = self._panel_id(workspace, panel_id)
+        host = self._panel_id(workspace, onto)
+        try:
+            after = docking.stack(workspace, moving, host)
+        except docking.DockingError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._save_workspace(after, f"stacked {moving} onto {host}")
+
+    def detach_panel(
+        self, panel_id: str, along: str | None = None, workspace_id: str | None = None, **_: Any
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        target = self._panel_id(workspace, panel_id)
+        try:
+            after = docking.detach(workspace, target, self._along(along))
+        except docking.DockingError as exc:
+            raise ActionError(str(exc)) from exc
+        return self._save_workspace(after, f"detached {target} from its stack")
+
+    def show_panel_tab(
+        self, panel_id: str, workspace_id: str | None = None, **_: Any
+    ) -> dict[str, Any]:
+        workspace = self._workspace(workspace_id)
+        target = self._panel_id(workspace, panel_id)
+        return self._save_workspace(docking.activate(workspace, target), f"showing {target}")
+
+    def parameter_surface(
+        self,
+        strategy_id: str,
+        x_parameter: str,
+        y_parameter: str,
+        dataset: str | None = None,
+        steps: int | None = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        """Two parameters swept against each other, through the same code the route uses.
+
+        The sweep itself lives in `forge_api.surface` precisely so this is not a
+        second implementation: an assistant and the interface run the same cells
+        with the same labels, and `NON_PROMOTABLE` is on every one of them.
+
+        The full cell list is returned to the caller by id rather than inline -
+        36 cells with trade counts and backtest ids is not something to read in a
+        conversation, and the surface itself is where it belongs.
+        """
+        from forge.research.analyses import make_provenance
+        from forge.research.parameter_surface import build_surface
+
+        from forge_api.surface import SurfaceError, axes_for, sweep_points
+
+        sid = _str(strategy_id, "strategy_id", limit=120)
+        try:
+            spec = self.library.get_spec(sid)
+            module = self.library.load_module(sid)
+        except KeyError as exc:
+            raise ActionError(f"No strategy '{sid}'.") from exc
+
+        per_axis = _bounded(steps, 6, 2, 12, "steps")
+        try:
+            x_param, y_param, xs, ys = axes_for(
+                spec,
+                _str(x_parameter, "x_parameter", limit=80),
+                _str(y_parameter, "y_parameter", limit=80),
+                per_axis,
+                per_axis,
+            )
+        except SurfaceError as exc:
+            raise ActionError(exc.detail) from exc
+
+        key = dataset or self.engine.state.config.dataset
+
+        def work(handle: JobHandle) -> dict[str, Any]:
+            bars, meta = self.market.load(key)
+            is_real = meta.is_real
+            receipt = None
+            if is_real:
+                partitions = chronological_split(bars, warmup_bars=spec.warmup_bars)
+                bars, receipt = partitions.development, partitions.receipt
+            points = sweep_points(
+                module=module,
+                spec=spec,
+                bars=bars,
+                x_param=x_param,
+                y_param=y_param,
+                xs=xs,
+                ys=ys,
+                code_hash=self.library.code_hash(sid),
+                dataset_key=key,
+                is_real=is_real,
+                split_receipt=receipt,
+                progress=handle.progress,
+            )
+            # The axes are part of the identity: two surfaces over the same
+            # strategy and different parameters are different artifacts, and a
+            # provenance that omitted them would make them collide.
+            surface = build_surface(
+                points,
+                make_provenance(
+                    "parameter_surface",
+                    {
+                        "strategy_id": sid,
+                        "dataset_key": key,
+                        "spec_hash": spec.spec_hash,
+                        "code_hash": self.library.code_hash(sid),
+                        "evidence_tier": "DEVELOPMENT_IN_SAMPLE" if is_real else "SYNTHETIC",
+                        "x_parameter": x_param.name,
+                        "y_parameter": y_param.name,
+                    },
+                ),
+                x_name=x_param.name,
+                y_name=y_param.name,
+                metric="net_pnl",
+            )
+            return {
+                "strategy_id": sid,
+                "x_parameter": x_param.name,
+                "y_parameter": y_param.name,
+                "cells": len(points),
+                "trials": len(points),
+                "promotable": False,
+                "title": surface.title,
+                "findings": list(surface.findings),
+            }
+
+        job = REGISTRY.submit(
+            "surface",
+            f"{spec.name}: {x_param.name} x {y_param.name}",
+            len(xs) * len(ys),
+            work,
+            refs={"strategy_id": sid},
+        )
+        return {
+            "job_id": job.job_id,
+            "strategy_id": sid,
+            "cells": len(xs) * len(ys),
+            "promotable": False,
+            "note": (
+                "Running in the background. Poll /api/v1/jobs/{job_id} for the result. "
+                "Every cell is in-sample by construction, so nothing here can promote."
+            ),
+        }
+
     def set_panel_setting(
         self, panel_id: str, key: str, value: str, workspace_id: str | None = None
     ) -> dict[str, Any]:
@@ -2878,12 +3255,12 @@ class Actions:
             {
                 "mode": {
                     "type": "string",
-                    "description": "normal, prop_firm, ai or hedge_fund.",
+                    "description": "normal, prop_firm or ai.",
                 },
                 "stance": {
                     "type": "string",
                     "optional": True,
-                    "description": "Hedge Fund only: human_in_the_loop or autonomous.",
+                    "description": "AI mode only: human_in_the_loop or autonomous.",
                 },
             },
             self.enter_mode,
@@ -2892,7 +3269,7 @@ class Actions:
         )
         self._add(
             "set_stance",
-            "Switch Hedge Fund mode between human-in-the-loop and autonomous. Protected "
+            "Switch AI mode between human-in-the-loop and autonomous. Protected "
             "for the same reason as enter_mode.",
             {"stance": {"type": "string", "description": "human_in_the_loop or autonomous."}},
             self.set_stance,
@@ -3945,7 +4322,7 @@ class Actions:
         )
         self._add(
             "cancel_order",
-            "Cancel a working order. Reaches the book, so only Hedge Fund mode on the "
+            "Cancel a working order. Reaches the book, so only AI mode on the "
             "autonomous stance runs it without a person.",
             {"order_id": {"type": "string"}},
             self.cancel_order,
@@ -4858,6 +5235,16 @@ class Actions:
             "calendars": calendars,
             # Stated rather than omitted. An absent row reads as "fine".
             "absent": ABSENT_CAPABILITIES,
+            # D1 §34's seven dimensions, said in the directive's own words and
+            # pointed at where each is already reported.
+            #
+            # Not a second data fabric. Every one of these was being tracked
+            # under a name of its own -- `first`/`last`/`span_days` is coverage,
+            # `findings` is completeness and timestamp quality -- and what was
+            # missing was a statement that all seven are covered, and a test
+            # that fails when one stops being. A parallel abstraction to hold
+            # the same numbers would be the thing §26 warns about.
+            "tracked": _fabric_contract(datasets, registry),
             "tiers": [
                 {"tier": str(tier), "rank": rank, "means": TIER_MEANING[tier]}
                 for tier, rank in sorted(RANK.items(), key=lambda item: -item[1])
@@ -5158,3 +5545,55 @@ def _bounded(value: Any, fallback: int, low: int, high: int, field: str) -> int:
     if not low <= number <= high:
         raise ActionError(f"'{field}' must be between {low} and {high}.")
     return number
+
+
+#: D1 §34's seven dimensions, and where each is reported.
+#:
+#: The directive asks for a contract over `coverage, freshness, source,
+#: entitlement, latency, timestamp quality, completeness`. All seven were
+#: already measured -- under names that came from what each measurement *is*
+#: rather than from this list -- and nothing said so, so nothing could fail when
+#: one quietly stopped being reported. This is that statement, and
+#: `tests/api/test_data_fabric_contract.py` is the thing that fails.
+FABRIC_DIMENSIONS: dict[str, str] = {
+    "coverage": "datasets[].first, .last, .span_days, .rows",
+    "freshness": "datasets[].last, read as an age by the chart (apps/web/src/freshness.ts)",
+    "source": "datasets[].provider and .authority; services[].name",
+    "entitlement": "services[].state UNCONFIGURED, and absent[] for what this build lacks",
+    "latency": "services[].last_latency_ms and .avg_latency_ms",
+    "timestamp_quality": "datasets[].findings — ordering, duplicate and gap findings",
+    "completeness": "datasets[].findings — gap findings, against .rows and .span_days",
+}
+
+
+def _fabric_contract(
+    datasets: list[dict[str, Any]], registry: ServiceRegistry
+) -> dict[str, dict[str, Any]]:
+    """Whether each of the seven is actually being reported right now.
+
+    `reported` is measured rather than asserted: a dimension whose source went
+    away reads as false here and fails the contract test, rather than staying
+    true because this dictionary still names it.
+    """
+    measurable = [row for row in datasets if row.get("measurable")]
+    services: list[dict[str, Any]] = list(registry.snapshot())
+
+    def on_dataset(field: str) -> bool:
+        return any(field in row for row in measurable)
+
+    def on_service(field: str) -> bool:
+        return any(field in row for row in services)
+
+    reported = {
+        "coverage": on_dataset("span_days") and on_dataset("rows"),
+        "freshness": on_dataset("last"),
+        "source": on_dataset("provider") or on_service("name"),
+        "entitlement": bool(services) or bool(ABSENT_CAPABILITIES),
+        "latency": on_service("last_latency_ms"),
+        "timestamp_quality": on_dataset("findings"),
+        "completeness": on_dataset("findings"),
+    }
+    return {
+        name: {"where": where, "reported": reported[name]}
+        for name, where in FABRIC_DIMENSIONS.items()
+    }

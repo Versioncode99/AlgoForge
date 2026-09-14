@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   CandlestickSeries,
@@ -12,6 +12,22 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { getJson } from '../api'
+import { AGE_TONE, archiveAge } from '../freshness'
+import {
+  EMPTY,
+  type Bar,
+  type BarsResponse,
+  type Direction,
+  type LogicalRange,
+  type Series,
+  adopt,
+  describes,
+  merge,
+  newerThan,
+  olderThan,
+  shift,
+  wants,
+} from '../bars'
 
 /* A price chart over real bars, or nothing.
  *
@@ -26,28 +42,10 @@ import { getJson } from '../api'
  * trader expects, and a crosshair that reads values rather than decorating.
  */
 
-export type Bar = {
-  time: string
-  open: number
-  high: number
-  low: number
-  close: number
-  volume: number
-}
-
-export type BarsResponse = {
-  dataset: string
-  symbol: string
-  timeframe: string
-  timeframe_label: string
-  convention: string
-  authority: string
-  is_real: boolean
-  bar_count: number
-  total_bars: number
-  has_more: boolean
-  bars: Bar[]
-}
+/* The series types live in `../bars`, alongside the merge arithmetic that
+ * maintains them, and are re-exported here because every existing caller
+ * imports them from the component. */
+export type { Bar, BarsResponse } from '../bars'
 
 export const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'] as const
 export type TimeframeKey = (typeof TIMEFRAMES)[number]
@@ -70,10 +68,17 @@ function palette() {
   }
 }
 
+/** How many bars a first load asks for, and how many each pan adds.
+ *
+ * A window rather than a dataset. Sixteen years of one-minute NQ is millions of
+ * candles, and the reason to page is that pulling them into a browser is not a
+ * slow version of the right answer — it is a different, worse application. */
+const PAGE = 1500
+
 export function PriceChart({
   dataset,
   timeframe,
-  limit = 1500,
+  limit = PAGE,
   height = 420,
   onHover,
 }: {
@@ -89,16 +94,101 @@ export function PriceChart({
   const volume = useRef<ISeriesApi<'Histogram'> | null>(null)
   const [ready, setReady] = useState(false)
 
-  const query = useQuery({
-    queryKey: ['bars', dataset, timeframe, limit],
-    queryFn: () =>
-      getJson<BarsResponse>(
-        `/bars?dataset=${encodeURIComponent(dataset)}&timeframe=${timeframe}&limit=${limit}`,
-      ),
-    // Archives are immutable, so a series that has been fetched does not go
-    // stale while the operator is looking at it.
-    staleTime: 5 * 60_000,
-  })
+  const [series, setSeries] = useState<Series>(EMPTY)
+  const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState(true)
+  /* `paging` is a ref rather than state on purpose: the visible-range handler
+   * fires many times per drag, and a state flag would be a frame behind on
+   * every one of them — which is how one pan becomes six identical requests. */
+  const paging = useRef(false)
+  const latest = useRef<Series>(EMPTY)
+  latest.current = series
+  /* Bumped whenever the instrument or timeframe changes, so a response for the
+   * previous one is discarded on arrival rather than merged into the series
+   * now on screen. Without it, switching symbol mid-request draws two markets
+   * on one chart and reports no error at all. */
+  const generation = useRef(0)
+
+  const fetchPage = useCallback(
+    async (cursor: { direction: Direction; at: string } | null) => {
+      const query = new URLSearchParams({ dataset, timeframe, limit: String(limit) })
+      if (cursor) query.set(cursor.direction, cursor.at)
+      return getJson<BarsResponse>(`/bars?${query.toString()}`)
+    },
+    [dataset, timeframe, limit],
+  )
+
+  // The first window: the newest bars, and whatever the archive says sits
+  // behind them.
+  useEffect(() => {
+    generation.current += 1
+    const mine = generation.current
+    setSeries(EMPTY)
+    setError(null)
+    setPending(true)
+    paging.current = false
+    let live = true
+
+    fetchPage(null)
+      .then((page) => {
+        if (!live || generation.current !== mine) return
+        if (!describes(page, dataset, timeframe)) return
+        setSeries(adopt(page))
+        setPending(false)
+      })
+      .catch((cause: unknown) => {
+        if (!live || generation.current !== mine) return
+        setError(cause instanceof Error ? cause.message : 'Unknown error')
+        setPending(false)
+      })
+
+    return () => {
+      live = false
+    }
+  }, [dataset, timeframe, fetchPage])
+
+  /** Load one more window at whichever edge the viewport reached for.
+   *
+   * The viewport is captured before the merge and restored after it. Prepending
+   * shifts every existing bar's index by the number of bars added, so a
+   * viewport left alone would be looking that far further back — the chart
+   * appearing to jump away at the instant it delivered what was asked for. */
+  const extend = useCallback(
+    async (direction: Direction) => {
+      const held = latest.current
+      const at = direction === 'before' ? olderThan(held) : newerThan(held)
+      if (!at || paging.current) return
+      paging.current = true
+      const mine = generation.current
+      const before = chart.current?.timeScale().getVisibleLogicalRange() ?? null
+
+      try {
+        const page = await fetchPage({ direction, at })
+        if (generation.current !== mine) return
+        if (!describes(page, dataset, timeframe)) return
+        const grown = merge(held, page, direction)
+        const added = grown.bars.length - held.bars.length
+        setSeries(grown)
+        if (direction === 'before' && added > 0 && before) {
+          // Restored on the next frame: the series has to be on the chart
+          // before a range over it means anything.
+          requestAnimationFrame(() => {
+            if (generation.current !== mine) return
+            chart.current?.timeScale().setVisibleLogicalRange(shift(before, added))
+          })
+        }
+      } catch (cause: unknown) {
+        // A failed pan leaves the chart exactly as it was. It is not an empty
+        // state: the bars already drawn are still real.
+        if (generation.current === mine) {
+          setError(cause instanceof Error ? cause.message : 'Unknown error')
+        }
+      } finally {
+        paging.current = false
+      }
+    },
+    [dataset, timeframe, fetchPage],
+  )
 
   // Create the chart once. Re-creating it on every data change would throw away
   // the pan and zoom the operator has set, which is the whole interaction.
@@ -155,9 +245,30 @@ export function PriceChart({
     }
   }, [])
 
-  const bars = query.data?.bars
+  /* Dragging toward an edge is what asks for more history. Subscribed once,
+   * reading the series through a ref, because re-subscribing on every merge
+   * would tear down the handler in the middle of the drag that triggered it. */
   useEffect(() => {
-    if (!ready || !bars || !candles.current || !volume.current) return
+    if (!ready || !chart.current) return
+    const scale = chart.current.timeScale()
+    const handler = (range: LogicalRange | null) => {
+      const direction = wants(latest.current, range)
+      if (direction) void extend(direction)
+    }
+    scale.subscribeVisibleLogicalRangeChange(handler)
+    return () => scale.unsubscribeVisibleLogicalRangeChange(handler)
+  }, [ready, extend])
+
+  const bars = series.bars
+  /* True until the first window has been drawn. Only that first draw may move
+   * the viewport: calling `fitContent` after a pan would undo the pan. */
+  const seeded = useRef(false)
+  useEffect(() => {
+    seeded.current = false
+  }, [dataset, timeframe])
+
+  useEffect(() => {
+    if (!ready || !candles.current || !volume.current) return
     const colours = palette()
     const candleData: CandlestickData<Time>[] = bars.map((bar) => ({
       time: seconds(bar.time),
@@ -173,14 +284,17 @@ export function PriceChart({
     }))
     candles.current.setData(candleData)
     volume.current.setData(volumeData)
-    chart.current?.timeScale().fitContent()
+    if (!seeded.current && bars.length) {
+      chart.current?.timeScale().fitContent()
+      seeded.current = true
+    }
   }, [ready, bars])
 
   // The crosshair reads values out to whoever asked, so the readout can live
   // outside the canvas in real DOM that a screen reader can reach.
   useEffect(() => {
     if (!ready || !chart.current || !onHover) return
-    const byTime = new Map((bars ?? []).map((bar) => [seconds(bar.time), bar]))
+    const byTime = new Map(bars.map((bar) => [seconds(bar.time), bar]))
     const handler = (param: { time?: Time }) => {
       onHover(param.time ? (byTime.get(param.time as UTCTimestamp) ?? null) : null)
     }
@@ -188,12 +302,11 @@ export function PriceChart({
     return () => chart.current?.unsubscribeCrosshairMove(handler)
   }, [ready, bars, onHover])
 
-  if (query.isError) {
-    const message = query.error instanceof Error ? query.error.message : 'Unknown error'
+  if (error && bars.length === 0) {
     return (
       <div className="chart-state error" role="alert" style={{ height }}>
         <strong>Market data unavailable</strong>
-        <p>{message}</p>
+        <p>{error}</p>
         <p className="chart-note">
           No substitute series is drawn. Import or download the archive and the chart will fill in.
         </p>
@@ -204,14 +317,21 @@ export function PriceChart({
   return (
     <div className="price-chart" style={{ height }}>
       <div ref={container} className="price-chart-canvas" />
-      {query.isPending && (
+      {pending && (
         <div className="chart-state loading" role="status">
           Loading bars…
         </div>
       )}
-      {query.data && query.data.bar_count === 0 && (
+      {!pending && bars.length === 0 && (
         <div className="chart-state empty" role="status">
           No bars in this range.
+        </div>
+      )}
+      {/* Stated rather than silent: a chart that has reached the start of its
+          archive looks identical to one that simply stopped loading. */}
+      {bars.length > 0 && !series.hasMoreBefore && (
+        <div className="chart-edge" role="status">
+          Start of archive
         </div>
       )}
     </div>
@@ -240,6 +360,11 @@ export function ChartPanel({
     queryFn: () => getJson<BarsResponse>(`/bars?dataset=${dataset}&timeframe=${timeframe}&limit=1`),
     staleTime: 5 * 60_000,
   })
+
+  const age = useMemo(
+    () => archiveAge(query.data?.coverage_end ?? null),
+    [query.data?.coverage_end],
+  )
 
   const readout = useMemo(() => {
     if (!hovered) return null
@@ -278,6 +403,14 @@ export function ChartPanel({
             </button>
           ))}
         </div>
+
+        {/* How old this archive is, which the chart has always known and never
+            said. A label rather than a gate: looking at an old archive is a
+            legitimate thing to do -- the history is the point -- but reading
+            the right-hand edge as "now" is not. */}
+        <span className="chart-age" data-tone={AGE_TONE[age.currency]} title={age.detail}>
+          {age.label}
+        </span>
 
         <div className="chart-readout mono" aria-live="off">
           {readout ? (

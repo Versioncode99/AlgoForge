@@ -184,3 +184,140 @@ def test_the_inspection_sample_is_named_as_a_sample(
     assert result["outcome_sample_size"] <= result["path_count"]
     # The middle outcome is over every path, not over the sample.
     assert result["median_terminal"] == result["tail_risk"]["terminal_median"]
+
+
+def test_the_fan_arrives_with_the_report_and_counts_every_account(
+    simulated: tuple[dict[str, Any], list[dict[str, Any]]],
+) -> None:
+    """The band is over all paths; `equity_paths` beside it is a sample of 100."""
+    result, _ = simulated
+    fan = result["equity_fan"]
+    assert fan, "the fan is the population view and the report cannot omit it"
+    assert fan[0]["day"] == 0
+    assert fan[0]["p05"] == fan[0]["p95"] == result["rule"]["starting_balance"]
+    for point in fan:
+        assert point["live"] + point["resolved"] == result["path_count"]
+        assert point["p05"] <= point["p25"] <= point["median"] <= point["p75"] <= point["p95"]
+    assert len(result["equity_paths"]) <= result["path_count"]
+
+
+def test_the_payout_mean_arrives_with_its_distribution(
+    simulated: tuple[dict[str, Any], list[dict[str, Any]]],
+) -> None:
+    """A headline mean with nothing beside it is the thing the brief rules out."""
+    result, _ = simulated
+    payout = result["payout"]
+    assert payout["mean"] == result["mean_payout"]
+    assert payout["p05"] <= payout["median"] <= payout["p95"] <= payout["best"]
+    assert 0.0 <= payout["any_probability"] <= 1.0
+
+
+@pytest.fixture
+def journey(client: TestClient) -> dict[str, Any]:
+    strategy_id = client.post("/api/v1/strategies", json={"template": "momentum_breakout"}).json()[
+        "data"
+    ]["strategy_id"]
+    assert (
+        client.post(
+            f"/api/v1/strategies/{strategy_id}/backtest",
+            json={"dataset": "synthetic", "bar_count": BARS},
+        ).status_code
+        == 200
+    )
+    rules = client.get("/api/v1/prop/rules").json()["data"]
+    challenge = next(r for r in rules if r["phase"] == "CHALLENGE")
+    funded = next(
+        r for r in rules if r["phase"] == "FUNDED" and r["provider"] == challenge["provider"]
+    )
+    response = client.post(
+        f"/api/v1/strategies/{strategy_id}/prop/journey",
+        json={
+            "challenge_rule_id": challenge["rule_id"],
+            "funded_rule_id": funded["rule_id"],
+            "paths": 100,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return dict(response.json()["data"])
+
+
+def test_the_journey_reports_both_legs_against_their_own_denominators(
+    journey: dict[str, Any],
+) -> None:
+    assert journey["challenge"]["reached"] == journey["path_count"]
+    assert journey["funded"]["reached"] == journey["challenge"]["cleared"]
+    assert journey["funded"]["cleared"] <= journey["funded"]["reached"]
+    assert 0.0 <= journey["payout_probability"] <= 1.0
+    assert journey["payout_interval_low"] <= journey["payout_interval_high"]
+
+
+def test_the_journey_states_that_it_resamples_the_same_days_twice(
+    journey: dict[str, Any],
+) -> None:
+    labels = set(journey["labels"])
+    assert "TWO_STAGE_RESAMPLE" in labels
+    assert "FUNDED_LEG_RESAMPLES_THE_SAME_DAYS" in labels
+
+
+def test_the_journey_refuses_two_providers(client: TestClient) -> None:
+    """An account that starts at one firm and finishes at another does not exist."""
+    strategy_id = client.post("/api/v1/strategies", json={"template": "momentum_breakout"}).json()[
+        "data"
+    ]["strategy_id"]
+    client.post(
+        f"/api/v1/strategies/{strategy_id}/backtest",
+        json={"dataset": "synthetic", "bar_count": BARS},
+    )
+    rules = client.get("/api/v1/prop/rules").json()["data"]
+    challenge = next(r for r in rules if r["phase"] == "CHALLENGE")
+    other = next(
+        r for r in rules if r["phase"] == "FUNDED" and r["provider"] != challenge["provider"]
+    )
+    response = client.post(
+        f"/api/v1/strategies/{strategy_id}/prop/journey",
+        json={
+            "challenge_rule_id": challenge["rule_id"],
+            "funded_rule_id": other["rule_id"],
+            "paths": 100,
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "provider_mismatch"
+
+
+def test_the_journey_refuses_an_unknown_rule(client: TestClient) -> None:
+    strategy_id = client.post("/api/v1/strategies", json={"template": "momentum_breakout"}).json()[
+        "data"
+    ]["strategy_id"]
+    client.post(
+        f"/api/v1/strategies/{strategy_id}/backtest",
+        json={"dataset": "synthetic", "bar_count": BARS},
+    )
+    response = client.post(
+        f"/api/v1/strategies/{strategy_id}/prop/journey",
+        json={"challenge_rule_id": "nope", "funded_rule_id": "also-nope", "paths": 100},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"]["rule_id"] == "nope"
+
+
+def test_the_journey_refuses_a_strategy_with_no_backtest(client: TestClient) -> None:
+    """The same refusal the single-leg route gives, from the same guard."""
+    strategy_id = client.post("/api/v1/strategies", json={"template": "momentum_breakout"}).json()[
+        "data"
+    ]["strategy_id"]
+    rules = client.get("/api/v1/prop/rules").json()["data"]
+    challenge = next(r for r in rules if r["phase"] == "CHALLENGE")
+    funded = next(
+        r for r in rules if r["phase"] == "FUNDED" and r["provider"] == challenge["provider"]
+    )
+    response = client.post(
+        f"/api/v1/strategies/{strategy_id}/prop/journey",
+        json={
+            "challenge_rule_id": challenge["rule_id"],
+            "funded_rule_id": funded["rule_id"],
+            "paths": 100,
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "no_backtest"

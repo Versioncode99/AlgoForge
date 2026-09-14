@@ -4,6 +4,8 @@ import { getJson } from '../api'
 import { StrategyChart, type LedgerResponse, type TradeRow } from '../components/StrategyChart'
 import { TradeInspector } from '../components/TradeInspector'
 import type { TimeframeKey } from '../components/PriceChart'
+import { RegimeMatrix, type RegimeCell } from '../components/RegimeMatrix'
+import { RegimeReading, type Reading } from '../components/RegimeReading'
 
 /* Open a strategy on the chart and see what it actually did.
  *
@@ -19,19 +21,6 @@ import type { TimeframeKey } from '../components/PriceChart'
 
 type StrategyRow = { strategy_id: string; name?: string; family?: string; backtest_count?: number }
 
-type RegimeCell = {
-  regime: string
-  label: string
-  trade_count: number
-  net_pnl: number
-  win_rate: number | null
-  average_trade: number | null
-  bar_exposure: number
-  trade_share: number
-  insufficient: boolean
-  note: string
-}
-
 type RegimeReport = {
   attribution: string
   total_trades: number
@@ -44,6 +33,9 @@ type RegimeReport = {
   concentration: number | null
   concentration_regime: string | null
   warnings: string[]
+  /* Derived on the server, alongside the cells it reads, so the sentences
+   * shown here and the numbers a test asserts on come out of one function. */
+  reading: Reading
 }
 
 const OUTCOMES = ['all', 'win', 'loss'] as const
@@ -220,7 +212,13 @@ export function StrategyChartView({ initialStrategy }: { initialStrategy?: strin
                 onSelect={(trade) => setSelectedId(trade?.trade_id ?? null)}
               />
 
-              {showRegimes && <RegimePanel query={regimes} onPick={setRegimeFilter} />}
+              {showRegimes && (
+                <RegimePanel
+                  query={regimes}
+                  onPick={setRegimeFilter}
+                  selected={regimeFilter === 'all' ? null : regimeFilter}
+                />
+              )}
 
               <div className="scv-table-wrap">
                 <table className="panel-table scv-table">
@@ -295,9 +293,11 @@ export function StrategyChartView({ initialStrategy }: { initialStrategy?: strin
 function RegimePanel({
   query,
   onPick,
+  selected,
 }: {
   query: { isPending: boolean; isError: boolean; error: unknown; data: RegimeReport | undefined }
   onPick: (regime: string) => void
+  selected: string | null
 }) {
   if (query.isPending) return <Empty>Classifying the bars…</Empty>
   if (query.isError)
@@ -319,46 +319,12 @@ function RegimePanel({
         </span>
       </header>
 
-      <div className="regime-grid">
-        {report.cells.map((cell) => (
-          <button
-            key={cell.regime}
-            type="button"
-            className={cell.insufficient ? 'regime-cell thin' : 'regime-cell'}
-            onClick={() => onPick(cell.regime)}
-            title={cell.note || `Filter the ledger to ${cell.label}`}
-          >
-            <span className="rc-label">{cell.label}</span>
-            <span className={`rc-pnl mono ${cell.net_pnl >= 0 ? 'up' : 'down'}`}>
-              {cell.net_pnl >= 0 ? '+' : '−'}$
-              {Math.abs(cell.net_pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-            </span>
-            <dl className="rc-stats">
-              <div>
-                <dt>Exposure</dt>
-                <dd className="mono">{(cell.bar_exposure * 100).toFixed(0)}%</dd>
-              </div>
-              <div>
-                <dt>Trades</dt>
-                <dd className="mono">{cell.trade_count}</dd>
-              </div>
-              <div>
-                <dt>Win rate</dt>
-                <dd className="mono">
-                  {cell.win_rate === null ? '—' : `${(cell.win_rate * 100).toFixed(0)}%`}
-                </dd>
-              </div>
-              <div>
-                <dt>Avg trade</dt>
-                <dd className="mono">
-                  {cell.average_trade === null ? '—' : cell.average_trade.toFixed(0)}
-                </dd>
-              </div>
-            </dl>
-            {cell.insufficient && <span className="rc-note">{cell.note}</span>}
-          </button>
-        ))}
-      </div>
+      {/* The four regimes as the grid they are: trend across, volatility down.
+          Laid out flat, "this works until volatility rises, in either
+          direction" is something a reader has to assemble from four labels. */}
+      <RegimeMatrix cells={report.cells} onPick={onPick} selected={selected} />
+
+      <RegimeReading reading={report.reading} />
 
       <div className="regime-matrix">
         <h4>How the regimes follow each other</h4>

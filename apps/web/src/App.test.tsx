@@ -37,6 +37,12 @@ const NORMAL: Descriptor = {
     section('strategies', 'Strategies', 'Strategy'),
     section('evidence', 'Evidence', 'Strategy'),
     section('positions', 'Positions & Orders', 'Book'),
+    // The deterministic book loop, carried over when the Hedge Fund mode was
+    // removed. Normal is the environment for somebody trading their own book,
+    // so this is where the gate and the portfolio belong.
+    section('portfolio', 'Portfolio', 'Book'),
+    section('gate', 'Pre-Trade Gate', 'Book'),
+    section('book', 'Book Overview', 'Book'),
     section('settings', 'Settings', 'System'),
   ],
   stances: [],
@@ -62,29 +68,24 @@ const AI: Descriptor = {
   tagline: 'Build, analyse and automate with AI.',
   purpose: 'Use AI across research, strategy work and automation.',
   workspace_template: 'ai_desk',
-  sections: [section('actions', 'Actions', 'AI'), section('activity', 'Activity', 'AI')],
-  limitations: ['AI reaches only the registered actions.'],
-}
-
-const HEDGE: Descriptor = {
-  ...NORMAL,
-  mode: 'hedge_fund',
-  name: 'Hedge Fund',
-  tagline: 'Research, construct, manage and execute quantitative portfolios.',
-  purpose: 'An operating layer over the whole quantitative loop.',
-  workspace_template: 'fund_command',
   sections: [
-    section('fund', 'Fund Overview', 'Command'),
-    section('gate', 'Pre-Trade Gate', 'Loop'),
-    section('approvals', 'Approvals', 'Command'),
+    section('actions', 'Actions', 'AI'),
+    section('activity', 'Activity', 'AI'),
+    section('approvals', 'Approvals', 'AI'),
   ],
+  // The stance moved here with the oversight surfaces when the Hedge Fund mode
+  // was removed. It grants exactly what it granted there, behind the same
+  // two-step opt-in.
   stances: ['human_in_the_loop', 'autonomous'],
   default_stance: 'human_in_the_loop',
-  limitations: ['Execution is simulated locally. No broker, OMS vendor or venue is connected.'],
+  limitations: [
+    'AI reaches only the registered actions.',
+    'Execution is simulated locally. No broker, OMS vendor or venue is connected.',
+  ],
 }
 
 const DESCRIPTORS: Record<string, Descriptor> = {
-  normal: NORMAL, prop_firm: PROP, ai: AI, hedge_fund: HEDGE,
+  normal: NORMAL, prop_firm: PROP, ai: AI,
 }
 
 let session: { mode: string | null; stance: string | null; workspace_id: string | null } = {
@@ -136,7 +137,7 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
   const mode = session.mode ?? 'ai'
   const descriptor = DESCRIPTORS[mode]
 
-  const data = url.endsWith('/modes') ? { modes: [NORMAL, PROP, AI, HEDGE], loop: [] }
+  const data = url.endsWith('/modes') ? { modes: [NORMAL, PROP, AI], loop: [] }
     : url.endsWith('/modes/session') ? {
         session, descriptor, policy_applies: session.mode !== null,
         policy: { mode, stance: session.stance, summary: 'AI assists.', always_denied_to_ai: [] },
@@ -198,19 +199,21 @@ const open = async (name: string | RegExp) => {
 // ── mode selection ───────────────────────────────────────────────────────────
 
 describe('the opening screen', () => {
-  test('offers all four workspaces rather than defaulting into one', async () => {
+  test('offers every workspace rather than defaulting into one', async () => {
     renderApp()
     expect(await screen.findByRole('heading', { name: /choose your workspace/i })).toBeInTheDocument()
-    for (const name of ['Normal', 'Prop Firm', 'AI', 'Hedge Fund']) {
+    for (const name of ['Normal', 'Prop Firm', 'AI']) {
       expect(await screen.findByRole('heading', { name, level: 2 })).toBeInTheDocument()
     }
-    // Each panel says what it is for. Four names with no purpose would be a
-    // pricing page, which is the thing this screen must not be.
+    // Each panel says what it is for. Names with no purpose would be a pricing
+    // page, which is the thing this screen must not be.
     expect(screen.getByText(/trade within account constraints/i)).toBeInTheDocument()
-    expect(screen.getByText(/research, construct, manage and execute/i)).toBeInTheDocument()
+    expect(screen.getByText(/build, analyse and automate with ai/i)).toBeInTheDocument()
+    // The removed mode is gone from the front door, not merely unreachable.
+    expect(screen.queryByRole('heading', { name: 'Hedge Fund', level: 2 })).not.toBeInTheDocument()
   })
 
-  test('asks for the Hedge Fund stance before entering, not after', async () => {
+  test('asks for the AI stance before entering, not after', async () => {
     renderApp()
     await screen.findByRole('heading', { name: /choose your workspace/i })
     // The stance changes what an assistant may do unattended. Entering first and
@@ -231,11 +234,11 @@ describe('the opening screen', () => {
   test('opening a mode calls the API rather than only changing the screen', async () => {
     renderApp()
     await screen.findByRole('heading', { name: /choose your workspace/i })
-    fireEvent.click(await screen.findByRole('button', { name: /open hedge fund/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /open ai/i }))
     await new Promise((resolve) => setTimeout(resolve, 0))
     // Mode is server state: each mode remembers its own layout, so entering one
     // has to be recorded somewhere a refresh can read it back.
-    expect(posted.some((url) => url.endsWith('/modes/hedge_fund/enter'))).toBe(true)
+    expect(posted.some((url) => url.endsWith('/modes/ai/enter'))).toBe(true)
   })
 })
 
@@ -249,12 +252,13 @@ describe('the shell inside a mode', () => {
     for (const group of ['Desk', 'Strategy', 'Book', 'System']) {
       expect(screen.getByRole('heading', { name: group })).toBeInTheDocument()
     }
-    // Hedge Fund's sections must not leak into Normal's rail.
-    expect(screen.queryByRole('link', { name: /pre-trade gate/i })).not.toBeInTheDocument()
+    // A mode's rail is its manifest and nothing else: Prop Firm's account
+    // sections must not leak into Normal's.
+    expect(screen.queryByRole('link', { name: /profit target/i })).not.toBeInTheDocument()
   })
 
   test('names the open mode and offers a way back to the chooser', async () => {
-    session = { mode: 'hedge_fund', stance: 'autonomous', workspace_id: 'w2' }
+    session = { mode: 'ai', stance: 'autonomous', workspace_id: 'w2' }
     fundState = {
       nav: 1_000_000, cash: 1_000_000, capital: 1_000_000, realised_pnl: 0,
       gross_exposure: 0, net_exposure: 0, leverage: 0, risk: RISK_OK,
@@ -263,7 +267,7 @@ describe('the shell inside a mode', () => {
       limitations: [],
     }
     renderApp()
-    const badge = (await screen.findByText('Hedge Fund')).closest('.mode-badge')!
+    const badge = (await screen.findByTestId('mode-badge'))
     // The autonomous stance is the one state where the machine acts unasked, so
     // it is named in the chrome rather than only on the screen that set it.
     expect(within(badge as HTMLElement).getByText(/autonomous/i)).toBeInTheDocument()
@@ -284,7 +288,7 @@ describe('the shell inside a mode', () => {
     session = { mode: 'prop_firm', stance: null, workspace_id: 'w3' }
     window.history.replaceState(null, '', '#gate')
     renderApp()
-    // "gate" is a Hedge Fund route. Prop Firm opens on its own first section.
+    // "gate" is a Normal route. Prop Firm opens on its own first section.
     await screen.findByRole('link', { name: /account status/i })
     expect(window.location.hash).toBe('#account')
   })
@@ -360,11 +364,16 @@ describe('ai mode', () => {
   })
 })
 
-// ── hedge fund ───────────────────────────────────────────────────────────────
+// ── the book loop ────────────────────────────────────────────────────────────
+//
+// These surfaces were Hedge Fund mode's. The mode was a product category rather
+// than a capability and it went; the engines behind these screens did not, and
+// they are reached from Normal now. That is what these tests are for: the
+// removal has to be a relabelling, not a quiet feature deletion.
 
-describe('hedge fund mode', () => {
+describe('the book loop', () => {
   const openFund = (risk = RISK_OK) => {
-    session = { mode: 'hedge_fund', stance: 'human_in_the_loop', workspace_id: 'w5' }
+    session = { mode: 'normal', stance: null, workspace_id: 'w5' }
     fundState = {
       nav: 1_000_000, cash: 1_000_000, capital: 1_000_000, realised_pnl: 0,
       gross_exposure: 0, net_exposure: 0, leverage: 0, risk,
@@ -378,8 +387,9 @@ describe('hedge fund mode', () => {
     }
   }
 
-  test('the command centre leads with the fund and the state of every stage', async () => {
+  test('the command centre leads with the book and the state of every stage', async () => {
     openFund()
+    window.history.replaceState(null, '', '#book')
     renderApp()
     expect(await screen.findByText('NAV')).toBeInTheDocument()
     expect(screen.getByText('WITHIN LIMITS')).toBeInTheDocument()
@@ -390,6 +400,7 @@ describe('hedge fund mode', () => {
 
   test('a disabled limit set is reported as a kill switch, not as a setting', async () => {
     openFund({ ...RISK_OK, enabled: false, within_limits: false })
+    window.history.replaceState(null, '', '#book')
     renderApp()
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/kill switch/i)
@@ -424,7 +435,10 @@ describe('hedge fund mode', () => {
   })
 
   test('approvals explain what happens when a person says yes', async () => {
+    // The approval queue went to AI, not to Normal: it exists to hold what an
+    // AI actor proposed, so it belongs beside the actor it is holding.
     openFund()
+    session = { mode: 'ai', stance: 'human_in_the_loop', workspace_id: 'w6' }
     window.history.replaceState(null, '', '#approvals')
     renderApp()
     expect(await screen.findByText(/nothing is waiting/i)).toBeInTheDocument()

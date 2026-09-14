@@ -2,7 +2,7 @@ import type { APIRequestContext } from '@playwright/test'
 
 /* Open a mode before the browser does.
  *
- * The application opens on the four-mode chooser, and every route in these
+ * The application opens on the mode chooser, and every route in these
  * specs lives inside a mode. Clicking through the chooser in each test would
  * make every spec depend on the chooser working, which is a different test —
  * and one `mode.spec.ts` owns. So the mode is set through the API, the same way
@@ -14,7 +14,7 @@ import type { APIRequestContext } from '@playwright/test'
 
 export const API = process.env.ALGOFORGE_API_URL ?? 'http://127.0.0.1:8765/api/v1'
 
-export type Mode = 'normal' | 'prop_firm' | 'ai' | 'hedge_fund'
+export type Mode = 'normal' | 'prop_firm' | 'ai'
 
 export async function enterMode(
   request: APIRequestContext,

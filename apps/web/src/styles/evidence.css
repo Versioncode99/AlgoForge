@@ -235,3 +235,10 @@
 .lineage-tree > li.is-selected::before, .lineage-branch > li.is-selected::before { background: var(--brand); }
 .lineage-tree > li.is-selected > .lineage-node span,
 .lineage-branch > li.is-selected > .lineage-node span { color: var(--brand); }
+
+/* ── structured objections ──────────────────────────────────────────────────
+   Three findings, three tones, and the middle one is the important one: a
+   threat nobody could check must not look like a threat that was cleared. */
+.objection-raised { color: var(--fail); }
+.objection-cleared { color: var(--pass); }
+.objection-not_measured { color: var(--fg-3); font-style: italic; }

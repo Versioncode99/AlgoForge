@@ -5,7 +5,7 @@ import { useFundOperations } from '../fund'
 /* Positions, orders and fills — the same book, wherever it is opened from.
  *
  * Normal mode and Prop Firm mode both reach this, and both see exactly what
- * Hedge Fund mode's Operations screen sees, because there is one book. A second
+ * Normal mode's Operations screen sees, because there is one book. A second
  * "simple" positions view would be a second implementation of position
  * accounting, and the two would eventually disagree about what is open.
  *
