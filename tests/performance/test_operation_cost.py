@@ -21,6 +21,7 @@ code and would be defects on any machine. The numbers themselves are written to
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import sqlite3
 import time
@@ -224,21 +225,51 @@ def test_one_operation_writes_a_small_constant_number_of_rows(client: TestClient
     )
 
 
-def test_the_measurements_are_written_where_the_next_run_can_compare(client: TestClient) -> None:
-    REPORT.parent.mkdir(parents=True, exist_ok=True)
-    REPORT.write_text(
-        json.dumps(
-            {
-                "note": (
-                    "Measured by tests/performance/test_operation_cost.py on one container. "
-                    "A starting point for comparison, not a budget."
-                ),
-                "repeats": REPEATS,
-                **measured,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+def test_the_measurements_are_written_where_the_next_run_can_compare(
+    client: TestClient, tmp_path: pathlib.Path
+) -> None:
+    """Render the report, and publish it only when asked.
+
+    `REPORT` is tracked, so writing it unconditionally made every full suite run
+    leave the working tree dirty with a diff nobody asked for -- and commits on
+    this branch carried re-measured latencies along with changes that had
+    nothing to do with them. The baseline is worth having *because* it is
+    stable: a committed figure somebody deliberately updated is something to
+    compare against, and one that moves on every run is not.
+
+    The rendering still runs on every invocation, against a temporary file, so
+    this stays a test of the thing it names rather than a step that is skipped
+    in CI and therefore never checked. `ALGOFORGE_WRITE_BASELINE=1` is what
+    copies it over the tracked one.
+    """
     assert measured, "nothing was measured, so nothing is worth writing"
+    report = json.dumps(
+        {
+            "note": (
+                "Measured by tests/performance/test_operation_cost.py on one container. "
+                "A starting point for comparison, not a budget."
+            ),
+            "repeats": REPEATS,
+            **measured,
+        },
+        indent=2,
+    ) + "\n"
+
+    scratch = tmp_path / "OPERATION_COST.json"
+    scratch.write_text(report, encoding="utf-8")
+    written = json.loads(scratch.read_text(encoding="utf-8"))
+    assert written["repeats"] == REPEATS
+    assert set(measured) <= set(written), "a measurement was taken and then not published"
+
+    # The committed baseline must stay readable and keep the same shape, or the
+    # comparison this file exists for has nothing to compare against.
+    assert REPORT.exists(), "the recorded baseline is missing"
+    recorded = json.loads(REPORT.read_text(encoding="utf-8"))
+    assert set(written) == set(recorded), (
+        "the report grew or lost a section. Re-record it with "
+        "ALGOFORGE_WRITE_BASELINE=1 so the committed baseline matches what is measured."
+    )
+
+    if os.getenv("ALGOFORGE_WRITE_BASELINE") == "1":
+        REPORT.parent.mkdir(parents=True, exist_ok=True)
+        REPORT.write_text(report, encoding="utf-8")

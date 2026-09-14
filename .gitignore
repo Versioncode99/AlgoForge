@@ -36,3 +36,10 @@ apps/web/playwright-report/
 # retrieves at runtime are not. A test run writes them, and they arrived in a
 # commit once before this rule existed.
 research/notes/Research Papers/
+
+# The vault's dashboard note. `create_app` rewrites it on every start with a
+# wall-clock timestamp and the current note counts, so in a checkout the
+# resolver has adopted as its workspace it is dirty again the moment anything
+# runs. It is a per-installation view of machine state, unlike the family notes
+# beside it, which are deterministic repository content.
+research/notes/AlgoForge.md
