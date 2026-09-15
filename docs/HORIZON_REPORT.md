@@ -53,7 +53,7 @@ Run on this checkout, Linux x86-64, Python 3.13.12, Node 22.
 | Python types | `mypy packages apps/api` (strict) | **VERIFIED** — 225 files, clean |
 | Python tests | `pytest -q` | **VERIFIED** — exit 0 |
 | Web types | `tsc --noEmit` | **VERIFIED** — clean |
-| Web tests | `vitest run` | **VERIFIED** — 44 files, 523 tests |
+| Web tests | `vitest run` | **VERIFIED** — 44 files, 526 tests |
 | Production build | `vite build` | **VERIFIED** — 242.85 kB CSS (38.33 kB gzip) |
 | Browser suite | `playwright test` | **VERIFIED locally** — 59 passed, 7 skipped. CI does **not** run this suite: the `web` job runs typecheck, build and `vitest` only, so every browser claim here rests on a local run |
 | Accessibility | `playwright test accessibility.spec.ts` | **VERIFIED** — 9 destinations, WCAG 2.1 AA, no allow-list |
@@ -62,7 +62,7 @@ Run on this checkout, Linux x86-64, Python 3.13.12, Node 22.
 | Secret scan | diff scan, §9 | **VERIFIED** — nothing found |
 | CI, Linux | GitHub Actions | **VERIFIED** — green |
 | CI, Windows | GitHub Actions | **VERIFIED** — green on `0ceead6`: 3687 passed, 5 skipped, on two independent runs of that head |
-| Electron suite | `vitest` includes `apps/desktop/ipc-contract.test.js` | **PARTIAL** — the IPC contract runs; no packaged app was launched |
+| Electron shell | `playwright test --config playwright.electron.config.ts` | **VERIFIED** — 20 passed under Xvfb: a real main process, real windows, the real preload bridge. The shell was launched and its first window read: the grid is `52px 41px 867px`, the bridge is present, no console errors. No **packaged** (`electron-builder`) installer was produced |
 
 **Windows CI took two attempts, and the first was a wrong diagnosis.** A test
 of mine asked a TLS context to enumerate its own trust store. That fails on
@@ -219,8 +219,8 @@ point at the same commit, and the pull request is from `Horizon`.
 ## 11 · The independent audit
 
 A separate pass over the finished work, looking for things that present as
-working and are not. Ten findings. The last two are the ones that matter
-most, because this audit found neither of them.
+working and are not. Twelve findings. The last four are the ones that matter
+most, because this audit found none of them.
 
 | # | Finding | Age |
 |---|---|---|
@@ -233,6 +233,8 @@ most, because this audit found neither of them.
 | 7 | Four assertions of the form `assert X or True`, which pass whatever X is. One asserted the *opposite* of the design and `or True` kept it quiet. | 3 pre-existing, 1 new |
 | 10 | `AgentService._run` caught every exception, recorded it, and then **returned** the record. A returned value is a completed job, so the registry marked it `DONE`: the inbox filed a specialist that died on an `HTTPStatusError` as finished work, the orchestrator passed its "could not complete the task" summary forward as a step result, and the research loop's stop-on-failure branch never fired. | **new, this branch** |
 | 9 | The shell grid was broken and every screen rendered blank. `workstation.css` still declared a third row for the status bar Horizon removed; `horizon.css` restated the corrected rows in a block that appeared **twice**, and is imported first, so at equal specificity the stale declaration won. With `.workstation-main { grid-row: 3 }` the content landed in the vestigial 34px row and the tab row took the whole viewport. | **new, this branch** |
+| 11 | The inbox's Open button on a finished prop matrix pointed at `#prop`, which is a **panel kind, not a route**. The shell found no such destination and rewrote the link to Home, so the one control on a finished matrix moved the operator away from their work and looked deliberate doing it — which is what `destination()`'s own docstring calls worse than offering no button. `#actions` sent a finished mission to the action registry rather than to the missions screen. | **new, this branch** |
+| 12 | The status bar was removed from the shell and its height token was not. Two rules still reserved 34px for it, so the inbox drawer stopped short of the bottom edge, floating above a strip of chrome nothing draws. | **new, this branch** |
 | 8 | `RithmicAdapter._require_session` refused on `session.ready` alone, and a degraded plant leaves `ready` **true**. Its message named degraded plants in a branch that could only be reached when there were none — so a plant missing heartbeats produced a snapshot that reconciliation uses to *replace* local state, arriving complete. | **new, this branch** |
 
 Each is fixed and tested. Finding 6 is the one worth dwelling on: it is a safety
@@ -240,7 +242,7 @@ claim that got quietly weaker, and it was introduced by this branch's own
 simplification. The test diff shows it as an assertion deleted alongside the
 screen it described — which is exactly how a removal takes something with it.
 
-**Findings 9 and 10 were both found by another session working on this
+**Findings 9 through 12 were all found by another session working on this
 branch, not by this audit.** Finding 10 is false completion at runtime — the
 exact failure mode this audit was commissioned to hunt — reported as success
 to three separate consumers. Finding 9 is worse in one respect: the
@@ -256,7 +258,8 @@ measures the geometry; it fails against the pre-fix stylesheets, which is how it
 was checked.
 
 Five further sweeps found nothing — with the caveat above, that a sweep only
-covers what it is pointed at:
+covers what it is pointed at, and two of them have now been corrected because
+the thing they were pointed at was not the thing that was wrong:
 
 - **Unconditional skips** — none. Every `pytest.skip` is conditional with a
   stated reason; no `xfail`; no `.skip` in vitest or Playwright.
@@ -268,7 +271,15 @@ covers what it is pointed at:
   honestly to a log and then hands the caller a value that means success.
   A pattern-matched sweep finds the pattern it was given, and this report
   previously presented that as a clean result.
-- **Inert UI controls** — no no-op handlers, no `href="#"`, no TODOs.
+- **Inert UI controls** — the sweep looked for no-op handlers, `href="#"` and
+  TODOs, and found none. It was the wrong shape, in the same way the exception
+  sweep above was. Finding 11 is a control that is not inert at all: it is
+  wired, it navigates, and it navigates somewhere unrelated. `#prop` reads
+  exactly like the working links beside it and names nothing, and its unit test
+  asserted the string rather than that it led anywhere. A link is now checked
+  by resolving it against the shipped manifest
+  (`test_every_place_the_inbox_can_send_somebody_exists`), which fails on the
+  old code.
 - **Over-claiming** — no capability is set to a `VERIFIED_*` state anywhere; the
   only matches for "Rithmic support/connected/live" are docstrings *warning
   against* the phrasing.
@@ -281,8 +292,12 @@ Stated plainly, because a report that only lists successes is not a report.
 
 - **No live Rithmic connection.** §7.
 - **No order of any kind, in any environment.** §7.
-- **No packaged Electron app was launched.** The IPC contract test runs; the
-  desktop shell was not built or started.
+- **No packaged Electron app was built.** The shell itself is no longer
+  unverified: it was launched under Xvfb against the real API, its window was
+  read, and `tests/electron/` ran green — 20 tests over real windows, the real
+  preload bridge and the real session file. What has still never been produced
+  or run is an `electron-builder` NSIS installer, which is the artifact an
+  operator would actually receive.
 - **Visual regression** is nine full-page screenshots at 1440×900 in
   `artifacts/qa/`, captured from the shipped manifest. There is no baseline to
   diff against, so they are evidence, not a test.
