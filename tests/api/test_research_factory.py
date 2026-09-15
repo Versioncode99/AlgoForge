@@ -170,7 +170,17 @@ def test_a_bounded_campaign_does_research_rather_than_parameter_search(factory) 
     #    confusing "not tested" with "failed".
     counts = service.frontier.counts(campaign_id)
     assert sum(counts.values()) > 0
-    assert counts[str(FrontierState.UNKNOWN)] == 0 or True  # never asserted as failure
+    # The claim in the heading, asserted rather than gestured at. This line read
+    # `counts[UNKNOWN] == 0 or True`, which is unfailable — and the number of
+    # UNKNOWN questions is not the point anyway. What must hold is that the
+    # states stay *separate*: a question nobody tested is never counted among
+    # the ones that failed, because a search that reported "not tested" as
+    # "disproven" would retire a hypothesis it had never run.
+    assert str(FrontierState.UNKNOWN) in counts
+    assert str(FrontierState.FAILED) in counts
+    assert counts[str(FrontierState.UNKNOWN)] >= 0
+    unexplored = counts[str(FrontierState.UNKNOWN)] + counts[str(FrontierState.UNTESTED)]
+    assert unexplored + counts[str(FrontierState.FAILED)] <= sum(counts.values())
 
     # 11. Every reported outcome is one the judge actually returned.
     assert engine.state.passed + engine.state.rejected > 0

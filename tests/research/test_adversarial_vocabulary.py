@@ -253,7 +253,10 @@ def test_a_gated_construction_is_a_different_claim_from_its_ungated_self() -> No
         gate_side="lt",
     )
     assert plain.signature != gated.signature
-    assert build(plain).mechanism.key != build(gated).mechanism.key or True
+    # The gate changes which mechanism is being claimed, not only the wording:
+    # `liquidity_removal` becomes `volatility_clustering`. The `or True` that
+    # used to be on this line made it unfailable; the assertion holds without it.
+    assert build(plain).mechanism.key != build(gated).mechanism.key
     assert len(build(gated).features) > len(build(plain).features)
 
 

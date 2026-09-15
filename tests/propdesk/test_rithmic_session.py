@@ -412,9 +412,20 @@ def test_the_desk_is_only_ready_when_every_opened_plant_is() -> None:
     ticker_clock.advance(120)
     ticker.pump()
     ticker._degrade("the ticker plant went quiet")
+
+    # A degraded plant is *late, not gone*: it is still delivering, so the
+    # session stays ready and `poll` keeps draining it. What changes is that
+    # `health()` now names it — the desk needs the name, because "something is
+    # wrong" with no plant attached is a report nobody can act on.
+    assert session.ready is True
+    assert session.health()["degraded"] == ["ticker"]
+
+    # Once it moves on to reconnecting it is no longer delivering, and *that*
+    # is what takes the session out of ready. It is also no longer "degraded":
+    # the two states are different things and the desk is told which.
     ticker.health.state = SessionState.RECONNECTING
     assert session.ready is False
-    assert "ticker" not in session.health()["degraded"] or True
+    assert session.health()["degraded"] == []
 
 
 def test_asking_for_a_plant_that_is_not_open_names_the_ones_that_are() -> None:

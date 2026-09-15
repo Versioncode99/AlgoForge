@@ -237,13 +237,33 @@ class RithmicAdapter:
         return AdapterUnavailable(scrub(f"AlgoForge will not {verb} through Rithmic: {why}"))
 
     def _require_session(self, verb: str) -> RithmicSession:
+        """A session every caller here can read a *complete* picture through.
+
+        Stricter than `RithmicSession.ready`, and deliberately. `ready` treats a
+        degraded plant as live, which is right for the session's own purpose —
+        a connection that has missed a heartbeat is late, not gone, and it is
+        still delivering, so `poll` should keep draining it.
+
+        It is wrong for the three verbs that come through here. Account
+        discovery, capability discovery and a snapshot each read a picture that
+        the desk then treats as the whole truth: `ProviderSnapshot` *replaces*
+        local state. A partial answer through a plant that is missing
+        heartbeats would arrive looking complete.
+
+        This guard used to test `ready` alone. Its message named the degraded
+        plants, and in that branch there were never any: by the time `ready` is
+        false the plant has moved on to reconnecting or failed, and `degraded`
+        is empty. So the sentence described a case the code could not reach,
+        and the case it described went through.
+        """
         if self._session is None:
             raise self._refuse(verb, "no connection is open.")
-        if not self._session.ready:
-            degraded = ", ".join(self._session.health()["degraded"]) or "the connection"
+        degraded = self._session.health()["degraded"]
+        if not self._session.ready or degraded:
+            named = ", ".join(degraded) or "the connection"
             raise self._refuse(
                 verb,
-                f"{degraded} is not ready. A snapshot taken through a degraded plant "
+                f"{named} is not ready. A snapshot taken through a degraded plant "
                 "would be incomplete and would read as complete.",
             )
         return self._session

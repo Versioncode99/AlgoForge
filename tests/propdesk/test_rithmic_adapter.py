@@ -123,9 +123,34 @@ def test_reading_without_a_connection_refuses_rather_than_returning_empty() -> N
 
 
 def test_a_degraded_connection_refuses_a_snapshot_rather_than_taking_a_partial_one() -> None:
+    """The name of this test and what it exercised had come apart.
+
+    It set the plant DEGRADED and then overwrote that with RECONNECTING on the
+    next line, so only the reconnecting case ran — and the degraded case, the
+    one the name promises, went through and took a snapshot. The adapter's
+    guard tested `session.ready` alone, and `ready` treats a degraded plant as
+    live on purpose: it is late, not gone.
+
+    So a plant missing heartbeats produced a snapshot that reconciliation would
+    use to *replace* local state, and it arrived looking complete. Both states
+    are asserted separately now.
+    """
     adapter, _ = _connected()
     adapter._session.plants[Plant.PNL].health.state = SessionState.DEGRADED
+    # Still "live" to the session — which is correct, and is why the guard
+    # cannot rely on `ready`.
+    assert adapter._session.ready is True
+    with pytest.raises(AdapterUnavailable, match="would be incomplete"):
+        adapter.snapshot("A1")
+    # The refusal names the plant rather than saying "the connection".
+    with pytest.raises(AdapterUnavailable, match="pnl is not ready"):
+        adapter.discover_accounts()
+
+
+def test_a_reconnecting_connection_refuses_a_snapshot_too() -> None:
+    adapter, _ = _connected()
     adapter._session.plants[Plant.PNL].health.state = SessionState.RECONNECTING
+    assert adapter._session.ready is False
     with pytest.raises(AdapterUnavailable, match="would be incomplete"):
         adapter.snapshot("A1")
 
