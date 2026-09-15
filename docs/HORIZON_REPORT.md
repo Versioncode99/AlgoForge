@@ -55,7 +55,7 @@ Run on this checkout, Linux x86-64, Python 3.13.12, Node 22.
 | Web types | `tsc --noEmit` | **VERIFIED** — clean |
 | Web tests | `vitest run` | **VERIFIED** — 44 files, 523 tests |
 | Production build | `vite build` | **VERIFIED** — 242.85 kB CSS (38.33 kB gzip) |
-| Browser suite | `playwright test` | **VERIFIED** — 58 passed, 7 skipped |
+| Browser suite | `playwright test` | **VERIFIED locally** — 59 passed, 7 skipped. CI does **not** run this suite: the `web` job runs typecheck, build and `vitest` only, so every browser claim here rests on a local run |
 | Accessibility | `playwright test accessibility.spec.ts` | **VERIFIED** — 9 destinations, WCAG 2.1 AA, no allow-list |
 | Desktop widths | 1280 / 1440 / 1920 / 2560 | **VERIFIED** — no horizontal overflow |
 | Narrow widths | 1024 / 768 / 480 | **VERIFIED** — no horizontal overflow |
@@ -219,7 +219,8 @@ point at the same commit, and the pull request is from `Horizon`.
 ## 11 · The independent audit
 
 A separate pass over the finished work, looking for things that present as
-working and are not. Six findings. **Five predate this branch.**
+working and are not. Ten findings. The last two are the ones that matter
+most, because this audit found neither of them.
 
 | # | Finding | Age |
 |---|---|---|
@@ -230,6 +231,8 @@ working and are not. Six findings. **Five predate this branch.**
 | 5 | `PATCH /conversations/{id}` existed and no control reached it: a thread's title is derived from its first message and could not be corrected. | pre-existing |
 | 6 | "PAPER ONLY" lost the sentence explaining it when the chooser was removed. Two words alone read as a setting somebody could switch off. | **new, this branch** |
 | 7 | Four assertions of the form `assert X or True`, which pass whatever X is. One asserted the *opposite* of the design and `or True` kept it quiet. | 3 pre-existing, 1 new |
+| 10 | `AgentService._run` caught every exception, recorded it, and then **returned** the record. A returned value is a completed job, so the registry marked it `DONE`: the inbox filed a specialist that died on an `HTTPStatusError` as finished work, the orchestrator passed its "could not complete the task" summary forward as a step result, and the research loop's stop-on-failure branch never fired. | **new, this branch** |
+| 9 | The shell grid was broken and every screen rendered blank. `workstation.css` still declared a third row for the status bar Horizon removed; `horizon.css` restated the corrected rows in a block that appeared **twice**, and is imported first, so at equal specificity the stale declaration won. With `.workstation-main { grid-row: 3 }` the content landed in the vestigial 34px row and the tab row took the whole viewport. | **new, this branch** |
 | 8 | `RithmicAdapter._require_session` refused on `session.ready` alone, and a degraded plant leaves `ready` **true**. Its message named degraded plants in a branch that could only be reached when there were none — so a plant missing heartbeats produced a snapshot that reconciliation uses to *replace* local state, arriving complete. | **new, this branch** |
 
 Each is fixed and tested. Finding 6 is the one worth dwelling on: it is a safety
@@ -237,15 +240,34 @@ claim that got quietly weaker, and it was introduced by this branch's own
 simplification. The test diff shows it as an assertion deleted alongside the
 screen it described — which is exactly how a removal takes something with it.
 
-Four further sweeps found nothing:
+**Findings 9 and 10 were both found by another session working on this
+branch, not by this audit.** Finding 10 is false completion at runtime — the
+exact failure mode this audit was commissioned to hunt — reported as success
+to three separate consumers. Finding 9 is worse in one respect: the
+application did not render. Every check this report lists passed while it did not render, because
+every one of them tests structure rather than geometry: `pytest` and `vitest`
+run in jsdom, which has no layout; the axe pass and the manifest-reachability
+specs assert that elements exist and are reachable, not where they are on the
+page; `tsc` and `vite build` never evaluate cascade order. The nine screenshots
+in `artifacts/qa/` would have shown it immediately — tabs stranded mid-page above
+an empty screen — and they were captured without being looked at. Evidence nobody
+reads is not evidence. The regression guard now in `workstation.spec.ts`
+measures the geometry; it fails against the pre-fix stylesheets, which is how it
+was checked.
+
+Five further sweeps found nothing — with the caveat above, that a sweep only
+covers what it is pointed at:
 
 - **Unconditional skips** — none. Every `pytest.skip` is conditional with a
   stated reason; no `xfail`; no `.skip` in vitest or Playwright.
 - **Unfailable assertions** — none left. The four `or True` assertions are
   finding 7; nothing else in the suite can pass regardless of its subject.
-- **Swallowed exceptions** — every `except: pass`/`continue` either records the
-  problem, is a documented shutdown path, or skips one unreadable record out of
-  a listing that counts them.
+- **Swallowed exceptions** — the sweep looked for `except: pass`/`continue`
+  and found none that hide a fact. It was the wrong shape to look for.
+  Finding 10 is `except` → record → **return**, which reports the failure
+  honestly to a log and then hands the caller a value that means success.
+  A pattern-matched sweep finds the pattern it was given, and this report
+  previously presented that as a clean result.
 - **Inert UI controls** — no no-op handlers, no `href="#"`, no TODOs.
 - **Over-claiming** — no capability is set to a `VERIFIED_*` state anywhere; the
   only matches for "Rithmic support/connected/live" are docstrings *warning
