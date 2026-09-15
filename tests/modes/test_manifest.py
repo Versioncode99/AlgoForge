@@ -12,9 +12,10 @@ import re
 from pathlib import Path
 
 import pytest
+from forge.hedgefund.loop import LOOP
 from forge.modes import MODE_ORDER, MODES, Stance, WorkspaceMode, catalogue, descriptor
 from forge.modes.models import parse_stance
-from forge.product.navigation import DESTINATIONS, LEGACY_ROUTES, resolve
+from forge.product.navigation import BY_ROUTE, DESTINATIONS, LEGACY_ROUTES, resolve
 from forge.workstation import TEMPLATES, PanelKind
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -189,6 +190,34 @@ def test_every_place_the_inbox_can_send_somebody_exists() -> None:
         assert not landed.redirected, (
             f"the inbox mints '{route}?tab={tab}', which this product has to translate"
         )
+
+
+def test_every_stage_of_the_book_loop_opens_something() -> None:
+    """`StageSpec.route` promises this, in those words, and one stage broke it.
+
+    The field's own docstring says "Every stage has one: a stage on the diagram
+    that cannot be opened is decoration." Alpha's route was `"alpha"` -- the
+    stage's id, which has never been a destination or a legacy spelling -- so
+    the one stage holding the candidate signals could not be opened, and
+    clicking it on the fund screen resolved to nothing and landed on Home.
+
+    The failure needs no collision and no typo to reach a release: `resolve`
+    sends every route it does not know to Home, so a stage that names nothing
+    behaves exactly like one that names Home on purpose.
+    """
+    known = set(BY_ROUTE) | set(LEGACY_ROUTES)
+    for spec in LOOP:
+        assert spec.route in known, (
+            f"the {spec.stage.value} stage opens '{spec.route}', which is neither a "
+            "destination nor a legacy route, so the stage is decoration"
+        )
+        landed = resolve(spec.route)
+        assert landed.route in BY_ROUTE, f"{spec.stage.value} resolves to nothing real"
+        destination = BY_ROUTE[landed.route]
+        if destination.tabs:
+            assert destination.tab(landed.tab) is not None, (
+                f"the {spec.stage.value} stage opens a tab {landed.route} does not have"
+            )
 
 
 def test_only_ai_has_stances_and_it_defaults_to_the_cautious_one() -> None:

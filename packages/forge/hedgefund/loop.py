@@ -92,7 +92,12 @@ LOOP: tuple[StageSpec, ...] = (
     StageSpec(
         Stage.ALPHA, "Alpha",
         "Candidate signals, their mechanism, and how they compare to what is already held.",
-        "alpha", "a candidate signal with a backtest behind it",
+        # Strategies, not "alpha". There has never been a route by that name:
+        # it was the stage's own id used as a destination, so the one stage in
+        # the loop that could not be opened was the one holding the candidates,
+        # and clicking it left the fund screen for Home. `route` says above that
+        # a stage which cannot be opened is decoration; this one was.
+        "strategies", "a candidate signal with a backtest behind it",
     ),
     StageSpec(
         Stage.VALIDATION, "Validation",
