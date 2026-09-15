@@ -83,17 +83,6 @@ export function runAction<T = Record<string, unknown>>(
   return postJson<T>(`/actions/${name}`, { arguments: args })
 }
 
-export function useActionSchemas(enabled = true) {
-  return useQuery({
-    queryKey: ['action-schemas'],
-    enabled,
-    // The registry is fixed for the life of the process, so this is fetched
-    // once and kept. Re-fetching it on every palette open was a request per
-    // keystroke-adjacent event for a list that cannot change.
-    staleTime: Infinity,
-    queryFn: () => getJson<ActionSchema[]>('/actions'),
-  })
-}
 
 export function useInstruments(enabled = true) {
   return useQuery({
@@ -134,27 +123,6 @@ export function useWorkstationContext() {
   })
 }
 
-export function useSetContext() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (facets: Partial<ContextFacets> & { group?: string }) =>
-      runAction<Record<string, unknown>>('set_context', {
-        ...(facets.instrument !== undefined && { instrument: facets.instrument }),
-        ...(facets.timeframe !== undefined && { timeframe: facets.timeframe }),
-        ...(facets.dataset !== undefined && { dataset: facets.dataset }),
-        ...(facets.campaign !== undefined && { campaign_id: facets.campaign }),
-        ...(facets.strategy !== undefined && { strategy_id: facets.strategy }),
-        ...(facets.account !== undefined && { account_id: facets.account }),
-        ...(facets.group ? { group: facets.group } : {}),
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['workstation-context'] })
-      // The workspace itself changed, so anything drawing panels is stale too.
-      void queryClient.invalidateQueries({ queryKey: ['workspaces'] })
-      void queryClient.invalidateQueries({ queryKey: ['active-workspace'] })
-    },
-  })
-}
 
 export function useClearContext() {
   const queryClient = useQueryClient()

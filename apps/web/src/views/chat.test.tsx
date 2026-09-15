@@ -53,6 +53,9 @@ let latestRun: unknown = null
 let turns: unknown[] = []
 let started: string[] = []
 let cancelled: string[] = []
+//: Every PATCH the view sent, so a rename can be asserted on the request rather
+//: than on a title the fixture hands back unchanged.
+let patched: { url: string; body: string }[] = []
 
 function streamOf(frames: string[]): Response {
   const encoder = new TextEncoder()
@@ -76,8 +79,15 @@ beforeEach(() => {
   turns = []
   started = []
   cancelled = []
+  patched = []
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+    if ((init?.method ?? '').toUpperCase() === 'PATCH') {
+      patched.push({ url, body: String(init?.body ?? '') })
+      return new Response(JSON.stringify({ data: CONVERSATION }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      })
+    }
     if (url.includes('/chat/runs/') && url.includes('/events')) return streamOf(runEvents)
     if (url.includes('/chat/runs/') && url.endsWith('/cancel')) {
       cancelled.push(url)
@@ -243,4 +253,39 @@ test('the standing of an answer is on every assistant turn', async () => {
   // research transcript from a plausible one.
   const message = (await screen.findByText(/nothing has cleared a holdout/i)).closest('article')
   expect(within(message as HTMLElement).getByTitle(/./)).toBeInTheDocument()
+})
+
+/* ── renaming a conversation ──────────────────────────────────────────────────
+ *
+ * A title is derived from the first message, so a thread opened with a typo
+ * keeps it for good. `PATCH /conversations/{id}` has always existed and nothing
+ * in the interface reached it — the history rail offered archive and delete and
+ * no way to correct a name.
+ */
+test('a conversation can be renamed from the history rail', async () => {
+  draw()
+  fireEvent.click(await screen.findByRole('button', { name: 'Rename Opening range' }))
+
+  const field = await screen.findByRole('textbox', { name: 'Rename Opening range' })
+  fireEvent.change(field, { target: { value: 'Opening range breakout' } })
+  fireEvent.submit(field)
+
+  await waitFor(() => expect(patched.length).toBe(1))
+  expect(patched[0].url).toMatch(/\/conversations\/c1$/)
+  expect(JSON.parse(patched[0].body)).toEqual({ title: 'Opening range breakout' })
+})
+
+test('an empty title is refused rather than blanking the row', async () => {
+  /* The derived title is better than nothing, and a row with no name is a row
+   * nobody can find again. */
+  draw()
+  fireEvent.click(await screen.findByRole('button', { name: 'Rename Opening range' }))
+  const field = await screen.findByRole('textbox', { name: 'Rename Opening range' })
+  fireEvent.change(field, { target: { value: '   ' } })
+  fireEvent.submit(field)
+
+  await waitFor(() =>
+    expect(screen.queryByRole('textbox', { name: 'Rename Opening range' })).not.toBeInTheDocument(),
+  )
+  expect(patched).toEqual([])
 })

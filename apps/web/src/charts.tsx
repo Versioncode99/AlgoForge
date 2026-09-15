@@ -236,30 +236,6 @@ export function EquityChart({ paths, start = 0 }: { paths: number[][]; start?: n
   )
 }
 
-export function RegimeChart({ items }: { items: { name: string; net_pnl: number }[] }) {
-  return (
-    <ReactECharts
-      style={{ height: 240 }}
-      option={{
-        ...base(),
-        grid: { left: 54, right: 12, top: 14, bottom: 34 },
-        xAxis: { type: 'category', data: items.map((x) => x.name), ...axis() },
-        yAxis: { type: 'value', ...axis() },
-        series: [
-          {
-            type: 'bar',
-            barWidth: '46%',
-            data: items.map((x) => ({
-              value: x.net_pnl,
-              itemStyle: { color: x.net_pnl >= 0 ? '#3ddc97' : '#f2615c', borderRadius: [2, 2, 0, 0] },
-            })),
-          },
-        ],
-      }}
-    />
-  )
-}
-
 /** A single realised equity curve with the zero line drawn, because the sign of
  *  the result is the first thing anyone needs to read. */
 export function CurveChart({ equity, height = 230 }: { equity: number[]; height?: number }) {

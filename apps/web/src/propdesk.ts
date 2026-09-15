@@ -648,15 +648,6 @@ export function useRisk(accountUid?: string) {
   })
 }
 
-export function useDisclosures() {
-  return useQuery({
-    queryKey: key('disclosures'),
-    queryFn: () =>
-      getJson<{ disclosures: Disclosure[]; acknowledgements: Acknowledgement[] }>(
-        '/propdesk/disclosures',
-      ),
-  })
-}
 
 export function useDeskAudit(accountUid?: string, limit = 200) {
   return useQuery({

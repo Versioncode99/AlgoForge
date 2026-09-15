@@ -1,4 +1,4 @@
-import { ArrowUp, Check, MessageSquarePlus, Paperclip, RotateCcw, Search, Square, Trash2 } from 'lucide-react'
+import { ArrowUp, Check, MessageSquarePlus, Paperclip, Pencil, RotateCcw, Search, Square, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getJson } from '../api'
 import { ArtifactVisual } from '../components/ArtifactVisual'
@@ -12,6 +12,7 @@ import {
   type ToolCall,
   type Turn,
   useArchiveConversation,
+  useRenameConversation,
   useAttachContext,
   useConversations,
   useCreateConversation,
@@ -199,6 +200,10 @@ export function ChatView({ opening }: { opening?: ChatOpening } = {}) {
   const thread = useThread(activeId)
   const create = useCreateConversation()
   const archive = useArchiveConversation()
+  /* A title is derived from the first message, so a thread that opened with a
+     typo keeps it. The rename route has always existed and nothing exposed it. */
+  const rename = useRenameConversation()
+  const [renaming, setRenaming] = useState<string | null>(null)
   const remove = useDeleteConversation()
   const attach = useAttachContext()
   const detach = useDetachContext()
@@ -335,15 +340,44 @@ export function ChatView({ opening }: { opening?: ChatOpening } = {}) {
         <ul>
           {rows.map((item: Conversation) => (
             <li key={item.conversation_id} className={item.conversation_id === activeId ? 'on' : ''}>
-              <button type="button" className="ch-open" onClick={() => {
-                run.reset()
-                setPending(null)
-                setActiveId(item.conversation_id)
-              }}>
-                <strong>{item.title}</strong>
-                <span className="ch-preview">{item.last_message}</span>
-              </button>
+              {renaming === item.conversation_id ? (
+                <form
+                  className="ch-rename"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    const next = new FormData(event.currentTarget).get('title')
+                    const title = String(next ?? '').trim()
+                    // An empty title would leave the row unreadable, and the
+                    // derived one is better than nothing.
+                    if (title) rename.mutate({ id: item.conversation_id, title })
+                    setRenaming(null)
+                  }}
+                >
+                  <input
+                    name="title"
+                    aria-label={`Rename ${item.title}`}
+                    defaultValue={item.title}
+                    maxLength={120}
+                    autoFocus
+                    onBlur={() => setRenaming(null)}
+                    onKeyDown={(event) => { if (event.key === 'Escape') setRenaming(null) }}
+                  />
+                </form>
+              ) : (
+                <button type="button" className="ch-open" onClick={() => {
+                  run.reset()
+                  setPending(null)
+                  setActiveId(item.conversation_id)
+                }}>
+                  <strong>{item.title}</strong>
+                  <span className="ch-preview">{item.last_message}</span>
+                </button>
+              )}
               <span className="ch-tools">
+                <button type="button" aria-label={`Rename ${item.title}`}
+                  onClick={() => setRenaming(item.conversation_id)}>
+                  <Pencil aria-hidden="true" />
+                </button>
                 <button type="button" aria-label={`Archive ${item.title}`}
                   onClick={() => archive.mutate({ id: item.conversation_id, archived: true })}>
                   <Check aria-hidden="true" />

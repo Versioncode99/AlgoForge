@@ -580,6 +580,20 @@ code {
 }
 .ch-meta { font-size: var(--fs-nano); color: var(--fg-3); }
 
+/* The title, being edited in place. Same box as `.ch-open` so the row does not
+   jump when the input replaces the button. */
+.ch-rename { flex: 1; min-width: 0; padding: var(--sp-2); }
+.ch-rename input {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-family: inherit;
+  font-size: var(--fs-micro);
+  padding: 2px var(--sp-2);
+}
+
 .ch-tools { display: flex; flex-direction: column; gap: 1px; opacity: 0; transition: opacity var(--t-fast); }
 .ch-tools button {
   border: 0; background: transparent; color: var(--fg-3); cursor: pointer; padding: 3px;
