@@ -17,7 +17,7 @@ from typing import Any
 from forge.agents.skills import SKILLS
 from forge.contracts.hashing import stable_id
 from forge.research.sources import ResearchLibrary
-from forge.strategy import TEMPLATES
+from forge.strategy import TEMPLATES, unknown_template
 
 from forge_api import jsonish
 from forge_api.activity import ActivityLog
@@ -469,11 +469,12 @@ class AgentService:
         requested = str(raw.get("template", ""))
         template = TEMPLATES.get(requested)
         if template is None:
-            known = ", ".join(sorted(TEMPLATES)[:12])
-            raise ValueError(
-                f"Unknown template '{requested}'. Available: {known}"
-                + (", …" if len(TEMPLATES) > 12 else "")
-            )
+            # Shipped templates first, and the generated remainder counted
+            # rather than truncated into. `sorted(TEMPLATES)[:12]` named twelve
+            # machine-generated variants and no shipped template at all once a
+            # campaign had registered a few hundred -- see
+            # `forge.strategy.catalogue`.
+            raise ValueError(unknown_template(requested))
         params = raw.get("parameters", {})
         if not isinstance(params, dict):
             raise ValueError(

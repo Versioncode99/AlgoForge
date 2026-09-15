@@ -29,7 +29,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -59,6 +59,13 @@ from forge.modes.permissions import (
     summarise,
 )
 from forge.modes.store import ModeStore
+from forge.product.authority import DEFAULT as AUTHORITY_DEFAULT
+from forge.product.authority import AuthorityError, AuthorityProfile
+from forge.product.authority import catalogue as authority_catalogue
+from forge.product.navigation import GROUPS as NAV_GROUPS
+from forge.product.navigation import LEGACY_ROUTES
+from forge.product.navigation import catalogue as navigation_catalogue
+from forge.product.navigation import resolve as resolve_route
 from forge.prop.account import AccountRules, AccountState, ClosedTrade, state_from_trades
 from forge.prop.account import assess as prop_assess
 from forge.propdesk.instruments import MappingError, default_catalogue
@@ -87,6 +94,7 @@ from forge.strategy import (
     generate_bars,
     run_backtest,
     to_python,
+    unknown_template,
 )
 from forge.strategy.blueprints import blueprint as ir_blueprint
 from forge.strategy.blueprints import catalogue as blueprint_catalogue
@@ -118,6 +126,7 @@ from forge.workstation.context import groups_in as context_groups
 from forge.workstation.context import resolve_all as resolve_context
 from forge.workstation.sidebar import CATALOGUE as SIDEBAR_CATALOGUE
 from forge.workstation.sidebar import Sidebar, SidebarError
+from forge.workstation.sidebar import canonical as sidebar_canonical
 from forge.workstation.sidebar import destinations as sidebar_destinations
 from forge.workstation.sidebar import known as sidebar_known
 from pydantic import ValidationError
@@ -414,19 +423,28 @@ class Actions:
 
     # ── permissions, approval and audit ──────────────────────────────────────
     def context(self) -> tuple[WorkspaceMode, Stance | None]:
-        """Which mode the policy should rule against.
+        """Which policy the evaluator should rule against.
 
-        With no mode entered, AI mode's policy applies. That is the posture of a
-        headless agent run — workflow actions permitted, destructive ones held,
-        protected ones denied — and it is deliberately not the most permissive
-        reading: "no mode selected" must never mean "no policy".
+        This used to read the open mode, and answer "no mode entered" with AI
+        mode on no stance — the posture of a headless agent run, deliberately
+        not the most permissive reading, because "no mode selected" must never
+        mean "no policy".
+
+        There is no mode chooser now, so it reads the authority profile
+        instead. The profile is stored explicitly, migrates from whatever mode
+        the operator last left open, and defaults to *that same pair*, so the
+        answer here is unchanged for every installation that existed before the
+        chooser was removed. `tests/product/test_authority_migration.py` is the
+        check on that; this function is only where the fact is fetched.
+
+        The pair rather than the profile because `forge.modes.permissions
+        .evaluate` takes a mode and a stance and is the tested article. Widening
+        its signature to take a third shape of authority would be rewriting the
+        one thing that must not change quietly.
         """
         if self.modes is None:
-            return WorkspaceMode.AI, None
-        session = self.modes.session()
-        if session.mode is None:
-            return WorkspaceMode.AI, None
-        return session.mode, session.stance
+            return AUTHORITY_DEFAULT.to_mode()
+        return self.modes.authority().to_mode()
 
     def permission(self, name: str, *, actor: Actor = Actor.HUMAN) -> Judgement:
         """Rule on one action without running it.
@@ -1451,7 +1469,10 @@ class Actions:
         key = _str(template, "template", limit=50, lower=True)
         item = TEMPLATES.get(key)
         if item is None:
-            raise ActionError(f"No template '{key}'. Available: {', '.join(sorted(TEMPLATES))}.")
+            # Not `', '.join(sorted(TEMPLATES))`: after a campaign has run that
+            # is several hundred generated names in one error string, and none
+            # of the shipped ones is findable in it.
+            raise ActionError(unknown_template(key))
         family = self.families.get(item.family)
         if family is not None and not family.runnable:
             raise ActionError(
@@ -2379,7 +2400,8 @@ class Actions:
                         f"'{cleaned}' is not a destination. Valid: "
                         + ", ".join(sorted(SIDEBAR_CATALOGUE))
                     )
-                group = SIDEBAR_CATALOGUE[cleaned].group
+                entry = SIDEBAR_CATALOGUE.get(sidebar_canonical(cleaned) or cleaned)
+                group = entry.group if entry else "Other"
                 group_id = group.lower().replace(" ", "_").replace("&", "and")[:60]
                 if rail.group(group_id) is None:
                     rail = rail.with_group(group_id, group)
@@ -3232,12 +3254,98 @@ class Actions:
         except ValidationError as exc:
             raise ActionError(f"invalid validation options: {exc.errors()[0]['msg']}") from exc
 
-    # ── modes ────────────────────────────────────────────────────────────────
+    # ── navigation and authority ─────────────────────────────────────────────
+    def navigation(self) -> dict[str, Any]:
+        """Every destination in the product, with its tabs, and where old links go."""
+        return {
+            "destinations": navigation_catalogue(),
+            "groups": list(NAV_GROUPS),
+            "legacy_routes": dict(LEGACY_ROUTES),
+        }
+
+    def resolve_link(self, link: Any) -> dict[str, Any]:
+        """Where one link lands. Every route this product has ever minted resolves."""
+        return resolve_route(_str(link, "link")).as_dict()
+
+    def authority(self) -> dict[str, Any]:
+        """What an assistant may do on the operator's behalf, and what else is offered."""
+        profile = self.modes.authority() if self.modes else AUTHORITY_DEFAULT
+        mode, stance = profile.to_mode()
+        return {
+            "profile": profile.as_dict(),
+            "available": authority_catalogue(),
+            "policy": summarise(mode, stance),
+        }
+
+    def set_authority(
+        self, unattended_work: Any, unattended_execution: Any = False
+    ) -> dict[str, Any]:
+        """Change what an assistant may do. Protected, for the obvious reason.
+
+        An AI actor granting itself unattended execution is the whole of the
+        escape route this policy exists to close, so this carries `protected`
+        and `forge.modes.permissions` denies it to one in every configuration --
+        exactly as `enter_mode` and `set_stance` were denied before it.
+        """
+        store = self._require_modes()
+        try:
+            profile = AuthorityProfile(
+                unattended_work=bool(unattended_work),
+                unattended_execution=bool(unattended_execution),
+            )
+        except AuthorityError as exc:
+            raise ActionError(str(exc)) from exc
+        store.set_authority(profile)
+        return self.authority()
+
+    # ── modes (legacy) ───────────────────────────────────────────────────────
     def _register_modes(self) -> None:
         self._add(
+            "navigation",
+            "Every destination in the product, the tabs inside each one, and where a "
+            "link written against the old mode navigation now lands.",
+            {},
+            self.navigation,
+        )
+        self._add(
+            "resolve_link",
+            "Where one link lands today, including every route the mode manifests used "
+            "to offer.",
+            {"link": {"type": "string", "description": "A route, with or without its #."}},
+            self.resolve_link,
+        )
+        self._add(
+            "authority",
+            "What an assistant may do on the operator's behalf right now, the other "
+            "configurations available, and the policy each one carries.",
+            {},
+            self.authority,
+        )
+        self._add(
+            "set_authority",
+            "Grant or withdraw unattended work and unattended execution. Protected: an "
+            "AI actor changing this would be changing its own permissions, so it is "
+            "refused to one in every configuration.",
+            {
+                "unattended_work": {
+                    "type": "boolean",
+                    "description": "May the assistant start and stop campaigns and the engine?",
+                },
+                "unattended_execution": {
+                    "type": "boolean",
+                    "optional": True,
+                    "description": "May it also submit orders? Requires unattended_work.",
+                },
+            },
+            self.set_authority,
+            mutating=True,
+            protected=True,
+        )
+        self._add(
             "list_modes",
-            "The four operating environments, their purpose, their sections and the "
-            "workspace each one opens with.",
+            "The legacy operating environments, their purpose and the workspace each one "
+            "opened with. Superseded by `navigation` and `authority`: the product has "
+            "one navigation and authority is set explicitly.",
             {},
             self.list_modes,
         )
@@ -5298,6 +5406,155 @@ class Actions:
             ),
         }
 
+    @staticmethod
+    def _parse_or(value: str, fallback: Any) -> Any:
+        """An ISO date, or the fallback. Used only to report whether a window was clamped."""
+        try:
+            parsed = datetime.fromisoformat(value) if value else None
+        except ValueError:
+            return fallback
+        if parsed is None:
+            return fallback
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+    def campaign_scope(
+        self, dataset: Any, start: Any = "", end: Any = "", preset: Any = ""
+    ) -> dict[str, Any]:
+        """What a campaign configured with these dates would actually research.
+
+        Every number here is computed by the code that will run — the reservoir
+        from the archive, the window from `Campaign.time_scope`, the bar density
+        from `MarketService`, the warm-up from the template catalogue, the
+        sufficiency bound from `chronological_split` — rather than re-derived in
+        the interface. A form that did its own range arithmetic would be a
+        second answer to "what will this run on", and the two would disagree the
+        first time a template's warm-up changed.
+
+        `preset` is years as a string ("0.25", "1", "16") or "full". It is
+        resolved here so the interface does not have to know that a preset is
+        measured back from the *end* of the reservoir rather than forward from
+        its start.
+        """
+        from forge.research.allocation import ResearchAllocation
+        from forge.research.campaign import Campaign, CampaignProgress, StoppingCriteria
+
+        key = _str(dataset, "dataset", limit=80)
+        available_start, available_end = self._reservoir(key)
+        chosen_start = _str(start, "start", limit=40) if start else ""
+        chosen_end = _str(end, "end", limit=40) if end else ""
+        label = _str(preset, "preset", limit=20, lower=True) if preset else ""
+
+        if label:
+            if label == "full":
+                chosen_start = available_start.date().isoformat()
+                chosen_end = available_end.date().isoformat()
+            else:
+                try:
+                    years = float(label)
+                except ValueError:
+                    raise ActionError(
+                        f"'{label}' is not a range. Use a number of years, or 'full'."
+                    ) from None
+                if years <= 0:
+                    raise ActionError("a range must be longer than zero years")
+                # Measured back from the end of the archive: "the last two
+                # years" is what somebody means, and anchoring it to the start
+                # would silently hand them the oldest two instead.
+                span = timedelta(days=years * 365.25)
+                chosen_start = max(available_start, available_end - span).date().isoformat()
+                chosen_end = available_end.date().isoformat()
+
+        if not chosen_start and not chosen_end:
+            return {
+                "dataset": key,
+                "available_start": available_start.isoformat(),
+                "available_end": available_end.isoformat(),
+                "selected": False,
+                "reason": (
+                    "No window is selected, so this campaign runs on whatever the engine "
+                    "last loaded — the most recent bars, not a chosen span."
+                ),
+            }
+
+        probe = Campaign(
+            campaign_id="preview",
+            name="preview",
+            objective="preview",
+            dataset=key,
+            symbol="",
+            timeframe="",
+            universe=(),
+            start_date=chosen_start,
+            end_date=chosen_end,
+            allocation=ResearchAllocation.default(),
+            stopping=StoppingCriteria(),
+            allowed_capabilities=(),
+            web_research=False,
+            seed=0,
+            status="draft",
+            progress=CampaignProgress(),
+            stopped_reason="",
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
+        )
+        scope = probe.time_scope(available_start, available_end)
+        if scope is None:
+            raise ActionError(
+                f"'{chosen_start or 'the archive start'}' to "
+                f"'{chosen_end or 'the archive end'}' is not a window this dataset holds. "
+                f"It runs {available_start.date()} to {available_end.date()}."
+            )
+
+        years = scope.selected_days / 365.25
+        density = self.market.bars_per_year(key) if self.market else 0.0
+        approximate_bars = round(density * years) if density > 0 else 0
+        warmup = max(t.warmup_bars for t in TEMPLATES.values())
+        # `chronological_split`'s own bound, restated from its own arithmetic so
+        # it cannot drift: three partitions plus two purge gaps.
+        minimum_partition = max(warmup + 5, 100)
+        required = minimum_partition * 3 + 2 * warmup
+        sufficient = approximate_bars <= 0 or approximate_bars >= required
+
+        return {
+            "dataset": key,
+            "available_start": available_start.isoformat(),
+            "available_end": available_end.isoformat(),
+            "available_years": round(
+                (available_end - available_start).total_seconds() / (365.25 * 86400.0), 2
+            ),
+            "selected": True,
+            "selected_start": scope.selected_start.isoformat(),
+            "selected_end": scope.selected_end.isoformat(),
+            "selected_days": round(scope.selected_days, 1),
+            "selected_years": round(years, 2),
+            "approximate_bars": approximate_bars,
+            "bars_per_year": round(density, 1),
+            "warmup_bars": warmup,
+            "required_bars": required,
+            "sufficient": sufficient,
+            "clamped": (
+                scope.selected_start > self._parse_or(chosen_start, scope.selected_start)
+                or scope.selected_end < self._parse_or(chosen_end, scope.selected_end)
+            ),
+            "method": scope.method.value,
+            "fingerprint": scope.fingerprint(),
+            "timezone": "UTC. Every timestamp in the archive and in this window is UTC.",
+            "warning": (
+                ""
+                if sufficient
+                else (
+                    f"About {approximate_bars:,} bars. Three partitions with two "
+                    f"{warmup}-bar purge gaps need at least {required:,}, so this window "
+                    "cannot be split and nothing run on it can reach validation. Widen it, "
+                    "or choose a coarser interval."
+                )
+            ),
+            "note": (
+                "Warm-up is loaded from before the window and purged out of the scored "
+                "partitions, so the evaluation range is the window itself."
+            ),
+        }
+
     def propose_time_scope(
         self,
         dataset: str,
@@ -5440,6 +5697,23 @@ class Actions:
             "selects a window from - it is not the experiment window.",
             {"dataset": {"type": "string", "description": "A dataset key, e.g. nq_1m_16y."}},
             self.describe_reservoir,
+        )
+        self._add(
+            "campaign_scope",
+            "What a campaign configured with these dates would actually research: the "
+            "reservoir, the selected window, the bars it holds, the warm-up purged out of "
+            "the scored partitions, and whether the window can be split at all.",
+            {
+                "dataset": {"type": "string"},
+                "start": {"type": "string", "optional": True, "description": "ISO date."},
+                "end": {"type": "string", "optional": True, "description": "ISO date."},
+                "preset": {
+                    "type": "string",
+                    "optional": True,
+                    "description": "Years as a number, or 'full'. Overrides start and end.",
+                },
+            },
+            self.campaign_scope,
         )
         self._add(
             "propose_time_scope",

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
+from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from forge.capabilities import nautilus_capability
 from forge.contracts.models import ApiEnvelope
 from forge.conversation import ContextKind, ConversationError, ConversationStore
@@ -63,6 +66,7 @@ from forge_api.agent_service import AgentService
 from forge_api.assistant import Assistant
 from forge_api.campaigns import CampaignService, build_campaign_router
 from forge_api.chat import ChatService
+from forge_api.chat_runs import ChatRunner, RunStore
 from forge_api.director import ResearchDirector
 from forge_api.engine import AutonomousEngine, EngineConfig
 from forge_api.fund import FundService
@@ -70,10 +74,13 @@ from forge_api.jobs import REGISTRY, JobHandle
 from forge_api.ledger_view import LedgerError, TradeLedgerService
 from forge_api.market import DATASETS, DEFAULT_DATASET, MarketService
 from forge_api.model_routing import (
+    FEATURE_KEYS,
+    FEATURES_BY_KEY,
     ROLES_BY_KEY,
     RoleRouting,
     RoutingMode,
     RoutingSettings,
+    feature_rows,
     mode_rows,
     role_rows,
 )
@@ -211,6 +218,40 @@ def _apply_routing(
             raise HTTPException(422, {"code": "unknown_model", "models": unknown})
         updated.allowed = list(dict.fromkeys(body.routing_allowed))
 
+    # The four feature overrides. Held to the same two checks a role assignment
+    # is: the model has to be one the provider serves, and — where the operator
+    # has narrowed the allowed list — it has to be on it. An empty string
+    # *clears* the override rather than naming a model called "", which is how
+    # "use the global default here after all" is expressed.
+    for feature, model in (body.feature_routing or {}).items():
+        if feature not in FEATURES_BY_KEY:
+            raise HTTPException(
+                422,
+                {
+                    "code": "unknown_feature",
+                    "feature": feature,
+                    "known": list(FEATURE_KEYS),
+                },
+            )
+        if not model:
+            updated.features.pop(feature, None)
+            continue
+        checked(model, f"feature_routing.{feature}")
+        if updated.allowed and model not in set(updated.allowed):
+            raise HTTPException(
+                422,
+                {
+                    "code": "model_not_allowed",
+                    "feature": feature,
+                    "model": model,
+                    "reason": (
+                        f"'{model}' is not on the allowed list, so routing would never "
+                        "reach for it. Add it to the allowed models first."
+                    ),
+                },
+            )
+        updated.features[feature] = model
+
     # The flat `routing` patch stays supported and lands on the same roles.
     for role, model in (body.routing or {}).items():
         if role not in ROLES_BY_KEY:
@@ -284,6 +325,9 @@ class SettingsPatch(BaseModel):
     routing_default_model: str | None = None
     routing_fallback_model: str | None = None
     routing_allowed: list[str] | None = None
+    #: Feature key to model id. The simple half of the settings screen. An empty
+    #: value clears the override.
+    feature_routing: dict[str, str] | None = None
     role_routing: dict[str, RolePatch] | None = None
     budget: dict[str, float] | None = None
     budget_enforced: bool | None = None
@@ -541,6 +585,19 @@ class EnterModeRequest(BaseModel):
 
 class StanceRequest(BaseModel):
     stance: str
+
+
+class AuthorityRequest(BaseModel):
+    """What an assistant may do, as the Permissions screen sends it.
+
+    Both fields required rather than one optional: a request that omitted
+    execution would read as "leave it as it is" to the sender and as "withdraw
+    it" to the model default, and the two are not the same answer about
+    reaching the book.
+    """
+
+    unattended_work: bool
+    unattended_execution: bool
 
 
 class PropAccountRequest(BaseModel):
@@ -867,6 +924,10 @@ def build_control_router(
     # Conversations are application state, not research: this database can be
     # deleted and the operator loses their dialogue history and nothing else.
     chat = ChatService(ConversationStore(workspace.data / "conversations.db"), assistant)
+    # The run protocol. Held beside the service rather than inside it: a chat
+    # turn is a question answered, and a *run* is that question in flight, with
+    # a status somebody can watch and a stop somebody can press.
+    chat_runs = ChatRunner(chat, RunStore(workspace.data / "chat-runs.db"))
     agents.context = lambda: {
         "running": engine.state.running,
         "dataset": engine.state.config.dataset,
@@ -923,7 +984,14 @@ def build_control_router(
                     # rendered as a fact rather than as a field somebody can type
                     # into, because typing into it did nothing.
                     "base_url": current.ai.base_url,
-                    "routing": current.ai.routing,
+                    # Deprecated, and derived from `model_routing` rather than
+                    # stored beside it. Kept on the wire so a client built
+                    # against it keeps reading; nothing in this repository
+                    # writes it or reads it to make a decision.
+                    "routing": {
+                        role: current.ai.model_routing.for_role(role).model
+                        for role in current.ai.routing
+                    },
                     "model_routing": routing_to_dict(current.ai.model_routing),
                     # `vars` would emit the enum and omit `enforced`, which is
                     # now derived. The payload keeps both: the mode is the
@@ -949,6 +1017,7 @@ def build_control_router(
                 "providers": list(PROVIDERS),
                 "roles": ROLES,
                 "routing_roles": role_rows(),
+                "routing_features": feature_rows(),
                 "routing_modes": mode_rows(),
                 # What turning budget enforcement off does *not* turn off.
                 # Data rather than prose, so the screen cannot drift from the
@@ -1059,10 +1128,12 @@ def build_control_router(
         # The flat mapping is what the existing callers read, so a change made
         # through the richer form has to reach it too. Two tables that can
         # disagree are two tables, one of which is wrong.
-        routing = {
-            role: model_routing.for_role(role).model or routing.get(role, "")
-            for role in routing
-        }
+        # Derived, not maintained. It used to be written alongside the rich
+        # routing and kept in step by hand, which is two tables, one of which is
+        # wrong the moment somebody edits the other. Now the rich table is the
+        # record and this is a view of it — an unassigned role reads as empty
+        # rather than as whatever the copy last said.
+        routing = {role: model_routing.for_role(role).model for role in role_keys}
         updated = Settings(
             # Carried through explicitly: `Settings` is rebuilt wholesale here,
             # so anything not named would silently revert to its default.
@@ -1260,6 +1331,76 @@ def build_control_router(
                 404, {"code": "conversation_not_found", "reason": str(exc)}
             ) from exc
 
+    # ── the run protocol ─────────────────────────────────────────────────────
+    # `POST /messages` above is the blocking form and stays: it is what a script
+    # wants, and what the MCP server uses. These are what an interface wants —
+    # the question acknowledged at once, progress while it works, and a stop.
+
+    @router.post(
+        "/conversations/{conversation_id}/runs",
+        response_model=ApiEnvelope[dict[str, Any]],
+        status_code=202,
+    )
+    def start_run(conversation_id: str, body: MessageRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Ask, and get the run's id back before the model has been called."""
+        if not body.message.strip():
+            raise HTTPException(
+                422, {"code": "empty_message", "reason": "a message cannot be empty"}
+            )
+        try:
+            chat.store.get(conversation_id)
+        except ConversationError as exc:
+            raise HTTPException(
+                404, {"code": "conversation_not_found", "reason": str(exc)}
+            ) from exc
+        run = chat_runs.start(conversation_id, body.message)
+        return ApiEnvelope(data=run.as_dict())
+
+    @router.get("/chat/runs/{run_id}/events")
+    def run_events(run_id: str, cursor: int = 0) -> StreamingResponse:
+        """Everything the run has said, from `cursor`, then each new event.
+
+        Server-sent events rather than a WebSocket: this is one-way, the client
+        needs automatic reconnection more than it needs to talk back, and a
+        socket would be a second transport to keep alive for a stream that only
+        ever flows one way.
+        """
+
+        def emit() -> Iterator[str]:
+            for event in chat_runs.stream(run_id, cursor):
+                yield f"event: {event['event']}\ndata: {json.dumps(event, default=str)}\n\n"
+
+        return StreamingResponse(
+            emit(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @router.post("/chat/runs/{run_id}/cancel", response_model=ApiEnvelope[dict[str, Any]])
+    def cancel_run(run_id: str) -> ApiEnvelope[dict[str, Any]]:
+        """Ask a run to stop. Acknowledged at once; observed at the next step."""
+        stopped = chat_runs.request_cancel(run_id)
+        run = chat_runs.get(run_id)
+        if run is None:
+            raise HTTPException(404, {"code": "run_not_found", "reason": f"no run '{run_id}'"})
+        return ApiEnvelope(
+            data={**run.as_dict(), "cancelling": stopped},
+            meta={
+                "note": (
+                    "A provider call already in flight cannot be withdrawn. Stopping means the "
+                    "answer is not asked for again, not that the request was recalled."
+                )
+            },
+        )
+
+    @router.get(
+        "/conversations/{conversation_id}/runs/latest",
+        response_model=ApiEnvelope[dict[str, Any] | None],
+    )
+    def latest_run(conversation_id: str) -> ApiEnvelope[dict[str, Any] | None]:
+        """The most recent run on this thread, so a reloaded client can reattach."""
+        return ApiEnvelope(data=chat_runs.store.latest(conversation_id))
+
     @router.patch("/conversations/{conversation_id}", response_model=ApiEnvelope[dict[str, Any]])
     def rename_conversation(
         conversation_id: str, body: RenameRequest
@@ -1342,6 +1483,23 @@ def build_control_router(
         return ApiEnvelope(data={"kind": kind, "ref": ref, "detached": True})
 
     # ── datasets ─────────────────────────────────────────────────────────────
+    @router.get("/campaigns/scope", response_model=ApiEnvelope[dict[str, Any]])
+    def campaign_scope(
+        dataset: str, start: str = "", end: str = "", preset: str = ""
+    ) -> ApiEnvelope[dict[str, Any]]:
+        """What a campaign with these dates would research, before it is created.
+
+        The form reads this rather than doing its own range arithmetic, so what
+        it shows is what `Campaign.time_scope` and `MarketService.load_scope`
+        will actually do.
+        """
+        return ApiEnvelope(
+            data=_action(
+                "campaign_scope",
+                {"dataset": dataset, "start": start, "end": end, "preset": preset},
+            )
+        )
+
     @router.get("/datasets", response_model=ApiEnvelope[list[dict[str, Any]]])
     def datasets() -> ApiEnvelope[list[dict[str, Any]]]:
         rows = market.status()
@@ -3142,10 +3300,41 @@ def build_control_router(
         sources["assembled_at"] = datetime.now(UTC)
         return PassportSources(**sources)
 
-    # ── modes ────────────────────────────────────────────────────────────────
-    # The shell reads these to draw the home screen and the mode's navigation.
-    # Everything they return comes from `forge.modes`, so the interface and an
-    # agent asking the same question get the same answer.
+    # ── navigation and authority ─────────────────────────────────────────────
+    # The shell reads these to draw the rail and to say what an assistant may
+    # do. Both come from `forge.product`, so the interface and an agent asking
+    # the same question get the same answer.
+
+    @router.get("/navigation", response_model=ApiEnvelope[dict[str, Any]])
+    def navigation() -> ApiEnvelope[dict[str, Any]]:
+        """Every destination, its tabs, and where a link written for the old rail goes."""
+        return ApiEnvelope(data=_action("navigation", {}))
+
+    @router.get("/navigation/resolve", response_model=ApiEnvelope[dict[str, Any]])
+    def resolve_navigation(link: str) -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("resolve_link", {"link": link}))
+
+    @router.get("/authority", response_model=ApiEnvelope[dict[str, Any]])
+    def read_authority() -> ApiEnvelope[dict[str, Any]]:
+        return ApiEnvelope(data=_action("authority", {}))
+
+    @router.post("/authority", response_model=ApiEnvelope[dict[str, Any]])
+    def write_authority(body: AuthorityRequest) -> ApiEnvelope[dict[str, Any]]:
+        """Set what an assistant may do. A person only: the action is protected."""
+        return ApiEnvelope(
+            data=_action(
+                "set_authority",
+                {
+                    "unattended_work": body.unattended_work,
+                    "unattended_execution": body.unattended_execution,
+                },
+                confirmed=True,
+            )
+        )
+
+    # ── modes (legacy) ───────────────────────────────────────────────────────
+    # Superseded by the two above and kept so a client built against them keeps
+    # working. The shell no longer reads them.
 
     @router.get("/modes", response_model=ApiEnvelope[dict[str, Any]])
     def list_modes() -> ApiEnvelope[dict[str, Any]]:

@@ -58,10 +58,14 @@ function payload(overrides: Partial<SettingsPayload> = {}): SettingsPayload {
         default_model: 'mid-1',
         fallback_model: 'mid-1',
         allowed: [],
+        features: { research: 'big-1' },
+        flat_migrated: true,
         roles: {
-          chat: { model: 'mid-1', fallback: '', enabled: true },
-          agent_discovery: { model: 'big-1', fallback: 'mid-1', enabled: true },
-          agent_reviewer: { model: 'big-1', fallback: '', enabled: true },
+          chat: { model: 'mid-1', recommended: 'mid-1', fallback: '', enabled: true },
+          agent_discovery: {
+            model: 'big-1', recommended: 'big-1', fallback: 'mid-1', enabled: true,
+          },
+          agent_reviewer: { model: 'big-1', recommended: 'big-1', fallback: '', enabled: true },
         },
       },
       budget: {
@@ -91,6 +95,18 @@ function payload(overrides: Partial<SettingsPayload> = {}): SettingsPayload {
     credentials: [],
     providers: [{ id: 'opencode_go', label: 'OpenCode Go', detail: 'A provider' }],
     routing_roles: ROLES,
+    routing_features: [
+      { key: 'chat', label: 'Chat', detail: 'The conversation', roles: ['chat'] },
+      {
+        key: 'research', label: 'Research', detail: 'Hypotheses and falsification',
+        roles: ['agent_discovery', 'agent_reviewer'],
+      },
+      {
+        key: 'strategy', label: 'Strategy generation', detail: 'Writing the strategy',
+        roles: ['strategy_code'],
+      },
+      { key: 'fast', label: 'Fast tasks', detail: 'Tagging and triage', roles: ['bulk'] },
+    ],
     routing_modes: [
       { key: 'manual', label: 'Manual', detail: 'Only the model you assign, never a substitute.' },
       { key: 'hybrid', label: 'Hybrid', detail: 'Your assignment first, then your fallback.' },
@@ -188,7 +204,7 @@ test('the research agents can be hidden when only the workflow matters', () => {
 
 test('a role not using its assigned model says so on the row and at the top', () => {
   draw(<ModelRoutingPanel settings={payload()} patch={vi.fn()} />)
-  expect(screen.getByText(/1 role\(s\) are not using the model they are assigned/))
+  expect(screen.getByText(/1 job\(s\) are not using the model they are set to/))
     .toBeInTheDocument()
   const row = screen.getByText('Discovery agent').closest('tr')!
   expect(within(row).getByText(/not served by the opencode_go provider/)).toBeInTheDocument()
@@ -305,4 +321,59 @@ test('selecting no source says retrieval will find nothing rather than implying 
 test('the panel states that a retrieved claim is not evidence', () => {
   draw(<ResearchPanel settings={payload()} patch={vi.fn()} />)
   expect(screen.getByText(/never evidence for an answer/)).toBeInTheDocument()
+})
+
+// ── one default, four overrides ──────────────────────────────────────────────
+//
+// Routing was already rich. What it offered first was a nineteen-row matrix of
+// role names, which is the right granularity for the engine and the wrong one
+// for a person: nobody thinks "the falsification agent and the review agent
+// should use a reasoning model", they think "research should use the good one".
+
+test('the screen leads with a default and the four overrides, not the matrix', () => {
+  render(<ModelRoutingPanel settings={payload()} patch={() => undefined} />)
+  expect(screen.getByLabelText('Default model')).toBeInTheDocument()
+  for (const label of ['Chat', 'Research', 'Strategy generation', 'Fast tasks']) {
+    expect(screen.getByLabelText(`Model for ${label}`)).toBeInTheDocument()
+  }
+  // The matrix is behind a disclosure, closed. Not removed: the engine runs all
+  // nineteen roles and hiding them for good would cost a capability.
+  const advanced = screen.getByText(/per-role routing, fallbacks and mode/i)
+  expect(advanced.closest('details')).not.toHaveAttribute('open')
+})
+
+test('each override says which part of the product it changes', () => {
+  render(<ModelRoutingPanel settings={payload()} patch={() => undefined} />)
+  expect(screen.getByText('Hypotheses and falsification')).toBeInTheDocument()
+  expect(screen.getByText('Tagging and triage')).toBeInTheDocument()
+})
+
+test('setting a feature override patches that feature and nothing else', () => {
+  const patch = vi.fn()
+  render(<ModelRoutingPanel settings={payload()} patch={patch} />)
+  fireEvent.change(screen.getByLabelText('Model for Chat'), { target: { value: 'big-1' } })
+  expect(patch).toHaveBeenCalledWith({ feature_routing: { chat: 'big-1' } })
+})
+
+test('clearing a feature override sends an empty value rather than a model named ""', () => {
+  const patch = vi.fn()
+  render(<ModelRoutingPanel settings={payload()} patch={patch} />)
+  fireEvent.change(screen.getByLabelText('Model for Research'), { target: { value: '' } })
+  expect(patch).toHaveBeenCalledWith({ feature_routing: { research: '' } })
+})
+
+test('a blank field says what it falls through to rather than saying "none"', () => {
+  render(<ModelRoutingPanel settings={payload()} patch={() => undefined} />)
+  // "none" would read as "nothing will answer". A feature left blank follows
+  // the default; a role left blank follows its feature.
+  expect(
+    within(screen.getByLabelText('Model for Chat')).getByText(/follow the default/i),
+  ).toBeInTheDocument()
+})
+
+test('the role matrix shows the shipped recommendation as the placeholder', () => {
+  render(<ModelRoutingPanel settings={payload()} patch={() => undefined} />)
+  fireEvent.click(screen.getByText(/per-role routing, fallbacks and mode/i))
+  const chat = screen.getByLabelText('Model for Console chat')
+  expect(within(chat).getByText(/recommended/i)).toBeInTheDocument()
 })

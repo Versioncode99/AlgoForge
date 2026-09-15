@@ -457,21 +457,37 @@ DEFAULT_BY_DEMAND: dict[str, str] = {
 
 
 def default_routing() -> RoutingSettings:
-    """Every role assigned, by what its job needs.
+    """What AlgoForge ships, as recommendations rather than as assignments.
 
     Built rather than written out, so a role added to `model_routing.ROLES`
-    arrives configured instead of silently unassigned — which would fall through
-    to the default and look, on the settings screen, like a deliberate choice.
+    arrives with a sensible model instead of falling through to a generic one.
+
+    **`recommended`, not `model`, and the distinction is load-bearing.** These
+    used to land in `model`, which is where an *operator's* choice goes. Every
+    role was therefore "assigned" on a fresh installation, the role assignment
+    beats everything below it, and setting the Research feature to a frontier
+    model changed nothing whatsoever — the simple half of the settings screen
+    was decorative. Held apart, a fresh install still gets the measured per-role
+    choice and an operator who sets one model gets it everywhere they have not
+    said otherwise.
+
+    `default_model` is empty for the same reason: it is the operator's global
+    default, and shipping a value in it would mean the recommendations below
+    were never consulted.
     """
     roles: dict[str, RoleRouting] = {}
     for key in ROLE_KEYS:
         role = ROLES_BY_KEY[key]
         chosen = DEFAULT_ROUTING.get(key) or DEFAULT_BY_DEMAND.get(role.demand.value, "")
-        roles[key] = RoleRouting(model=chosen, fallback=DEFAULT_BY_DEMAND["balanced"])
+        roles[key] = RoleRouting(
+            recommended=chosen, fallback=DEFAULT_BY_DEMAND["balanced"]
+        )
     return RoutingSettings(
         mode="hybrid",
-        default_model=DEFAULT_BY_DEMAND["balanced"],
+        default_model="",
         fallback_model=DEFAULT_BY_DEMAND["balanced"],
+        # Nothing to migrate: this *is* the shipped table.
+        flat_migrated=True,
         roles=roles,
     )
 
@@ -537,17 +553,29 @@ def _merge_routing(routing: RoutingSettings, flat: dict[str, str]) -> RoutingSet
     merged: dict[str, RoleRouting] = {}
     for key in ROLE_KEYS:
         stored = routing.roles.get(key, RoleRouting())
-        fallback_entry = base.roles[key]
+        shipped = base.roles[key]
+        # A flat entry equal to what this build ships is not an operator's
+        # choice; it is the default, written into the copy at save time. Reading
+        # it back as an assignment would pin every role on every existing
+        # installation and make the feature overrides do nothing — the same
+        # failure `default_routing` above describes, arriving by migration
+        # instead of by construction. A flat entry that *differs* is a real
+        # choice and is carried across.
+        carried = flat.get(key, "")
+        migrated = "" if carried == shipped.recommended else carried
         merged[key] = RoleRouting(
-            model=stored.model or flat.get(key, "") or fallback_entry.model,
-            fallback=stored.fallback or fallback_entry.fallback,
+            model=stored.model or migrated,
+            recommended=stored.recommended or shipped.recommended,
+            fallback=stored.fallback or shipped.fallback,
             enabled=stored.enabled,
         )
     return RoutingSettings(
         mode=routing.mode,
-        default_model=routing.default_model or base.default_model,
+        default_model=routing.default_model,
         fallback_model=routing.fallback_model or base.fallback_model,
         allowed=list(routing.allowed),
+        features=dict(routing.features),
+        flat_migrated=True,
         roles=merged,
     )
 
@@ -614,7 +642,11 @@ class SettingsStore:
         model_routing = normalise_routing(
             ai_raw.get("model_routing"), known_models={m["id"] for m in KNOWN_MODELS}
         )
-        model_routing = _merge_routing(model_routing, routing)
+        # One-way, and only for a file written before the consolidation. The
+        # flat map is derived from this table now, so folding it back in on
+        # every load would let the deprecated copy keep governing behaviour.
+        if not model_routing.flat_migrated:
+            model_routing = _merge_routing(model_routing, routing)
         ai = AISettings(
             enabled=bool(ai_raw.get("enabled", True)),
             provider=provider,

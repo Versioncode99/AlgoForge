@@ -37,6 +37,7 @@ from pydantic import Field, field_validator
 
 from forge.contracts.models import FrozenModel
 from forge.modes.models import MODE_ORDER, MODES, WorkspaceMode
+from forge.product.navigation import DESTINATIONS, LEGACY_ROUTES, resolve
 
 MAX_GROUPS = 20
 MAX_ITEMS_PER_GROUP = 40
@@ -71,47 +72,92 @@ class Destination:
 
 
 def _build_catalogue() -> dict[str, Destination]:
-    """Every destination in the product, from the mode manifests themselves.
+    """Every screen a sidebar can point at, from the product navigation itself.
 
-    Order follows `MODE_ORDER` so the catalogue reads in the order a person
-    meets the application. A route offered by several modes keeps the first
-    mode's wording — they are the same screen, and two labels for one
-    destination is how a rail starts lying about where things are.
+    It used to be the **union of the mode manifests**, deduplicated by route,
+    because navigation was a property of the mode and a workspace wanting Prop
+    Accounts beside Research Agents had to reach across two of them. There is one
+    navigation now, so the union is the navigation — and the interesting change
+    is that *tabs are destinations here too*. A rail that could only name the
+    nine top-level rows could not put "Drawdown" or "Pre-trade gate" on a
+    screen, which is most of what somebody builds a custom rail to do.
+
+    Order follows the manifest, and a destination with tabs contributes itself
+    first so "Trading" and "Trading · Risk" both exist and read in that order.
     """
     found: dict[str, Destination] = {}
-    for mode in MODE_ORDER:
-        descriptor = MODES[mode]
-        for section in descriptor.sections:
-            existing = found.get(section.route)
-            if existing is None:
-                found[section.route] = Destination(
-                    route=section.route,
-                    label=section.label,
-                    detail=section.detail,
-                    group=section.group,
-                    panel_kinds=tuple(section.panel_kinds),
-                    modes=(mode.value,),
-                )
-            else:
-                found[section.route] = Destination(
-                    route=existing.route,
-                    label=existing.label,
-                    detail=existing.detail,
-                    group=existing.group,
-                    panel_kinds=tuple(
-                        dict.fromkeys((*existing.panel_kinds, *section.panel_kinds))
-                    ),
-                    modes=(*existing.modes, mode.value),
-                )
+    for destination in DESTINATIONS:
+        found[destination.route] = Destination(
+            route=destination.route,
+            label=destination.label,
+            detail=destination.detail,
+            group=destination.group,
+            panel_kinds=destination.panels(),
+            modes=tuple(mode.value for mode in MODE_ORDER),
+        )
+        for tab in destination.tabs:
+            # `route:tab`, not `route?tab=`. A sidebar item's route travels in a
+            # URL *path* — `/workspaces/{id}/sidebar/items/{route}/pin` — and a
+            # `?` in a path segment ends the path. A colon is legal there
+            # (RFC 3986 §3.3) and reads as what it is.
+            link = f"{destination.route}:{tab.tab}"
+            found[link] = Destination(
+                route=link,
+                label=f"{destination.label} · {tab.label}",
+                detail=tab.detail,
+                group=destination.label,
+                panel_kinds=tab.panel_kinds or destination.panel_kinds,
+                modes=tuple(mode.value for mode in MODE_ORDER),
+            )
     return found
 
 
-#: Every destination the application has, keyed by route.
+def _entry(route: str) -> Destination:
+    """The catalogue row for a route, translating an old one on the way.
+
+    Falls back to a row describing the route itself rather than raising. A rail
+    holding one unrecognised item should draw that item plainly, not fail to
+    draw the workspace.
+    """
+    found = CATALOGUE.get(canonical(route) or route)
+    if found is not None:
+        return found
+    return Destination(
+        route=route, label=route, detail="", group="Other", panel_kinds=(), modes=()
+    )
+
+
+def canonical(route: str) -> str:
+    """The current link for a route, including every one the modes used to offer.
+
+    A rail saved before the mode navigation was replaced names `desk`, `charts`
+    or `portfolio`. Those are still meaningful — they still name a screen — so
+    they are *translated* rather than refused, and normalised on the way in so a
+    rail stops carrying the old spelling the first time it is edited. Refusing
+    them would delete somebody's arrangement to make a rename tidy.
+    """
+    if route in CATALOGUE:
+        return route
+    # Only a route the product *used* to offer is translated. `resolve` falls
+    # back to Home for anything it does not recognise, which is right for a link
+    # somebody clicked — they end up somewhere real — and wrong here: a sidebar
+    # that silently accepted `nonsens` and drew a row labelled Home is a rail
+    # that lies about what is on it.
+    # `route?tab=x` is the link form the shell navigates with; accept it here so
+    # a caller can pass either spelling and get the stored one back.
+    landed = resolve(route)
+    if not landed.redirected or route.partition("?")[0] in LEGACY_ROUTES:
+        link = f"{landed.route}:{landed.tab}" if landed.tab else landed.route
+        if link in CATALOGUE:
+            return link
+    return ""
+
+
 CATALOGUE: dict[str, Destination] = _build_catalogue()
 
 
 def known(route: str) -> bool:
-    return route in CATALOGUE
+    return bool(canonical(route))
 
 
 def destinations() -> list[dict[str, Any]]:
@@ -141,6 +187,9 @@ class SidebarItem(FrozenModel):
     @field_validator("route")
     @classmethod
     def _is_a_real_destination(cls, route: str) -> str:
+        normalised = canonical(route)
+        if normalised:
+            return normalised
         if not known(route):
             raise ValueError(
                 f"'{route}' is not a destination. A sidebar item pointing at nothing is "
@@ -149,7 +198,13 @@ class SidebarItem(FrozenModel):
         return route
 
     def display_label(self) -> str:
-        return self.label or CATALOGUE[self.route].label
+        # `canonical` rather than a bare lookup: a rail stored before the mode
+        # navigation was replaced can still be in memory under the old spelling
+        # — `sidebar_from` builds one from a mapping without going through the
+        # validator — and a label lookup that raised `KeyError` there took the
+        # whole workspace render with it.
+        entry = CATALOGUE.get(canonical(self.route) or self.route)
+        return self.label or (entry.label if entry else self.route)
 
 
 class SidebarGroup(FrozenModel):
@@ -213,10 +268,18 @@ class Sidebar(FrozenModel):
         return tuple(item.route for group in self.groups for item in group.items)
 
     def locate(self, route: str) -> tuple[str, int] | None:
-        """Which group holds ``route``, and at what index."""
+        """Which group holds ``route``, and at what index.
+
+        The route is canonicalised first, so a caller that still says `charts`
+        finds the item stored as `markets?tab=charts`. Without this, translating
+        on the way in would make every subsequent edit — pin, rename, hide,
+        move, remove — fail for a rail the operator had saved under the old
+        spelling, which is a worse outcome than never translating at all.
+        """
+        wanted = canonical(route) or route
         for group in self.groups:
             for index, item in enumerate(group.items):
-                if item.route == route:
+                if item.route == wanted:
                     return group.group_id, index
         return None
 
@@ -296,6 +359,7 @@ class Sidebar(FrozenModel):
         intentions and silently doing the second when asked for the first loses
         whatever the operator had arranged.
         """
+        route = canonical(route) or route
         if not known(route):
             raise SidebarError(
                 f"'{route}' is not a destination. Valid: {', '.join(sorted(CATALOGUE))}"
@@ -322,7 +386,10 @@ class Sidebar(FrozenModel):
         group_id, _ = found
         group = self.require_group(group_id)
         return self._replace_group(
-            self._group_with(group, items=tuple(i for i in group.items if i.route != route))
+            self._group_with(
+                group,
+                items=tuple(i for i in group.items if i.route != (canonical(route) or route)),
+            )
         )
 
     def _map_item(self, route: str, **changes: Any) -> Sidebar:
@@ -343,7 +410,7 @@ class Sidebar(FrozenModel):
                             **changes,
                         }
                     )
-                    if i.route == route
+                    if i.route == (canonical(route) or route)
                     else i
                     for i in group.items
                 ),
@@ -365,7 +432,7 @@ class Sidebar(FrozenModel):
         if found is None:
             raise SidebarError(f"'{route}' is not in this sidebar")
         source = self.require_group(found[0])
-        item = next(i for i in source.items if i.route == route)
+        item = next(i for i in source.items if i.route == (canonical(route) or route))
         target = self.require_group(group_id)
         without = self.without_item(route)
         # Re-read the target: removing may have changed it.
@@ -387,10 +454,10 @@ class Sidebar(FrozenModel):
                             "route": item.route,
                             "label": item.display_label(),
                             "renamed": bool(item.label),
-                            "detail": CATALOGUE[item.route].detail,
+                            "detail": _entry(item.route).detail,
                             "pinned": item.pinned,
                             "hidden": item.hidden,
-                            "panel_kinds": list(CATALOGUE[item.route].panel_kinds),
+                            "panel_kinds": list(_entry(item.route).panel_kinds),
                         }
                         for item in group.items
                     ],
@@ -401,10 +468,18 @@ class Sidebar(FrozenModel):
 
 
 def default_sidebar_for(mode: WorkspaceMode | str) -> Sidebar:
-    """The rail a built-in mode has always had, as an editable sidebar.
+    """The product's own rail, as an editable sidebar.
 
-    Built from the mode's own sections, so the four built-in workspaces open
-    looking exactly as they did — and are then editable like any other.
+    It used to be built from one mode's sections, so a workspace created "from
+    Prop Firm" opened with the Prop Firm rail and a workspace created from
+    Normal opened with a different one. There is one rail now and this returns
+    it — every workspace starts from the product's navigation and is then
+    edited, which is what somebody building a custom rail was always doing with
+    the extra step of picking a mode to start from.
+
+    The parameter is kept and still validated so a caller that names a mode is
+    refused when the mode does not exist, rather than silently getting a rail
+    for something else.
     """
     descriptor = MODES[WorkspaceMode(str(mode))]
     groups: list[SidebarGroup] = []

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { getJson } from '../api'
 import { Limitations, StatusPill, type Tone } from '../components/measures'
 import { PanelHead, Stat } from '../components/ui'
-import { STANCE_LABEL, type Stance } from '../modes'
+import { useAuthority } from '../authority'
 
 /* What an assistant may do here, drawn from the policy that enforces it.
  *
@@ -49,6 +49,7 @@ export function ActionsView() {
         '/modes/permissions',
       ),
   })
+  const authority = useAuthority()
   const [filter, setFilter] = useState('')
 
   const rows = permissions.data?.actions ?? []
@@ -78,13 +79,9 @@ export function ActionsView() {
         <Stat label="Needs you" value={counts.require_approval ?? 0} tone="warn" />
         <Stat label="Denied" value={counts.deny ?? 0} tone="bad" />
         <Stat
-          label="Stance"
-          value={
-            permissions.data?.stance
-              ? STANCE_LABEL[permissions.data.stance as Stance]
-              : 'not applicable'
-          }
-          note={permissions.data?.mode}
+          label="Authority"
+          value={authority.data?.profile.label ?? '—'}
+          note={authority.data?.profile.summary}
         />
       </section>
 

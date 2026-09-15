@@ -1,0 +1,369 @@
+/* The Horizon shell: the rail, the tab bar, Chat, and the permissions screen.
+ *
+ * What is *not* here is as deliberate as what is. There is no gradient, no
+ * glassmorphism, no card wrapping a single number, and no border around
+ * anything that a line of whitespace already separates. The screens under this
+ * file are dense on purpose — a quantitative workstation that hides its numbers
+ * to look calm has made itself harder to use — and the density is managed with
+ * alignment, weight and space rather than with another outlined rectangle.
+ *
+ * The rail went from twenty-one rows drawn from whichever mode was open to nine
+ * drawn from one manifest, so a row can afford to be legible instead of tiny.
+ */
+
+/* ── the shell grid ──────────────────────────────────────────────────────── */
+/* Three rows where there were three, but the third is the content rather than
+ * a status bar. The footer carried the latest event and a count of recent ones
+ * on every screen in the product, which is a permanent strip of information
+ * nobody was looking for; the events are in Diagnostics, where somebody goes to
+ * look for them, and the inbox still says when work finishes.
+ *
+ * The tab row is `auto`, so a destination without tabs collapses it to nothing
+ * rather than leaving a gap. */
+.app-shell { grid-template-rows: var(--topbar-h) auto minmax(0, 1fr); }
+.app-shell .workstation-main { grid-row: 3; }
+
+/* ── the shell grid ──────────────────────────────────────────────────────── */
+/* Three rows where there were three, but the third is the content rather than
+ * a status bar. The footer carried the latest event and a count of recent ones
+ * on every screen in the product: a permanent strip of information nobody was
+ * looking for. The events are in Diagnostics, where somebody goes to look for
+ * them, and the inbox still says when work finishes.
+ *
+ * The tab row is `auto`, so a destination without tabs collapses it to nothing
+ * rather than leaving a gap. */
+.app-shell { grid-template-rows: var(--topbar-h) auto minmax(0, 1fr); }
+.app-shell .workstation-main { grid-row: 3; }
+
+/* ── destination tabs ────────────────────────────────────────────────────── */
+/* Where the other twelve rail rows went. A tab is a view inside a destination,
+ * so it reads as a filter on one subject rather than as a separate place. */
+.destination-tabs {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  gap: var(--sp-3);
+  align-items: stretch;
+  padding: 0 var(--sp-5);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.destination-tabs::-webkit-scrollbar { display: none; }
+.destination-tabs a {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--sp-3) var(--sp-1);
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.destination-tabs a:hover { color: var(--fg-1); }
+.destination-tabs a[aria-current='page'] {
+  color: var(--fg-1);
+  border-bottom-color: var(--fg-1);
+  font-weight: 560;
+}
+/* Machinery, reachable and visibly secondary. Not hidden: a diagnostics tab
+ * nobody can find is a diagnostics tab nobody uses when it matters. */
+.destination-tabs a[data-advanced] { color: var(--fg-3); }
+.destination-tabs a[data-advanced]:hover,
+.destination-tabs a[data-advanced][aria-current='page'] { color: var(--fg-1); }
+
+/* ── the header, with two facts instead of eleven ─────────────────────────── */
+.context-facts { display: flex; gap: var(--sp-4); align-items: center; }
+.context-facts .is-paper {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--fg-2);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.02em;
+}
+.context-facts .is-paper svg { width: 12px; height: 12px; }
+.context-facts .is-bad { color: var(--fail); font-size: var(--fs-micro); }
+.context-facts .is-warn { color: var(--warn); font-size: var(--fs-micro); }
+
+/* Approvals: absent until there is a queue, unmissable when there is. */
+.context-approvals {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+.context-approvals svg { width: 13px; height: 13px; }
+
+/* ── Chat ─────────────────────────────────────────────────────────────────── */
+.chat-view {
+  display: grid;
+  grid-template-columns: minmax(180px, 250px) minmax(0, 1fr);
+  gap: var(--sp-6);
+  height: 100%;
+  min-height: 0;
+}
+.chat-view .chat-history[data-open='false'] { display: none; }
+
+.chat-main {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  /* The transcript is a column of prose, not a full-width table. Beyond about
+   * 78 characters a line costs the reader the start of the next one. */
+  --chat-measure: 74ch;
+}
+
+.chat-thread {
+  overflow-y: auto;
+  min-height: 0;
+  padding: var(--sp-5) 0 var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+}
+
+/* No card, no bubble, no avatar. A message is a paragraph with a label. */
+.chat-msg {
+  max-width: var(--chat-measure);
+  width: 100%;
+  margin: 0 auto;
+}
+.chat-msg header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+.chat-who { font-size: var(--fs-micro); font-weight: 600; color: var(--fg-2); }
+.chat-msg.user .chat-text {
+  margin: 0;
+  padding-left: var(--sp-4);
+  border-left: 2px solid var(--line-strong);
+  color: var(--fg-1);
+  white-space: pre-wrap;
+}
+.chat-msg.is-pending { opacity: 0.72; }
+.chat-model { font-size: var(--fs-micro); color: var(--fg-3); }
+.chat-working { color: var(--fg-2); font-size: var(--fs-sm); margin: 0; }
+
+.chat-empty {
+  max-width: var(--chat-measure);
+  margin: auto;
+  padding: var(--sp-6) 0;
+}
+.chat-empty h2 { font-size: var(--fs-xl); margin: 0 0 var(--sp-3); }
+.chat-empty p { color: var(--fg-2); margin: 0 0 var(--sp-5); }
+.chat-suggest { display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start; }
+.chat-suggest button {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-1);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.chat-suggest button:hover { border-color: var(--line-strong); background: var(--bg-2); }
+
+/* What the assistant did: one line, opened only when something was refused. */
+.chat-activity { margin-top: var(--sp-3); font-size: var(--fs-micro); }
+.chat-activity summary { color: var(--fg-3); cursor: pointer; }
+.chat-activity summary[data-notable] { color: var(--warn); }
+.chat-activity ul { list-style: none; margin: var(--sp-2) 0 0; padding: 0; }
+.chat-activity li { display: flex; gap: var(--sp-2); align-items: baseline; padding: 2px 0; }
+.chat-activity .ca-reason { flex-basis: 100%; margin: 0; color: var(--fg-2); }
+
+.chat-stopped, .chat-failed {
+  max-width: var(--chat-measure);
+  width: 100%;
+  margin: 0 auto;
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
+.chat-failed { color: var(--fail); display: flex; gap: var(--sp-3); align-items: center; }
+
+/* The composer: sticky, quiet, and the only thing on screen that is a control. */
+.chat-composer {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg-1);
+  padding: var(--sp-4) 0 var(--sp-5);
+  border-top: 1px solid var(--line);
+}
+.chat-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  max-width: var(--chat-measure);
+  margin: 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  padding: var(--sp-2);
+  background: var(--bg-2);
+}
+.chat-composer-row:focus-within { border-color: var(--fg-3); }
+.chat-composer textarea {
+  flex: 1;
+  resize: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg-1);
+  font: inherit;
+  padding: var(--sp-2);
+  max-height: 40vh;
+  field-sizing: content;
+}
+.chat-composer textarea:focus { outline: none; }
+.chat-attach, .chat-send {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  background: transparent;
+  color: var(--fg-2);
+}
+.chat-send { background: var(--fg-1); color: var(--bg-1); }
+.chat-send:disabled { opacity: 0.35; cursor: default; }
+.chat-send.is-stop { background: transparent; color: var(--fg-1); border: 1px solid var(--line-strong); }
+.chat-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  max-width: var(--chat-measure);
+  margin: 0 auto var(--sp-3);
+}
+.chat-attach-menu {
+  max-width: var(--chat-measure);
+  margin: var(--sp-3) auto 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: var(--sp-4);
+  background: var(--bg-2);
+}
+.chat-attach-menu h3 { font-size: var(--fs-micro); color: var(--fg-3); margin: 0 0 var(--sp-2); }
+.chat-attach-menu ul { list-style: none; margin: 0; padding: 0; max-height: 30vh; overflow-y: auto; }
+.chat-attach-menu li button {
+  border: 0; background: transparent; color: var(--fg-1);
+  font-size: var(--fs-sm); padding: 2px 0; cursor: pointer; text-align: left;
+}
+
+/* ── Markdown, in the transcript ──────────────────────────────────────────── */
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 var(--sp-3); }
+.md h3, .md h4, .md h5 { margin: var(--sp-5) 0 var(--sp-2); line-height: 1.3; }
+.md h3 { font-size: var(--fs-base); }
+.md h4, .md h5 { font-size: var(--fs-sm); color: var(--fg-2); }
+.md ul, .md ol { margin: 0 0 var(--sp-3); padding-left: var(--sp-5); }
+.md li { margin: 2px 0; }
+.md blockquote {
+  margin: 0 0 var(--sp-3);
+  padding-left: var(--sp-4);
+  border-left: 2px solid var(--line);
+  color: var(--fg-2);
+}
+.md code { font-family: var(--font-mono); font-size: 0.92em; }
+.md-code { margin: 0 0 var(--sp-3); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.md-code figcaption {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-3); font-size: var(--fs-micro);
+}
+.md-code figcaption button {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  border: 0; background: transparent; color: var(--fg-2);
+  font-size: var(--fs-micro); cursor: pointer;
+}
+.md-code pre { margin: 0; padding: var(--sp-3); overflow-x: auto; }
+/* Tables scroll inside their own box so a wide one never scrolls the page. */
+.md-table-scroll { overflow-x: auto; margin: 0 0 var(--sp-3); }
+.md-table { border-collapse: collapse; width: 100%; font-size: var(--fs-sm); }
+.md-table th, .md-table td {
+  text-align: left; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line);
+}
+.md-table th { color: var(--fg-2); font-weight: 600; }
+
+/* ── permissions ──────────────────────────────────────────────────────────── */
+.authority-option {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.authority-option[data-active] { border-color: var(--fg-2); background: var(--bg-2); }
+.authority-option span { display: flex; flex-direction: column; gap: 2px; }
+.authority-option small { color: var(--fg-2); }
+ul.plain { list-style: none; margin: 0; padding: 0; }
+ul.plain li { padding: var(--sp-2) 0; border-bottom: 1px solid var(--line); color: var(--fg-2); }
+ul.plain li:last-child { border-bottom: 0; }
+
+/* ── diagnostics ──────────────────────────────────────────────────────────── */
+.subtabs { display: flex; gap: var(--sp-2); }
+.subtabs button {
+  border: 1px solid transparent; border-radius: var(--r-sm);
+  background: transparent; color: var(--fg-2);
+  padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); cursor: pointer;
+}
+.subtabs button[aria-selected='true'] { border-color: var(--line-strong); color: var(--fg-1); }
+
+@media (max-width: 1100px) {
+  .chat-view { grid-template-columns: minmax(0, 1fr); }
+  .chat-view .chat-history { display: none; }
+  .chat-attach-menu { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-thread { scroll-behavior: auto; }
+}
+
+/* The event ledger, where the footer drawer's contents went. */
+.event-stream { display: flex; flex-direction: column; }
+.event-stream article {
+  display: grid;
+  grid-template-columns: 64px 120px minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: baseline;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-sm);
+}
+.event-stream time { color: var(--fg-3); font-family: var(--font-mono); }
+.event-stream strong { color: var(--fg-2); font-weight: 560; }
+.event-stream code { color: var(--fg-3); font-size: var(--fs-micro); }
+.event-stream article[data-level='fail'] strong { color: var(--fail); }
+.event-stream article[data-level='warn'] strong { color: var(--warn); }
+@media (max-width: 900px) {
+  .event-stream article { grid-template-columns: 56px minmax(0, 1fr); }
+}
+
+/* ── model routing ────────────────────────────────────────────────────────── */
+/* One default and four overrides, with nineteen roles behind a disclosure. The
+ * matrix is not hidden — the engine runs all nineteen and a screen that removed
+ * them would be simplification that costs a capability — it is just no longer
+ * the first thing anybody sees. */
+.feature-routes { display: flex; flex-direction: column; gap: var(--sp-2); }
+.routing-advanced { border-top: 1px solid var(--line); padding-top: var(--sp-3); }
+.routing-advanced > summary {
+  cursor: pointer; color: var(--fg-2); font-size: var(--fs-sm); padding: var(--sp-1) 0;
+}
+.routing-advanced[open] > summary { margin-bottom: var(--sp-4); color: var(--fg-1); }
+.routing-advanced .panel-actions { margin: var(--sp-4) 0 var(--sp-2); }

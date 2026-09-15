@@ -18,20 +18,28 @@ import {
  * rather than like a route somebody forgot to list here.
  */
 const ICONS: Record<string, typeof Radar> = {
-  // shared
+  // the rail, as it is now: one icon per destination
+  home: Radar,
+  chat: MessageSquare,
+  research: BookOpen,
+  campaigns: Compass,
+  strategies: Layers3,
+  markets: CandlestickChart,
+  trading: PieChart,
+  propdesk: Gauge,
+  settings: Settings,
+  // the routes the mode manifests used to offer, kept because a saved
+  // workspace sidebar can still name any of them
   overview: Radar,
   workspace: LayoutGrid,
   charts: CandlestickChart,
   trades: Crosshair,
-  strategies: Layers3,
   runs: Archive,
   validation: TestTubes,
   evidence: FileCheck2,
   data: Database,
-  research: BookOpen,
   experiments: FlaskConical,
   performance: LineChart,
-  settings: Settings,
   positions: Wallet,
   book: ClipboardList,
   // prop firm
@@ -48,7 +56,6 @@ const ICONS: Record<string, typeof Radar> = {
   actions: SlidersHorizontal,
   activity: Activity,
   missions: PlaySquare,
-  campaigns: Compass,
   research_control: Radar,
   pipeline: Workflow,
   // hedge fund

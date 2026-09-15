@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from forge.modes.models import MODES, Stance, WorkspaceMode, parse_stance
+from forge.product.authority import AuthorityError, AuthorityProfile
 
 #: Bumped when the stored shape changes in a way a reader must know about.
 SCHEMA_VERSION = 1
@@ -193,6 +194,55 @@ class ModeStore:
             stance=self.stance_for(mode),
             workspace_id=self.workspace_for(mode),
         )
+
+    # ── authority ────────────────────────────────────────────────────────────
+    def authority(self) -> AuthorityProfile:
+        """What an assistant may do on the operator's behalf, right now.
+
+        Read in three steps, and the order is the migration. An explicit
+        setting wins. Failing that, whatever mode the operator last left open
+        decides, through `AuthorityProfile.from_mode` — so somebody who left
+        AlgoForge in AI mode on the autonomous stance comes back to the
+        authority they opted into rather than to a default. Failing both, the
+        default, which is the pair `Actions.context()` already answered "no
+        mode entered" with.
+
+        Nothing is written here. A read that quietly persisted its own answer
+        would turn "no explicit setting yet" into "explicitly set to whatever
+        the last mode was", and the difference matters the first time somebody
+        asks why the assistant may start campaigns.
+        """
+        stored = self._state("authority")
+        if stored is not None:
+            work, _, execution = stored.partition("/")
+            try:
+                return AuthorityProfile(
+                    unattended_work=work == "on",
+                    unattended_execution=execution == "on",
+                )
+            except AuthorityError:
+                # A row written by a build with a shape this one does not
+                # recognise. Fall through to the mode rather than raising: an
+                # unreadable authority row must never read as the permissive
+                # one, and the mode below is a real, recorded fact.
+                pass
+        return AuthorityProfile.from_mode(self.active_mode(), self._active_stance())
+
+    def set_authority(self, profile: AuthorityProfile) -> AuthorityProfile:
+        with closing(self._connect()) as db, db:
+            db.execute(
+                "INSERT INTO mode_state VALUES ('authority', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (
+                    f"{'on' if profile.unattended_work else 'off'}/"
+                    f"{'on' if profile.unattended_execution else 'off'}",
+                ),
+            )
+        return profile
+
+    def _active_stance(self) -> Stance | None:
+        mode = self.active_mode()
+        return None if mode is None else self.stance_for(mode)
 
     def _state(self, key: str) -> str | None:
         with closing(self._connect()) as db, db:

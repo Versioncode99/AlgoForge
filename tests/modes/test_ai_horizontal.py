@@ -19,6 +19,7 @@ from forge.modes.permissions import (
     Ruling,
     evaluate,
 )
+from forge.product.navigation import DESTINATIONS, resolve
 
 
 def sections(mode_payload: dict[str, object]) -> list[dict[str, object]]:
@@ -28,11 +29,23 @@ def sections(mode_payload: dict[str, object]) -> list[dict[str, object]]:
 # ── the capability is horizontal ──────────────────────────────────────────────
 
 
-def test_every_mode_can_reach_the_assistant() -> None:
-    """A conversation is not something one environment has and the others do not."""
+def test_the_conversation_is_a_destination_rather_than_an_environment() -> None:
+    """A conversation is not something one environment has and the others do not.
+
+    The document argued the capability already was horizontal while the rail
+    said otherwise: "AI Workspace" was the first row of one mode's navigation
+    and absent from the other two, so the product's own front door contradicted
+    it. There is one navigation now and Chat is a row in it, reachable without
+    declaring anything first.
+    """
     for payload in catalogue():
         routes = {str(section.get("route")) for section in sections(payload)}
-        assert "assistant" in routes, f"{payload.get('key')} cannot reach the assistant"
+        assert "chat" in routes, f"{payload.get('mode')} cannot reach the conversation"
+    assert resolve("assistant").route == "chat", "the old AI Workspace link lost its home"
+    chat = next(d for d in DESTINATIONS if d.route == "chat")
+    assert "ai" not in chat.label.lower() and "mode" not in chat.label.lower(), (
+        f"the conversation is labelled '{chat.label}', which names the machinery"
+    )
 
 
 def test_every_mode_can_place_an_agent_panel() -> None:

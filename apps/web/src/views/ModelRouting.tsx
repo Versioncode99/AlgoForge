@@ -57,17 +57,22 @@ export type RoutingSummaryRow = {
 type Patch = (body: Record<string, unknown>) => void
 
 function ModelSelect({
-  label, value, options, onChange, allowNone,
+  label, value, options, onChange, allowNone, noneLabel,
 }: {
   label: string
   value: string
   options: ModelInfo[]
   onChange: (value: string) => void
   allowNone?: boolean
+  /** What "no value" means here. "— none —" is wrong for a field that falls
+   *  through to something: a role left blank follows its feature, and a feature
+   *  left blank follows the default. Saying "none" would read as "nothing will
+   *  answer". */
+  noneLabel?: string
 }) {
   return (
     <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}>
-      {allowNone && <option value="">— none —</option>}
+      {allowNone && <option value="">{noneLabel ?? '— none —'}</option>}
       {options.map((m) => (
         <option key={m.id} value={m.id}>
           {m.label}{m.status === 'needs_credit' ? ' · needs credit' : ''}
@@ -89,7 +94,7 @@ function RoleRow({
   advanced: boolean
 }) {
   const routing = settings.ai.model_routing.roles[role.key] ?? {
-    model: '', fallback: '', enabled: true,
+    model: '', recommended: '', fallback: '', enabled: true,
   }
   const send = (change: Record<string, unknown>) =>
     patch({ role_routing: { [role.key]: change } })
@@ -107,6 +112,11 @@ function RoleRow({
           value={routing.model}
           options={settings.models}
           allowNone
+          noneLabel={
+            routing.recommended
+              ? `— ${routing.recommended} (recommended) —`
+              : '— follow the feature —'
+          }
           onChange={(model) => send({ model })}
         />
       </td>
@@ -153,6 +163,7 @@ export function ModelRoutingPanel({
   const routing = settings.ai.model_routing
   const decisions = new Map(settings.routing_preview.map((d) => [d.role, d]))
   const modes: RoutingMode[] = settings.routing_modes
+  const features = settings.routing_features ?? []
   const substituted = settings.routing_preview.filter((d) => d.substituted)
   const unavailable = settings.routing_preview.filter((d) => !d.model)
   const roles = settings.routing_roles.filter(
@@ -162,105 +173,147 @@ export function ModelRoutingPanel({
   return (
     <div className="panel">
       <header>
-        <h2>Models · what answers, for which job</h2>
-        <div className="panel-actions">
-          <button
-            className={showResearch ? 'btn tiny primary' : 'btn tiny'}
-            onClick={() => setShowResearch((v) => !v)}
-          >
-            {showResearch ? 'Research agents shown' : 'Research agents hidden'}
-          </button>
-          <button
-            className={advanced ? 'btn tiny primary' : 'btn tiny'}
-            onClick={() => setAdvanced((v) => !v)}
-          >
-            {advanced ? 'Fewer columns' : 'Fallback and enable'}
-          </button>
-        </div>
+        <h2>Models</h2>
       </header>
-      <div className="panel-body">
-        <div className="stack">
-          <label className="budget-row">
-            <span>
-              Routing mode
-              <small>
-                {modes.find((m) => m.key === routing.mode)?.detail ??
-                  'How a choice is made when the assigned model is unavailable.'}
-              </small>
-            </span>
-            <select
-              aria-label="Routing mode"
-              value={routing.mode}
-              onChange={(e) => patch({ routing_mode: e.target.value })}
-            >
-              {modes.map((m) => (
-                <option key={m.key} value={m.key}>{m.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="budget-row">
-            <span>Default model<small>Used by any role that names none</small></span>
-            <ModelSelect
-              label="Default model"
-              value={routing.default_model}
-              options={settings.models}
-              allowNone
-              onChange={(v) => patch({ routing_default_model: v })}
-            />
-          </label>
-          <label className="budget-row">
-            <span>Global fallback<small>Used when an assignment cannot be served</small></span>
-            <ModelSelect
-              label="Global fallback model"
-              value={routing.fallback_model}
-              options={settings.models}
-              allowNone
-              onChange={(v) => patch({ routing_fallback_model: v })}
-            />
-          </label>
+      <div className="panel-body stack">
+        <p className="muted">
+          One model answers everything unless you say otherwise. The four settings below
+          are where it is worth saying otherwise: research is rare and hard, tagging is
+          constant and easy, and code is neither.
+        </p>
+
+        <label className="budget-row">
+          <span>
+            Default model
+            <small>Answers every job with no override of its own</small>
+          </span>
+          <ModelSelect
+            label="Default model"
+            value={routing.default_model}
+            options={settings.models}
+            allowNone
+            onChange={(v) => patch({ routing_default_model: v })}
+          />
+        </label>
+
+        {/* The four overrides. Each says which roles it covers, because
+          * "Research" alone is a label and "Research covers thirteen roles
+          * including falsification and validation" is a sentence somebody can
+          * act on. */}
+        <div className="feature-routes">
+          {features.map((feature) => (
+            <label key={feature.key} className="budget-row">
+              <span>
+                {feature.label}
+                <small>{feature.detail}</small>
+              </span>
+              <ModelSelect
+                label={`Model for ${feature.label}`}
+                value={routing.features?.[feature.key] ?? ''}
+                options={settings.models}
+                allowNone
+                noneLabel="— follow the default —"
+                onChange={(v) => patch({ feature_routing: { [feature.key]: v } })}
+              />
+            </label>
+          ))}
         </div>
 
         {substituted.length > 0 && (
           <p className="warning">
-            <b>{substituted.length} role(s) are not using the model they are assigned.</b>{' '}
-            {substituted[0].reason} Switch routing to <b>Manual</b> to have these calls
-            refuse rather than substitute.
+            <b>{substituted.length} job(s) are not using the model they are set to.</b>{' '}
+            {substituted[0].reason} Switch routing to <b>Manual</b> below to have these
+            calls refuse rather than substitute.
           </p>
         )}
         {unavailable.length > 0 && (
           <p className="warning bad">
-            {unavailable.length} role(s) have no model available and will not run.
+            {unavailable.length} job(s) have no model available and will not run.
           </p>
         )}
 
-        <table className="tbl role-table">
-          <thead>
-            <tr>
-              <th>Role</th>
-              <th>Assigned</th>
-              {advanced && <th>Fallback</th>}
-              {advanced && <th>Enabled</th>}
-              <th>Would answer</th>
-            </tr>
-          </thead>
-          <tbody>
-            {roles.map((role) => (
-              <RoleRow
-                key={role.key}
-                role={role}
-                settings={settings}
-                decision={decisions.get(role.key)}
-                patch={patch}
-                advanced={advanced}
+        {/* Everything below here is for somebody who wants to argue with the
+          * mapping. It is a disclosure rather than a second screen: the roles
+          * are real, the engine runs all nineteen of them, and hiding them
+          * entirely would be the "simplification" that removes a capability. */}
+        <details className="routing-advanced">
+          <summary>Per-role routing, fallbacks and mode</summary>
+
+          <div className="stack">
+            <label className="budget-row">
+              <span>
+                Routing mode
+                <small>
+                  {modes.find((m) => m.key === routing.mode)?.detail ??
+                    'How a choice is made when the set model is unavailable.'}
+                </small>
+              </span>
+              <select
+                aria-label="Routing mode"
+                value={routing.mode}
+                onChange={(e) => patch({ routing_mode: e.target.value })}
+              >
+                {modes.map((m) => (
+                  <option key={m.key} value={m.key}>{m.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="budget-row">
+              <span>Global fallback<small>Used when a set model cannot be served</small></span>
+              <ModelSelect
+                label="Global fallback model"
+                value={routing.fallback_model}
+                options={settings.models}
+                allowNone
+                onChange={(v) => patch({ routing_fallback_model: v })}
               />
-            ))}
-          </tbody>
-        </table>
-        <p className="warning">
-          Routing exists because the jobs differ in cost profile: hypothesis work is rare
-          and hard, tagging is constant and easy. The research agents are the ones a
-          campaign spends — they run on their own, many times an hour.
-        </p>
+            </label>
+          </div>
+
+          <div className="panel-actions">
+            <button
+              className={showResearch ? 'btn tiny primary' : 'btn tiny'}
+              onClick={() => setShowResearch((v) => !v)}
+            >
+              {showResearch ? 'Research agents shown' : 'Research agents hidden'}
+            </button>
+            <button
+              className={advanced ? 'btn tiny primary' : 'btn tiny'}
+              onClick={() => setAdvanced((v) => !v)}
+            >
+              {advanced ? 'Fewer columns' : 'Fallback and enable'}
+            </button>
+          </div>
+
+          <table className="tbl role-table">
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Assigned</th>
+                {advanced && <th>Fallback</th>}
+                {advanced && <th>Enabled</th>}
+                <th>Would answer</th>
+              </tr>
+            </thead>
+            <tbody>
+              {roles.map((role) => (
+                <RoleRow
+                  key={role.key}
+                  role={role}
+                  settings={settings}
+                  decision={decisions.get(role.key)}
+                  patch={patch}
+                  advanced={advanced}
+                />
+              ))}
+            </tbody>
+          </table>
+          <p className="warning">
+            A role left unassigned follows its feature above, then the default. The
+            column on the right is what would actually answer under the current settings,
+            including a substitution you would otherwise never see.
+          </p>
+        </details>
       </div>
     </div>
   )

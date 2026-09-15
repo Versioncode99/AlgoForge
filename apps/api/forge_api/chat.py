@@ -48,7 +48,7 @@ from forge.conversation import (
     ToolCall,
 )
 
-from forge_api.assistant import Assistant
+from forge_api.assistant import Assistant, Progress
 
 #: How the assistant's reported source becomes a turn's provenance.
 #:
@@ -95,6 +95,13 @@ _ARTIFACTS: dict[str, tuple[ArtifactKind, tuple[str, ...]]] = {
     "build_workspace": (ArtifactKind.WORKSPACE, ("name",)),
     "create_workspace": (ArtifactKind.WORKSPACE, ("name",)),
     "open_workspace": (ArtifactKind.WORKSPACE, ("workspace_id",)),
+    # Campaigns. A conversation that says "I opened a campaign for this" and
+    # gives no way to it has described work rather than delivered it.
+    "create_campaign": (ArtifactKind.CAMPAIGN, ("campaign_id", "name")),
+    "duplicate_campaign": (ArtifactKind.CAMPAIGN, ("campaign_id",)),
+    "describe_campaign": (ArtifactKind.CAMPAIGN, ("campaign_id",)),
+    "start_campaign": (ArtifactKind.CAMPAIGN, ("campaign_id",)),
+    "campaign_frontier": (ArtifactKind.CAMPAIGN, ("campaign_id",)),
 }
 
 #: How an artifact is titled. The action's own noun, and the subject it names --
@@ -112,6 +119,7 @@ _TITLES: dict[ArtifactKind, str] = {
     ArtifactKind.WORKSPACE: "Workspace",
     ArtifactKind.RESAMPLE: "Resampled distribution",
     ArtifactKind.PARAMETER_SURFACE: "Parameter surface",
+    ArtifactKind.CAMPAIGN: "Campaign",
 }
 
 
@@ -157,13 +165,26 @@ class ChatService:
 
     # ── the exchange ─────────────────────────────────────────────────────────
 
-    def send(self, conversation_id: str, message: str) -> dict[str, Any]:
+    def send(
+        self,
+        conversation_id: str,
+        message: str,
+        *,
+        on_event: Progress | None = None,
+    ) -> dict[str, Any]:
         """One question, answered and recorded.
 
         The user's turn is written *before* the assistant runs. If the model call
         fails, times out or the process dies mid-answer, what the operator asked
         is still in the thread — losing the question along with the answer is how
         a research transcript develops holes exactly where something went wrong.
+
+        `on_event` is how a run reports progress and how a stop reaches the tool
+        loop. It returns `False` once the operator has asked to stop, and the
+        assistant checks that between rounds — the only place it can, since a
+        provider call in flight cannot be withdrawn. Omitted, this is exactly the
+        blocking call it has always been, which is what the direct
+        `POST /messages` route still uses.
         """
         text = message.strip()
         if not text:
@@ -174,7 +195,7 @@ class ChatService:
 
         attached = self._subject(conversation_id)
         subject = {"attached": list(attached)} if attached else None
-        reply = self.assistant.ask(text, attached=subject)
+        reply = self.assistant.ask(text, attached=subject, on_event=on_event)
 
         calls = tuple(_tool_call(entry) for entry in reply.get("calls", []))
         answer = self.store.append(

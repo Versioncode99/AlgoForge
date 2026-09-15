@@ -22,19 +22,27 @@ local ledger, and it says which of those happened.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from forge.modes.permissions import Actor
 from forge.research.untrusted import fence
-from forge.strategy import TEMPLATES, StrategyLibrary
+from forge.strategy import (
+    SHIPPED_TEMPLATE_KEYS,
+    TEMPLATES,
+    StrategyLibrary,
+    known_templates,
+)
 
 from forge_api import jsonish
 from forge_api.actions import ActionError, Actions
 from forge_api.activity import ActivityLog, BacktestStore
-from forge_api.providers import model_for, resolve
+from forge_api.model_choice import choose
+from forge_api.providers import resolve
 from forge_api.settings_store import SettingsStore
 
 # How many actions one question may trigger. Enough to search, read the result
@@ -46,6 +54,19 @@ from forge_api.settings_store import SettingsStore
 # the result. Four meant a repair used the whole budget and the operator got
 # "reached the call limit" instead of a workspace.
 MAX_TOOL_CALLS = 6
+
+#: How a long-running answer says what it is doing, and hears that it should
+#: stop. Returns `False` once the operator has pressed stop.
+#:
+#: Deliberately not a queue, a callback registry or an event bus: it is one
+#: function, passed in by whoever is watching, and a caller that is not watching
+#: passes nothing and gets the blocking behaviour this module has always had.
+Progress = Callable[..., bool]
+
+
+def _silent(*_args: Any, **_kwargs: Any) -> bool:
+    """Nobody is watching. Report nothing, and never ask to stop."""
+    return True
 
 SYSTEM_PROMPT = """You are the console assistant inside AlgoForge, a local paper-only
 quantitative research application. You answer questions about THIS instance — the
@@ -93,13 +114,62 @@ class Assistant:
         # Injected after construction in the app factory: the action registry
         # needs the engine, which needs the assistant's log.
         self.actions = actions
+        #: The strategy context, and the library fingerprint it was built from.
+        #: See `_strategy_context`.
+        self._context_cache: tuple[tuple[int, int], dict[str, Any]] | None = None
 
     # ── local context ────────────────────────────────────────────────────────
-    def context(self) -> dict[str, Any]:
+    #: How many strategies the model is shown. The library can hold hundreds; a
+    #: prompt carrying all of them is tokens spent on rows the question is not
+    #: about, and `list_strategies` is a registered action the model can call
+    #: when it needs the rest.
+    CONTEXT_STRATEGIES = 60
+
+    def _library_fingerprint(self) -> tuple[int, int]:
+        """What would have to change for the strategy context to be stale.
+
+        The count of spec files and the newest modification time. Cheap —
+        `scandir` and a `stat` per entry, no file is opened and nothing is
+        parsed — and it changes on every write the library makes, which is the
+        only thing that can invalidate the rows below.
+        """
+        newest = 0
+        count = 0
+        try:
+            for entry in os.scandir(self.library.root):
+                if not entry.is_dir():
+                    continue
+                try:
+                    stamp = os.stat(Path(entry.path) / "spec.json").st_mtime_ns
+                except OSError:
+                    continue
+                count += 1
+                newest = max(newest, stamp)
+        except OSError:
+            return (0, 0)
+        return (count, newest)
+
+    def _strategy_context(self) -> dict[str, Any]:
+        """The strategy half of the context, rebuilt only when the library moves.
+
+        **This was the single most expensive thing a chat message did.**
+        `list_specs()` globs every `*/spec.json` and validates each one through
+        Pydantic, and it ran once per turn: on a library of four hundred
+        strategies that is four hundred file reads and four hundred model
+        validations before the question had been looked at. The rows it produces
+        change only when a strategy is written, so they are cached against a
+        fingerprint that costs a `stat` per directory.
+        """
+        fingerprint = self._library_fingerprint()
+        cached = self._context_cache
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
+
         specs = self.library.list_specs()
         rows = []
         for spec in specs:
-            # Projected scalars. Four hundred trade ledgers were read here to
+            # Projected scalars from the in-memory index. The full artifact is
+            # never read here; four hundred trade ledgers were once opened to
             # report three numbers per strategy.
             latest = self.store.latest_projection(spec.strategy_id)
             if latest and latest.get("calculation_version") != "contract-units-v2":
@@ -114,12 +184,32 @@ class Assistant:
                     "real_data": bool(latest and "REAL_DATA" in (latest.get("labels") or [])),
                 }
             )
-        return {
+        built = {
             "strategy_count": len(specs),
-            "backtest_count": self.store.count(),
             "families": sorted({s.family for s in specs}),
-            "templates_available": sorted(TEMPLATES),
-            "strategies": rows[:60],
+            "strategies": rows[: self.CONTEXT_STRATEGIES],
+            "strategies_shown": min(len(rows), self.CONTEXT_STRATEGIES),
+        }
+        self._context_cache = (fingerprint, built)
+        return built
+
+    def context(self) -> dict[str, Any]:
+        """What the model is told about this instance before it reads the question.
+
+        Two parts with very different costs. The strategy half is cached against
+        the library's fingerprint; the rest is a handful of counts and the last
+        few events, which are cheap and genuinely change between turns.
+        """
+        strategies = self._strategy_context()
+        # Shipped templates, and a count of what a campaign generated. The whole
+        # dictionary used to go in, which after a campaign is several hundred
+        # machine-generated names taking up prompt the question is not about.
+        generated = len(TEMPLATES) - len(SHIPPED_TEMPLATE_KEYS & set(TEMPLATES))
+        return {
+            **strategies,
+            "backtest_count": self.store.count(),
+            "templates_available": known_templates(),
+            "templates_generated": generated,
             "recent_activity": [e.model_dump() for e in self.log.recent(25)],
         }
 
@@ -222,17 +312,37 @@ class Assistant:
         )
 
     # ── the tool loop ────────────────────────────────────────────────────────
-    def ask(self, question: str, *, attached: dict[str, Any] | None = None) -> dict[str, Any]:
+    def ask(
+        self,
+        question: str,
+        *,
+        attached: dict[str, Any] | None = None,
+        on_event: Progress | None = None,
+    ) -> dict[str, Any]:
         """Answer one question, optionally about a named subject.
 
         `attached` is the conversation's own context -- the strategies, accounts
         and datasets somebody put in scope for this thread. It is passed to the
         model as *subject matter*, never as instruction: it names things to look
         at, and every fact about them still has to come back from an action.
+
+        `on_event` reports what is happening and carries the stop signal back:
+        it returns `False` once the operator has asked to stop, and the loop
+        below checks it before each round. Between rounds is the only honest
+        place to check -- a provider call already in flight cannot be withdrawn,
+        and a control that claimed otherwise would be lying about what it did.
         """
+        report = on_event or _silent
+        report("context", "Reading this instance…")
         ctx = self.context()
         current = self.settings.load()
-        model = current.ai.routing.get("chat", "")
+        # One resolver. This used to read `settings.ai.routing.get("chat")` --
+        # the flat copy of the routing table -- so the Chat feature override,
+        # the fallback chain and every reason string were invisible here. An
+        # operator could set the chat model in Settings and have the
+        # conversation answered by whatever the copy still said.
+        decision = choose(current, "chat")
+        model = decision.model
         offline = not current.ai.enabled or model in {"none", ""}
 
         selection = None
@@ -281,6 +391,13 @@ class Assistant:
             }
 
         assert selection is not None
+        report(
+            "model",
+            f"Asking {model}…",
+            model=model,
+            provider=selection.provider,
+            routing=decision.reason,
+        )
         tools = self.actions.schemas() if self.actions else []
         transcript: list[dict[str, Any]] = []
         calls: list[dict[str, Any]] = []
@@ -293,9 +410,27 @@ class Assistant:
             prompt_head["conversation_subject"] = attached
 
         try:
-            for _ in range(MAX_TOOL_CALLS + 1):
+            for round_number in range(MAX_TOOL_CALLS + 1):
+                if not report(
+                    "thinking",
+                    "Working…" if round_number == 0 else f"Continuing (step {round_number + 1})…",
+                    round=round_number,
+                ):
+                    return {
+                        "answer": (
+                            "Stopped. Nothing further was asked of the model; anything already "
+                            "done is in the activity below."
+                        ),
+                        "model": model,
+                        "source": "deterministic",
+                        "grounded": True,
+                        "calls": calls,
+                        "note": "stopped on request",
+                    }
                 response = selection.client.chat(
-                    model=model_for(selection.provider, model),
+                    # Already through `providers.model_for` in `choose`, which
+                    # recorded the substitution in the decision's reason.
+                    model=model,
                     system=SYSTEM_PROMPT,
                     prompt=json.dumps({**prompt_head, "action_results": transcript})[:80_000],
                 )

@@ -67,7 +67,7 @@ function open() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <CommandPalette open routes={[{ id: 'strategies', label: 'Strategies', group: 'Strategy', detail: 'd' }]} strategies={[]} onClose={onClose} onRoute={onRoute} />
+      <CommandPalette open routes={[{ id: 'strategies', label: 'Strategies', group: 'Strategy', detail: 'd' }]} onClose={onClose} onRoute={onRoute} />
     </QueryClientProvider>,
   )
 }

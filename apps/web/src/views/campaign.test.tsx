@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { ResearchCampaignView } from './ResearchCampaign'
 
@@ -26,6 +26,8 @@ const OVERVIEW = {
     dataset: 'nq_1m_16y',
     symbol: 'NQ',
     timeframe: '1m',
+    start_date: '2024-01-01',
+    end_date: '2026-01-01',
     status: 'running',
     web_research: false,
     allocation: {
@@ -100,6 +102,40 @@ const FRONTIER = [
   },
 ]
 
+/* What `campaign_scope` answers. The real shape, because the chooser reads
+ * every one of these and a fixture missing one would let a blank readout pass
+ * here and be blank in the product. */
+const SCOPE = {
+  dataset: 'nq_1m_16y',
+  available_start: '2009-11-05T00:00:00+00:00',
+  available_end: '2026-01-01T00:00:00+00:00',
+  available_years: 16.16,
+  selected: true,
+  selected_start: '2024-01-01T00:00:00+00:00',
+  selected_end: '2026-01-01T00:00:00+00:00',
+  selected_days: 731,
+  selected_years: 2,
+  approximate_bars: 720_000,
+  bars_per_year: 360_000,
+  warmup_bars: 200,
+  required_bars: 1_015,
+  sufficient: true,
+  clamped: false,
+  method: 'FIXED_DATE_RANGE',
+  fingerprint: 'a1b2c3d4e5f60718',
+  timezone: 'UTC. Every timestamp in the archive and in this window is UTC.',
+  warning: '',
+  note: 'Warm-up is loaded from before the window and purged out of the scored partitions, '
+    + 'so the evaluation range is the window itself.',
+}
+
+const DATASETS = [{
+  key: 'nq_1m_16y', label: 'NQ 1m, 16 years', symbol: 'NQ', interval: '1m',
+  provider: 'databento', authority: 'ARCHIVE', is_real: true, cost_note: 'local',
+  loaded: true, bar_count: 15_300_000, is_imported: true, available: true,
+  span_years: 16.16, bars_per_year: 360_000, ranges: [],
+}]
+
 let overview: unknown = OVERVIEW
 
 beforeEach(() => {
@@ -112,8 +148,9 @@ beforeEach(() => {
       : url.includes('/hypotheses') ? []
       : url.includes('/validation') ? { queue: [], pending: 3, outcomes: {} }
       : url.includes('/sources') ? { sources: [], queries: [] }
+      : url.includes('/campaigns/scope') ? SCOPE
       : url.endsWith('/campaigns') ? []
-      : url.endsWith('/datasets') ? []
+      : url.endsWith('/datasets') ? DATASETS
       : {}
     return new Response(JSON.stringify({ data, meta: {} }), {
       status: 200, headers: { 'Content-Type': 'application/json' },
@@ -202,4 +239,90 @@ test('with no campaign it explains what one is rather than showing an engine tog
   expect(await screen.findByText('No campaign is running')).toBeInTheDocument()
   expect(screen.getByText(/an objective with a budget/i)).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /new campaign/i })).toBeInTheDocument()
+})
+
+// ── the research window ──────────────────────────────────────────────────────
+//
+// `start_date` and `end_date` were on the model, stored, and returned by the
+// API. The form never sent them and the detail never showed them, so every
+// campaign silently ran on `tail(250_000)` — about nine months, always the most
+// recent nine months, whatever the hypothesis was about.
+
+test('the campaign states the window it researched, beside its objective', async () => {
+  draw()
+  const window = await screen.findByText(/research window/i)
+  expect(window.parentElement).toHaveTextContent('2024-01-01')
+  expect(window.parentElement).toHaveTextContent('2026-01-01')
+})
+
+test('a campaign with no window says so rather than implying one was chosen', async () => {
+  overview = {
+    ...OVERVIEW,
+    campaign: { ...(OVERVIEW as { campaign: Record<string, unknown> }).campaign, start_date: '', end_date: '' },
+  }
+  draw()
+  expect(await screen.findByText(/whatever the engine last loaded/i)).toBeInTheDocument()
+})
+
+test('creating a campaign offers every required preset and a custom range', async () => {
+  draw()
+  fireEvent.click(await screen.findByRole('button', { name: /new campaign/i }))
+  const group = await screen.findByRole('radiogroup', { name: /research window/i })
+  for (const label of [
+    '1 month', '3 months', '6 months', '1 year', '2 years', '3 years', '5 years',
+    '10 years', 'Full dataset', 'Custom range',
+  ]) {
+    expect(within(group).getByRole('radio', { name: label })).toBeInTheDocument()
+  }
+})
+
+test('the chooser states the window, the bars, the warm-up and the fingerprint', async () => {
+  draw()
+  fireEvent.click(await screen.findByRole('button', { name: /new campaign/i }))
+  await screen.findByRole('radiogroup', { name: /research window/i })
+  // Every figure comes from `campaign_scope`, which calls the same
+  // `Campaign.time_scope` the engine calls. A form doing its own arithmetic
+  // would be a second answer to "what will this run on".
+  const window = (await screen.findByText(/^Selected window$/)).parentElement as HTMLElement
+  expect(within(window).getByText(/2024-01-01 — 2026-01-01/)).toBeInTheDocument()
+  expect(screen.getByText('720,000')).toBeInTheDocument()
+  expect(screen.getByText(/purged out of the scored partitions/i)).toBeInTheDocument()
+  expect(screen.getByText('a1b2c3d4e5f60718')).toBeInTheDocument()
+  expect(screen.getByText(/UTC/)).toBeInTheDocument()
+})
+
+test('choosing a custom range reveals the two date fields', async () => {
+  draw()
+  fireEvent.click(await screen.findByRole('button', { name: /new campaign/i }))
+  const group = await screen.findByRole('radiogroup', { name: /research window/i })
+  fireEvent.click(within(group).getByRole('radio', { name: 'Custom range' }))
+  expect(await screen.findByLabelText(/^From$/)).toBeInTheDocument()
+  expect(screen.getByLabelText(/^To$/)).toBeInTheDocument()
+})
+
+test('a window too small to partition blocks creation rather than warning after the fact', async () => {
+  draw()
+  fireEvent.click(await screen.findByRole('button', { name: /new campaign/i }))
+  await screen.findByRole('radiogroup', { name: /research window/i })
+  await screen.findByText(/^Selected window$/)
+  expect(screen.getByRole('button', { name: /create campaign/i })).toBeEnabled()
+
+  cleanup()
+  const insufficient = { ...SCOPE, sufficient: false, warning: 'About 900 bars. … cannot be split …' }
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    const data = url.includes('/campaigns/scope') ? insufficient
+      : url.includes('/campaigns/active') ? overview
+      : url.endsWith('/datasets') ? DATASETS
+      : url.endsWith('/campaigns') ? []
+      : {}
+    return new Response(JSON.stringify({ data, meta: {} }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    })
+  }) as unknown as typeof fetch
+
+  draw()
+  fireEvent.click(await screen.findByRole('button', { name: /new campaign/i }))
+  expect(await screen.findByText(/cannot be split/i)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /create campaign/i })).toBeDisabled()
 })

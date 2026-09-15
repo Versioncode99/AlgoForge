@@ -249,6 +249,108 @@ ROLES: tuple[Role, ...] = (
     ),
 )
 
+@dataclass(frozen=True)
+class Feature:
+    """A part of the product a person would sensibly choose a model for.
+
+    Nineteen roles is the right granularity for the *engine* and the wrong one
+    for a settings screen. An operator does not think "the falsification agent
+    and the review agent should use a reasoning model"; they think "research
+    should use the good one and tagging should use the cheap one". So four
+    features sit over the roles, each naming the roles it covers, and the role
+    matrix stays — behind a disclosure — for somebody who does want to argue
+    with it.
+
+    Every role belongs to exactly one feature, and a test asserts it: a role in
+    no feature is a job the simple screen cannot reach, and a role in two is a
+    setting whose effect depends on iteration order.
+    """
+
+    key: str
+    label: str
+    detail: str
+    roles: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "detail": self.detail,
+            "roles": list(self.roles),
+        }
+
+
+#: The four overrides the settings screen offers, over the global default.
+FEATURES: tuple[Feature, ...] = (
+    Feature(
+        "chat",
+        "Chat",
+        "The conversation, and the actions it runs on your behalf",
+        ("chat", "orchestrator"),
+    ),
+    Feature(
+        "research",
+        "Research",
+        "Hypotheses, falsification, validation, literature and the review of all three",
+        (
+            "research",
+            "validation",
+            "hypothesis",
+            "post_mortem",
+            "risk",
+            "agent_discovery",
+            "agent_literature",
+            "agent_hypothesis",
+            "agent_falsification",
+            "agent_regime",
+            "agent_robustness",
+            "agent_validation",
+            "agent_reviewer",
+        ),
+    ),
+    Feature(
+        "strategy",
+        "Strategy generation",
+        "Writing the strategy, its features and its tests",
+        ("strategy_code", "agent_feature", "agent_specialist"),
+    ),
+    Feature(
+        "fast",
+        "Fast tasks",
+        "Tagging, summarising and triage — high volume, low stakes",
+        ("bulk",),
+    ),
+)
+
+FEATURE_KEYS: tuple[str, ...] = tuple(feature.key for feature in FEATURES)
+FEATURES_BY_KEY: dict[str, Feature] = {feature.key: feature for feature in FEATURES}
+
+#: Which feature owns each role. Built from `FEATURES` rather than written
+#: again, so the two cannot disagree.
+FEATURE_FOR_ROLE: dict[str, str] = {
+    role: feature.key for feature in FEATURES for role in feature.roles
+}
+
+#: The feature that must never quietly answer an evidence-critical question.
+#:
+#: `fast` covers the bulk role and nothing else, deliberately. A judge, a
+#: falsification or a validation review routed to the cheap model would produce
+#: evidence nobody chose the model for, and
+#: `test_the_fast_route_is_not_used_for_evidence_critical_judgement` asserts the
+#: separation rather than trusting the table above to stay right.
+EVIDENCE_CRITICAL_ROLES: frozenset[str] = frozenset(
+    {
+        "validation",
+        "hypothesis",
+        "post_mortem",
+        "risk",
+        "agent_falsification",
+        "agent_validation",
+        "agent_reviewer",
+    }
+)
+
+
 ROLE_KEYS: tuple[str, ...] = tuple(role.key for role in ROLES)
 ROLES_BY_KEY: dict[str, Role] = {role.key: role for role in ROLES}
 
@@ -296,6 +398,18 @@ class RoleRouting:
 
     model: str = ""
     fallback: str = ""
+    #: What AlgoForge ships for this role, measured rather than guessed — the
+    #: orchestrator gets a model that emits an object instead of narrating, the
+    #: strategy engineer gets a code-tuned one, the post-mortem gets a cheap one
+    #: because post-mortems are rare.
+    #:
+    #: Held apart from `model` because the two answer different questions. A
+    #: shipped recommendation sitting in `model` is indistinguishable from an
+    #: operator's assignment, and the difference decides whether a feature
+    #: override means anything: with the recommendations in `model`, every role
+    #: was "assigned" on a fresh install and setting Research to a frontier
+    #: model changed nothing at all.
+    recommended: str = ""
     enabled: bool = True
     #: Most tokens this role's answers may run to. Zero means "use the global
     #: ceiling", which is what every role says until one is configured.
@@ -319,10 +433,31 @@ class RoutingSettings:
     #: What `smart` may choose from. Empty means "every model the provider
     #: serves", which is the honest default for a single-provider install.
     allowed: list[str] = field(default_factory=list)
+    #: Feature key to model id. The simple screen writes this; the role matrix
+    #: writes `roles`. A role with its own assignment wins, because somebody who
+    #: opened the advanced panel and named a model meant that model.
+    features: dict[str, str] = field(default_factory=dict)
+    #: True once the deprecated flat `AISettings.routing` map has been folded in.
+    #:
+    #: The migration is one-way and must happen once. Re-applying it on every
+    #: load would keep the deprecated copy governing behaviour forever: the flat
+    #: map is derived from this table on the way out, so a value in it would be
+    #: read back as an assignment, and an assignment beats a feature override.
+    #: A stored file without this flag is one written before the consolidation,
+    #: and is the only case the merge runs for.
+    flat_migrated: bool = False
     roles: dict[str, RoleRouting] = field(default_factory=dict)
 
     def for_role(self, key: str) -> RoleRouting:
         return self.roles.get(key, RoleRouting())
+
+    def for_feature(self, key: str) -> str:
+        """The model a feature assigns, or empty."""
+        return str(self.features.get(key, ""))
+
+    def feature_of(self, role_key: str) -> str:
+        """Which feature owns a role, or empty for a role no feature covers."""
+        return FEATURE_FOR_ROLE.get(role_key, "")
 
 
 @dataclass(frozen=True)
@@ -454,19 +589,40 @@ def resolve(
         )
 
     # manual and hybrid both start from what the operator assigned.
+    #
+    # Two places can assign: the role matrix and the feature above it. The role
+    # wins, because somebody who opened the advanced panel and named a model for
+    # the falsification agent meant that agent. Failing that, the feature that
+    # owns the role answers — which is what makes "Research uses the good one"
+    # a setting rather than thirteen settings.
+    feature_key = settings.feature_of(role_key)
+    feature_model = settings.for_feature(feature_key) if feature_key else ""
+    feature_label = FEATURES_BY_KEY[feature_key].label if feature_key else ""
     if routing.model:
-        considered.append(routing.model)
-        if usable(routing.model):
+        assigned, assigned_source, assigned_why = routing.model, "assigned", (
+            f"{role.label} is assigned '{routing.model}' in settings."
+        )
+    elif feature_model:
+        assigned, assigned_source, assigned_why = feature_model, "feature", (
+            f"{feature_label} is set to '{feature_model}', and {role.label} is a "
+            f"{feature_label.lower()} job."
+        )
+    else:
+        assigned, assigned_source, assigned_why = "", "", ""
+
+    if assigned:
+        considered.append(assigned)
+        if usable(assigned):
             return Decision(
                 role=role_key,
                 provider=provider,
-                model=routing.model,
-                source="assigned",
-                reason=f"{role.label} is assigned '{routing.model}' in settings.",
+                model=assigned,
+                source=assigned_source,
+                reason=assigned_why,
             )
         why = (
             "was refused on the last call"
-            if routing.model in blocked
+            if assigned in blocked
             else f"is not served by the {provider} provider"
         )
         if mode == RoutingMode.MANUAL.value:
@@ -476,19 +632,25 @@ def resolve(
                 model="",
                 source="none",
                 reason=(
-                    f"{role.label} is assigned '{routing.model}', which {why}. Manual "
+                    f"{role.label} is assigned '{assigned}', which {why}. Manual "
                     "routing does not substitute, so this call did not run."
                 ),
                 considered=tuple(considered),
             )
-        substitute_reason = f"'{routing.model}' {why}"
+        substitute_reason = f"'{assigned}' {why}"
     else:
         substitute_reason = f"{role.label} names no model"
 
+    # Order is the whole design. An operator's explicit global default beats a
+    # shipped recommendation, and a shipped recommendation beats a generic
+    # fallback — so a fresh installation gets the measured per-role choice, and
+    # an operator who picks one model gets that model everywhere they have not
+    # said otherwise.
     for candidate, source, label in (
+        (settings.default_model, "default", "the default model"),
+        (routing.recommended, "recommended", f"the model AlgoForge ships for {role.label}"),
         (routing.fallback, "fallback", "the role's fallback"),
         (settings.fallback_model, "fallback", "the global fallback"),
-        (settings.default_model, "default", "the default model"),
     ):
         if not candidate:
             continue
@@ -500,7 +662,7 @@ def resolve(
                 model=candidate,
                 source=source,
                 reason=f"{substitute_reason}, so {label} '{candidate}' answered instead.",
-                substituted=bool(routing.model),
+                substituted=bool(assigned),
                 considered=tuple(considered),
             )
 
@@ -516,7 +678,7 @@ def resolve(
                 f"{_tier_of(chosen, catalogue) or 'first available'} model '{chosen}' "
                 "was chosen for this job."
             ),
-            substituted=bool(routing.model),
+            substituted=bool(assigned),
             considered=tuple(considered),
         )
     return Decision(
@@ -567,6 +729,7 @@ def normalise(raw: Any, *, known_models: Iterable[str]) -> RoutingSettings:
         role = ROLES_BY_KEY[key]
         roles[key] = RoleRouting(
             model=keep(entry.get("model")),
+            recommended=keep(entry.get("recommended")),
             fallback=keep(entry.get("fallback")),
             max_output_tokens=_positive(entry.get("max_output_tokens")),
             # A role the system cannot run without is always on, whatever a
@@ -578,11 +741,31 @@ def normalise(raw: Any, *, known_models: Iterable[str]) -> RoutingSettings:
     allowed = [str(item) for item in allowed if str(item) in catalogue] if isinstance(
         allowed, list
     ) else []
+
+    # The feature overrides, held to the same two checks a role assignment is:
+    # the model has to exist in the provider catalogue, and — where the operator
+    # has narrowed the allowed list — it has to be on it. A stored override that
+    # fails either reads as unset, which falls through to the default and is
+    # reported as such the first time the feature is used, rather than being
+    # honoured by a settings screen that would then be lying.
+    permitted = set(allowed)
+    stored_features = raw.get("features")
+    stored_features = stored_features if isinstance(stored_features, dict) else {}
+    features: dict[str, str] = {}
+    for key in FEATURE_KEYS:
+        model = keep(stored_features.get(key))
+        if model and permitted and model not in permitted:
+            model = ""
+        if model:
+            features[key] = model
+
     return RoutingSettings(
         mode=mode,
         default_model=keep(raw.get("default_model")),
         fallback_model=keep(raw.get("fallback_model")),
         allowed=allowed,
+        features=features,
+        flat_migrated=bool(raw.get("flat_migrated", False)),
         roles=roles,
     )
 
@@ -593,6 +776,8 @@ def to_dict(settings: RoutingSettings) -> dict[str, Any]:
         "default_model": settings.default_model,
         "fallback_model": settings.fallback_model,
         "allowed": list(settings.allowed),
+        "features": dict(settings.features),
+        "flat_migrated": settings.flat_migrated,
         "roles": {key: asdict(value) for key, value in settings.roles.items()},
     }
 
@@ -623,6 +808,16 @@ def role_rows() -> list[dict[str, Any]]:
         }
         for role in ROLES
     ]
+
+
+def feature_rows() -> list[dict[str, Any]]:
+    """The four overrides the settings screen offers, with the roles each covers.
+
+    The roles travel with the feature so the interface can say *what a setting
+    will change* — "Research covers thirteen roles including falsification and
+    validation" is a sentence somebody can act on; "Research" alone is a label.
+    """
+    return [feature.as_dict() for feature in FEATURES]
 
 
 def mode_rows() -> list[dict[str, str]]:

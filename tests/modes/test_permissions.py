@@ -221,6 +221,7 @@ HELD_WITHOUT_A_LIST: frozenset[str] = frozenset(
         "leave_mode",
         "record_prop_state",
         "select_prop_account",
+        "set_authority",
         "set_fund_config",
         "set_stance",
         "update_prop_rules",

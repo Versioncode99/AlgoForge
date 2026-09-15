@@ -125,6 +125,10 @@ class ArtifactKind(StrEnum):
     ANALYSIS = "analysis"
     WORKSPACE = "workspace"
     PORT = "port"
+    #: A research campaign. Added when Campaigns became a destination: an
+    #: assistant that opens a campaign and then cannot hand the operator a way
+    #: into it has done the work and kept it.
+    CAMPAIGN = "campaign"
 
 
 class AttachedContext(FrozenModel):
