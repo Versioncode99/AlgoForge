@@ -72,6 +72,41 @@ export type PlatformBinding = {
   evidence: string
 }
 
+/** One rule set on disk, with the claim about where its numbers came from. */
+export type RuleSet = {
+  schema_version: string
+  rule_id: string
+  display_name: string
+  origin: string
+  rules: Record<string, unknown>
+  rules_id: string
+  provenance: {
+    source_url: string
+    source_hash: string
+    verified: boolean
+    reviewed_by: string
+    effective_from: string | null
+    review_expires_at: string | null
+    status: 'UNVERIFIED' | 'VERIFIED' | 'EXPIRED'
+    effective: boolean
+  }
+  status: 'UNVERIFIED' | 'VERIFIED' | 'EXPIRED'
+  /** True for unverified *and* expired: both mean nobody can currently say
+   * these numbers match a contract. */
+  needs_review: boolean
+}
+
+export type RuleCatalogue = {
+  schema_version: string
+  rule_sets: RuleSet[]
+  /** Files that could not be read, each with the reason. Carried rather than
+   * dropped: a catalogue short by one has to say which one. */
+  rejected: { origin: string; reason: string }[]
+  counts: { loaded: number; rejected: number; needing_review: number }
+  warnings: string[]
+  directory: string
+}
+
 export type RequiredWork = {
   engineering: string[]
   external: string[]
@@ -537,6 +572,16 @@ export function useConnections() {
       getJson<{ connections: Connection[]; accounts: DeskAccountRow[] }>(
         '/propdesk/connections',
       ),
+  })
+}
+
+export function useRuleSets() {
+  return useQuery({
+    queryKey: key('rule-sets'),
+    // Not `staleTime: Infinity` like the provider catalogue: these are files an
+    // operator edits, and a corrected limit that does not appear until a
+    // restart is stale in the one direction that matters.
+    queryFn: () => getJson<RuleCatalogue>('/propdesk/rules'),
   })
 }
 

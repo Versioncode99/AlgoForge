@@ -49,6 +49,9 @@ from forge.explain import (
 from forge.prop.account import AccountAssessment, AccountRules, AccountState, Level
 from forge.prop.account import assess as assess_account
 from forge.prop.accounts import PropAccountStore
+from forge.prop.catalogue import RULES_DIRECTORY, RuleSet
+from forge.prop.catalogue import load_directory as load_rule_directory
+from forge.prop.catalogue import review_warnings as rule_review_warnings
 from forge.propdesk import (
     POLICY_QUESTIONS,
     SUGGESTED_SOURCES,
@@ -322,6 +325,9 @@ class PropDeskService:
         evidence_for: Callable[[str], dict[str, Any]] | None = None,
         realised_pnl_for: Callable[[str], tuple[float, ...]] | None = None,
         catalogue: InstrumentCatalogue | None = None,
+        #: Where the rule files live. Injected so a test can point at its own
+        #: directory, and so an operator can keep theirs outside the repository.
+        rules_directory: Path | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.store = store
@@ -331,6 +337,7 @@ class PropDeskService:
         self.evidence_for = evidence_for
         self.realised_pnl_for = realised_pnl_for
         self.catalogue = catalogue or default_catalogue()
+        self.rules_directory = rules_directory or RULES_DIRECTORY
         self._now = now
 
         self.fabric = ExecutionFabric(now=now)
@@ -588,6 +595,61 @@ class PropDeskService:
         updated = account.model_copy(update={"prop_account_id": prop_account_id})
         self.store.save_account(updated)
         return {"account": updated.as_dict()}
+
+    # ── rule sets ────────────────────────────────────────────────────────────
+    def rule_catalogue(self) -> dict[str, Any]:
+        """Every rule file on disk, with its provenance and review state.
+
+        Read on each call rather than cached. The files are small, an operator
+        who has just corrected one expects the correction to be there, and a
+        cache keyed on nothing would serve the old numbers until a restart —
+        which for a *limit* is the wrong direction to be stale in.
+        """
+        catalogue = load_rule_directory(self.rules_directory)
+        today = self._now().date()
+        payload = catalogue.as_dict(today)
+        payload["warnings"] = list(rule_review_warnings(catalogue.rule_sets, today))
+        payload["directory"] = str(self.rules_directory)
+        return payload
+
+    def _rule_set(self, rule_id: str) -> RuleSet:
+        catalogue = load_rule_directory(self.rules_directory)
+        found = catalogue.get(rule_id)
+        if found is None:
+            known = ", ".join(row.rule_id for row in catalogue.rule_sets) or "none"
+            refused = ""
+            for row in catalogue.rejected:
+                refused = f" {row.origin} failed to load: {row.reason}"
+                break
+            raise PropDeskError(
+                f"No rule set '{rule_id}' in {self.rules_directory}. Loaded: {known}.{refused}"
+            )
+        return found
+
+    def create_prop_account_from_rules(self, rule_id: str) -> dict[str, Any]:
+        """Open a prop account against a rule set read from disk.
+
+        The account records which file it came from and whether that file was
+        reviewed. Both travel with the account rather than being looked up
+        later: a rule set can be edited after an account is opened, and an
+        account that silently followed the edit would change the contract it is
+        held to without anybody deciding that.
+        """
+        rule_set = self._rule_set(rule_id)
+        account = self.prop_accounts.create(rule_set.rules)
+        today = self._now().date()
+        return {
+            "prop_account": account.as_dict(),
+            "rule_set": rule_set.as_dict(today),
+            # Surfaced at the moment of opening, not buried in a panel. This is
+            # when an operator is deciding what to trust.
+            "needs_review": rule_set.needs_review(today),
+            "warning": (
+                rule_review_warnings([rule_set], today)[0]
+                if rule_set.needs_review(today)
+                else ""
+            ),
+        }
 
     # ── copy groups ──────────────────────────────────────────────────────────
     def groups(self) -> dict[str, Any]:
@@ -1667,6 +1729,15 @@ def build_propdesk_router(service: PropDeskService) -> APIRouter:
         return guard(
             lambda: service.link_prop_account(account_uid, body.get("prop_account_id"))
         )
+
+    @router.get("/rules", response_model=ApiEnvelope[dict[str, Any]])
+    def rule_catalogue() -> ApiEnvelope[dict[str, Any]]:
+        """The rule files on disk, what they say, and which need review."""
+        return ApiEnvelope(data=service.rule_catalogue())
+
+    @router.post("/rules/{rule_id}/accounts", response_model=ApiEnvelope[dict[str, Any]])
+    def open_prop_account(rule_id: str) -> ApiEnvelope[dict[str, Any]]:
+        return guard(lambda: service.create_prop_account_from_rules(rule_id))
 
     @router.get("/groups", response_model=ApiEnvelope[dict[str, Any]])
     def groups() -> ApiEnvelope[dict[str, Any]]:

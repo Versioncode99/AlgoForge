@@ -45,6 +45,10 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
         "list_instruments",
         "list_modes",
         "list_prop_accounts",
+        # Reads the rule files and nothing else. Opening an account against one
+        # is deliberately not an action at all, so it cannot appear here — see
+        # `tests/api/test_prop_rules_api.py`.
+        "list_rule_sets",
         "list_sidebar_destinations",
         "list_strategies",
         "list_templates",

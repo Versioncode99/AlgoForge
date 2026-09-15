@@ -31,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
@@ -68,6 +69,9 @@ from forge.product.navigation import catalogue as navigation_catalogue
 from forge.product.navigation import resolve as resolve_route
 from forge.prop.account import AccountRules, AccountState, ClosedTrade, state_from_trades
 from forge.prop.account import assess as prop_assess
+from forge.prop.catalogue import RULES_DIRECTORY
+from forge.prop.catalogue import load_directory as load_rule_directory
+from forge.prop.catalogue import review_warnings as rule_review_warnings
 from forge.propdesk.instruments import MappingError, default_catalogue
 from forge.propdesk.news import CalendarRegistry
 from forge.research import chronological_split
@@ -265,6 +269,9 @@ class Actions:
         approvals: ApprovalQueue | None = None,
         audit: AuditLog | None = None,
         prop_accounts: Any = None,
+        #: Where the rule files live. Injected so a test, or an operator who
+        #: keeps theirs outside the repository, can point it elsewhere.
+        rules_directory: Path | None = None,
         fund: Any = None,
         prop_desk: Any = None,
     ) -> None:
@@ -295,6 +302,7 @@ class Actions:
         self.approvals = approvals
         self.audit = audit
         self.prop_accounts = prop_accounts
+        self.rules_directory = rules_directory or RULES_DIRECTORY
         self.fund = fund
         # The Prop Desk service. Optional so a bare registry can be built in a
         # test; the actions that need it refuse by name rather than raising an
@@ -3486,6 +3494,14 @@ class Actions:
             self.list_prop_accounts,
         )
         self._add(
+            "list_rule_sets",
+            "Rule sets readable from the rules directory: what each one says, where it "
+            "came from, and whether anybody has checked it against a contract. Read "
+            "only — opening an account against one is a separate, mutating verb.",
+            {},
+            self.list_rule_sets,
+        )
+        self._add(
             "prop_account_status",
             "Where the selected account stands against its own rules right now: every "
             "rule, its buffer, and whether trading is permitted.",
@@ -3566,6 +3582,24 @@ class Actions:
             "accounts": [account.as_dict() for account in store.all_accounts()],
             "selected": store.selected_id(),
         }
+
+    def list_rule_sets(self) -> dict[str, Any]:
+        """The rule files, with their review state.
+
+        Deliberately not paired with a `create_prop_account_from_rules` action.
+        Opening an account fixes the contract a desk holds it to, and an
+        assistant that could do it from an unreviewed file would be choosing
+        which numbers the drawdown panel is measured against. The HTTP route
+        exists for the interface; a person presses it.
+        """
+        catalogue = load_rule_directory(self.rules_directory)
+        # `None` means "as of today", which is what the caller wants and saves
+        # this layer from holding a second clock that could disagree with the
+        # desk's.
+        payload = catalogue.as_dict(None)
+        payload["warnings"] = list(rule_review_warnings(catalogue.rule_sets, None))
+        payload["directory"] = str(self.rules_directory)
+        return payload
 
     def _account(self, account_id: Any) -> Any:
         store = self._require_accounts()
