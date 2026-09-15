@@ -39,7 +39,9 @@ from forge_api import jsonish
 from forge_api.actions import ActionError, Actions
 from forge_api.activity import ActivityLog
 from forge_api.jobs import REGISTRY, JobHandle
-from forge_api.providers import client_for, credential_for, model_for
+from forge_api.model_choice import choose
+from forge_api.model_choice import reachable as model_reachable
+from forge_api.providers import client_for, model_for
 from forge_api.settings_store import SettingsStore
 
 PLACEHOLDER = re.compile(r"\{\{\s*step(\d+)\.([A-Za-z0-9_.]+)\s*\}\}")
@@ -224,17 +226,21 @@ class Orchestrator:
         """Ask the routed model for a plan; fall back to the deterministic playbook."""
         templates = sorted(TEMPLATES)
         current = self.settings.load()
-        model = current.ai.routing.get("orchestrator", "")
-        reachable = (
-            current.ai.enabled
-            and model not in {"", "none"}
-            and credential_for(current.ai.provider).present
-        )
-        if not reachable:
+        # One resolver. This read `settings.ai.routing.get("orchestrator")` --
+        # the flat copy -- so the Chat feature override, the fallback chain and
+        # the reason string never reached the planner. Now the decision comes
+        # back with its own sentence, and that sentence is what the plan reports
+        # when a substitution happened.
+        decision = choose(current, "orchestrator")
+        model = decision.model
+        if not (model_reachable(current) and model not in {"", "none"}):
             plan = _offline_plan(objective, templates)
             plan["model"] = None
             plan["reason"] = (
                 "AI is off, unrouted, or has no credential, so the deterministic "
+                f"playbook planned this mission. Routing said: {decision.reason}"
+                if decision.reason
+                else "AI is off, unrouted, or has no credential, so the deterministic "
                 "playbook planned this mission."
             )
             return plan

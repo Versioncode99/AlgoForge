@@ -184,15 +184,20 @@ function SidebarGroup({
       </h2>
 
       {shown.map((item) => {
-        const Icon = sectionIcon(item.route)
+        // A stored route is `destination` or the path-safe `destination:tab`.
+        // The icon belongs to the destination either way, and the link is the
+        // hash form the shell navigates with.
+        const [destination] = item.route.split(':')
+        const Icon = sectionIcon(destination)
+        const href = `#${item.route.replace(':', '?tab=')}`
         return (
           <div className="ws-item" key={item.route} data-hidden={item.hidden || undefined}>
             <a
-              href={`#${item.route}`}
-              aria-current={route === item.route ? 'page' : undefined}
+              href={href}
+              aria-current={route === destination ? 'page' : undefined}
               title={item.detail}
               data-label={item.label}
-              onClick={(event) => { event.preventDefault(); onRoute(item.route) }}
+              onClick={(event) => { event.preventDefault(); onRoute(href) }}
             >
               <Icon aria-hidden="true" />
               <span>{item.label}</span>

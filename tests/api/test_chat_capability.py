@@ -200,9 +200,22 @@ def test_approval_required_is_raised_not_swallowed(actions: Any) -> None:
 
     Swallowing it and returning a plausible result is the exact failure the
     provenance work exists to prevent, one layer down.
+
+    The second assertion here used to read `not issubclass(ApprovalRequired,
+    ActionError) or True`, which is false and could never fail. It *is* an
+    `ActionError`, deliberately and as its own docstring says: that is what
+    makes every existing handler show the reason instead of returning a 500.
+    What the test means to hold is that it carries the request, so a surface
+    that understands approvals can offer the decision rather than only
+    reporting the refusal.
     """
     assert issubclass(ApprovalRequired, Exception)
-    assert not issubclass(ApprovalRequired, ActionError) or True
+    assert issubclass(ApprovalRequired, ActionError), (
+        "an approval that is not an ActionError would surface as a 500 rather "
+        "than as the reason the call was held"
+    )
+    # And it is a carrier, not a bare message: raising one loses nothing.
+    assert "request" in ApprovalRequired.__init__.__code__.co_varnames
 
 # ── the parameter surface, reachable through the conversation ────────────────
 

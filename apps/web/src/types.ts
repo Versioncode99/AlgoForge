@@ -295,11 +295,28 @@ export type BudgetSettings = {
 }
 export type ProviderInfo = { id: string; label: string; detail: string }
 export type RoleRouting = {
-  model: string; fallback: string; enabled: boolean
+  model: string
+  /** What AlgoForge ships for this role. Held apart from `model` because a
+   *  shipped recommendation sitting in an operator's field is indistinguishable
+   *  from a choice, and the difference decides whether a feature override means
+   *  anything. Rendered as the placeholder, never written by the screen. */
+  recommended: string
+  fallback: string; enabled: boolean
 }
 export type ModelRouting = {
   mode: string; default_model: string; fallback_model: string
-  allowed: string[]; roles: Record<string, RoleRouting>
+  allowed: string[]
+  /** Feature key to model id: the four overrides the simple screen writes.
+   *  A role with its own assignment still wins over its feature. */
+  features: Record<string, string>
+  /** True once the deprecated flat `ai.routing` map has been folded in. */
+  flat_migrated: boolean
+  roles: Record<string, RoleRouting>
+}
+/** One of the four overrides, with the roles it covers. The roles travel with
+ *  it so the screen can say what a setting will change. */
+export type RoutingFeature = {
+  key: string; label: string; detail: string; roles: string[]
 }
 /** One role as the server describes it. `kind` splits the workflow roles an
  *  operator triggers from the research agents a campaign runs on its own. */
@@ -338,6 +355,7 @@ export type SettingsPayload = {
   models: ModelInfo[]; roles: RoleInfo[]; credentials: CredentialInfo[]
   providers: ProviderInfo[]
   routing_roles: RoutingRole[]; routing_modes: RoutingMode[]
+  routing_features: RoutingFeature[]
   routing_preview: RoutingDecision[]
   safety_limits: SafetyLimit[]
   budget_modes: BudgetModeInfo[]

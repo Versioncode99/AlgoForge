@@ -22,7 +22,8 @@ from enum import StrEnum
 from typing import Any
 
 from forge.contracts.models import FrozenModel
-from forge.modes.models import WorkspaceMode
+from forge.modes.models import MODE_ORDER, WorkspaceMode
+from forge.product.navigation import resolve
 
 
 class Intent(StrEnum):
@@ -44,27 +45,36 @@ class IntentDescriptor(FrozenModel):
     detail: str
     #: Registered action names, in the order they would run.
     actions: tuple[str, ...]
-    #: Where the operator ends up, per mode. Keyed by mode because the same
-    #: intent lands in different places: "research" is a section in AI, and
-    #: Normal mode reaches the same material through "strategies". A single list
-    #: would have sent somebody to a route their mode does not have, which is a
-    #: dead end discovered by clicking it.
-    sections: dict[str, tuple[str, ...]]
+    #: Where the operator ends up, as product links.
+    #:
+    #: This used to be keyed by mode, because the same intent landed in
+    #: different places: "research" was a section in AI and Normal reached the
+    #: same material through "strategies". There is one navigation now, so the
+    #: keying described a difference that no longer exists — and a map keyed by
+    #: something that has stopped varying is a map that will quietly stop being
+    #: checked. Each link is validated against `forge.product.navigation`, so an
+    #: intent cannot offer a destination the shell does not have.
+    links: tuple[str, ...]
     #: What this intent cannot do, stated at the front door rather than found
     #: three screens in.
     caveat: str = ""
 
     @property
     def modes(self) -> tuple[WorkspaceMode, ...]:
-        """The modes this intent is offered in: exactly those it has a route for."""
-        return tuple(WorkspaceMode(mode) for mode in self.sections)
+        """Every mode. Kept so a client built against the old payload still reads.
 
-    def sections_for(self, mode: WorkspaceMode | str) -> tuple[str, ...]:
-        return self.sections.get(WorkspaceMode(mode).value, ())
+        An intent used to be offered in some modes and not others. Navigation is
+        horizontal now: the Prop Desk is a destination everybody has, so an
+        intent that lands there is offered to everybody.
+        """
+        return tuple(MODE_ORDER)
 
     def as_dict(self) -> dict[str, Any]:
         payload = self.model_dump(mode="json")
         payload["modes"] = [mode.value for mode in self.modes]
+        # The links, resolved. A client rendering a button wants the hash it
+        # should navigate to, not a route it has to translate itself.
+        payload["destinations"] = [resolve(link).hash for link in self.links]
         return payload
 
 
@@ -80,11 +90,12 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "anything is generated."
             ),
             actions=("search_papers", "create_family", "create_strategy_from_blueprint"),
-            sections={
-                "normal": ("strategies", "evidence"),
-                "prop_firm": ("strategies", "validation"),
-                "ai": ("research", "strategies"),
-            },
+            links=(
+                "strategies",
+                "research?tab=evidence",
+                "research?tab=validation",
+                "research?tab=findings",
+            ),
             caveat=(
                 "A paper's result is a claim about its own data. AlgoForge will not "
                 "report it as validated until the judge has run over yours."
@@ -99,11 +110,11 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "run before it does."
             ),
             actions=("create_strategy", "backtest_strategy", "validate_strategy"),
-            sections={
-                "normal": ("strategies", "validation", "evidence"),
-                "prop_firm": ("strategies", "validation"),
-                "ai": ("strategies", "validation", "evidence"),
-            },
+            links=(
+                "strategies",
+                "research?tab=validation",
+                "research?tab=evidence",
+            ),
             caveat=(
                 "The hypothesis is frozen before the run. Changing it afterwards "
                 "produces a new claim, not a better result."
@@ -117,11 +128,13 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "the G0-G13 ladder, what was measured and what was not."
             ),
             actions=("run_analysis", "validate_strategy"),
-            sections={
-                "normal": ("evidence", "validation", "trades"),
-                "prop_firm": ("validation", "performance"),
-                "ai": ("evidence", "validation", "experiments"),
-            },
+            links=(
+                "research?tab=evidence",
+                "research?tab=validation",
+                "strategies?tab=trades",
+                "trading?tab=performance",
+                "research?tab=experiments",
+            ),
             caveat="",
         ),
         IntentDescriptor(
@@ -133,10 +146,13 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "its own frozen claim."
             ),
             actions=("create_strategy", "backtest_strategy", "validate_strategy"),
-            sections={
-                "normal": ("strategies", "validation", "evidence"),
-                "ai": ("experiments", "validation", "memory"),
-            },
+            links=(
+                "strategies",
+                "research?tab=validation",
+                "research?tab=evidence",
+                "research?tab=experiments",
+                "campaigns?tab=memory",
+            ),
             caveat=(
                 "Re-running a failed strategy with different parameters is another "
                 "trial, and every trial raises the bar gate G5 applies."
@@ -150,7 +166,12 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "mode, and see which validated strategy each account should be running."
             ),
             actions=("assess_prop_account", "propdesk_connections", "propdesk_plan_allocation"),
-            sections={"prop_firm": ("desk", "allocation", "limits", "risk")},
+            links=(
+                "propdesk?tab=accounts",
+                "propdesk?tab=allocation",
+                "propdesk?tab=limits",
+                "propdesk?tab=risk",
+            ),
             caveat=(
                 "No live broker connector exists in this build. Accounts connect to "
                 "AlgoForge's own simulator, and every fill is labelled simulated."
@@ -164,13 +185,14 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "set, through the refusal ladder and the pre-trade gate."
             ),
             actions=("prepare_orders", "screen_orders"),
-            sections={
-                # Normal reaches the same ladder through the book surfaces that
-                # came out of the Hedge Fund mode. The engines did not move; only
-                # the environment they are offered in did.
-                "normal": ("portfolio", "gate", "execution"),
-                "prop_firm": ("allocation", "desk_activity", "book"),
-            },
+            links=(
+                "trading?tab=portfolio",
+                "trading?tab=gate",
+                "trading?tab=execution",
+                "propdesk?tab=allocation",
+                "propdesk?tab=activity",
+                "trading?tab=overview",
+            ),
             caveat=(
                 "Execution is simulated. `forge.execution.lifecycle` refuses the "
                 "DEPLOYED stage outright while no broker connector exists."
@@ -184,11 +206,13 @@ INTENTS: dict[Intent, IntentDescriptor] = {
                 "regimes, and what the archive cannot tell you."
             ),
             actions=("run_analysis",),
-            sections={
-                "normal": ("charts", "data"),
-                "prop_firm": ("performance",),
-                "ai": ("research", "memory"),
-            },
+            links=(
+                "markets?tab=charts",
+                "markets?tab=data",
+                "trading?tab=performance",
+                "research?tab=findings",
+                "campaigns?tab=memory",
+            ),
             caveat="",
         ),
     )
@@ -205,9 +229,14 @@ def descriptor(intent: Intent | str) -> IntentDescriptor:
 
 
 def for_mode(mode: WorkspaceMode | str) -> list[IntentDescriptor]:
-    """The intents that make sense in one mode, in display order."""
-    parsed = WorkspaceMode(mode)
-    return [item for item in INTENTS.values() if parsed in item.modes]
+    """The intents offered in one mode, in display order.
+
+    Every intent, for every mode. The filter is kept because the endpoint takes
+    the parameter and a client may still pass it; `WorkspaceMode(mode)` is still
+    called so an unknown mode is still refused rather than silently ignored.
+    """
+    WorkspaceMode(mode)
+    return list(INTENTS.values())
 
 
 def catalogue(mode: WorkspaceMode | str | None = None) -> list[dict[str, Any]]:

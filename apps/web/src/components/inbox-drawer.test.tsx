@@ -76,7 +76,7 @@ describe('the finished-work drawer', () => {
   it('offers the way back to what the work was about', async () => {
     mount()
     const open = await screen.findByRole('link', { name: 'Open' })
-    expect(open).toHaveAttribute('href', '#strategies?strategy=s1&pane=summary')
+    expect(open).toHaveAttribute('href', '#strategies?tab=library&strategy=s1&pane=summary')
   })
 
   it('says there is no destination rather than guessing one', async () => {

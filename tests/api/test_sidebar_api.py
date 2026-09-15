@@ -35,7 +35,7 @@ def test_the_catalogue_spans_every_mode(client: TestClient) -> None:
     payload = _data(client.get("/api/v1/sidebar/destinations"))
     routes = {row["route"] for row in payload["destinations"]}
     # One from each built-in environment, all reachable from one workspace.
-    assert {"charts", "desk", "campaigns", "portfolio"} <= routes
+    assert {"markets:charts", "propdesk:accounts", "campaigns", "trading:portfolio"} <= routes
     assert payload["count"] == len(payload["destinations"])
 
 
@@ -50,29 +50,49 @@ def test_a_workspace_can_be_created_with_its_rail_already_composed(
         name="My Prop Research",
         description="Accounts and research on one screen",
         icon="NQ",
-        sidebar_items=["desk", "copy", "risk", "campaigns", "agents", "charts"],
+        sidebar_items=[
+            "propdesk:accounts", "propdesk:copy", "trading:risk",
+            "campaigns", "research:experiments", "markets:charts",
+        ],
     )
     routes = {
         item["route"]
         for group in workspace["sidebar"]["groups"]
         for item in group["items"]
     }
-    assert routes == {"desk", "copy", "risk", "campaigns", "agents", "charts"}
+    assert routes == {
+        "propdesk:accounts", "propdesk:copy", "trading:risk",
+        "campaigns", "research:experiments", "markets:charts",
+    }
     assert workspace["sidebar_is_custom"] is True
     assert workspace["description"] == "Accounts and research on one screen"
     assert workspace["icon"] == "NQ"
 
 
-def test_a_workspace_created_from_a_mode_gets_that_modes_rail(
+def test_a_workspace_starts_from_the_products_own_rail(
     client: TestClient,
 ) -> None:
+    """One navigation, so one default rail, whichever mode a caller names."""
     workspace = _create(client, name="Prop desk", mode="prop_firm")
     routes = {
         item["route"]
         for group in workspace["sidebar"]["groups"]
         for item in group["items"]
     }
-    assert {"desk", "drawdown", "rules"} <= routes
+    assert {"propdesk", "campaigns", "chat", "strategies", "trading"} <= routes
+
+
+def test_a_legacy_route_from_a_saved_rail_is_translated_rather_than_refused(
+    client: TestClient,
+) -> None:
+    """A workspace built before the mode navigation was replaced keeps working."""
+    workspace = _create(client, name="Old rail", sidebar_items=["desk", "charts", "portfolio"])
+    routes = [
+        item["route"]
+        for group in workspace["sidebar"]["groups"]
+        for item in group["items"]
+    ]
+    assert routes == ["propdesk:accounts", "markets:charts", "trading:portfolio"]
 
 
 def test_an_unknown_destination_is_refused_with_the_valid_ones_named(
@@ -87,21 +107,23 @@ def test_an_unknown_destination_is_refused_with_the_valid_ones_named(
 
 # ── editing ──────────────────────────────────────────────────────────────────
 def test_the_full_edit_cycle_over_http(client: TestClient) -> None:
-    workspace = _create(client, sidebar_items=["charts"])
+    workspace = _create(client, sidebar_items=["markets:charts"])
     ws = workspace["workspace_id"]
     base = f"/api/v1/workspaces/{ws}/sidebar"
 
     _data(client.post(f"{base}/groups", json={"group_id": "research", "label": "RESEARCH"}))
     _data(client.post(f"{base}/items", json={"route": "campaigns", "group_id": "research"}))
-    _data(client.post(f"{base}/items", json={"route": "agents", "group_id": "research"}))
+    _data(client.post(
+        f"{base}/items", json={"route": "research:experiments", "group_id": "research"}
+    ))
 
     rail = _data(client.get(f"{base}"))
     research = next(g for g in rail["groups"] if g["group_id"] == "research")
-    assert [i["route"] for i in research["items"]] == ["campaigns", "agents"]
+    assert [i["route"] for i in research["items"]] == ["campaigns", "research:experiments"]
 
     _data(client.post(f"{base}/items/campaigns/rename", json={"name": "NQ Alpha"}))
     _data(client.post(f"{base}/items/campaigns/pin", json={"value": True}))
-    _data(client.post(f"{base}/items/agents/hide", json={"value": True}))
+    _data(client.post(f"{base}/items/research:experiments/hide", json={"value": True}))
     _data(client.post(f"{base}/groups/research/rename", json={"name": "NQ RESEARCH"}))
     _data(client.post(f"{base}/groups/research/collapse", json={"value": True}))
 
@@ -113,27 +135,28 @@ def test_the_full_edit_cycle_over_http(client: TestClient) -> None:
     assert campaigns["label"] == "NQ Alpha"
     assert campaigns["renamed"] is True
     assert campaigns["pinned"] is True
-    assert next(i for i in research["items"] if i["route"] == "agents")["hidden"] is True
+    hidden = next(i for i in research["items"] if i["route"] == "research:experiments")
+    assert hidden["hidden"] is True
 
-    _data(client.delete(f"{base}/items/agents"))
+    _data(client.delete(f"{base}/items/research:experiments"))
     rail = _data(client.get(f"{base}"))
     research = next(g for g in rail["groups"] if g["group_id"] == "research")
     assert [i["route"] for i in research["items"]] == ["campaigns"]
 
 
 def test_moving_an_item_between_groups_over_http(client: TestClient) -> None:
-    workspace = _create(client, sidebar_items=["charts"])
+    workspace = _create(client, sidebar_items=["markets:charts"])
     ws = workspace["workspace_id"]
     base = f"/api/v1/workspaces/{ws}/sidebar"
     _data(client.post(f"{base}/groups", json={"group_id": "mine", "label": "MINE"}))
-    _data(client.post(f"{base}/items/charts/move", json={"group_id": "mine"}))
+    _data(client.post(f"{base}/items/markets:charts/move", json={"group_id": "mine"}))
     rail = _data(client.get(f"{base}"))
     mine = next(g for g in rail["groups"] if g["group_id"] == "mine")
-    assert [i["route"] for i in mine["items"]] == ["charts"]
+    assert [i["route"] for i in mine["items"]] == ["markets:charts"]
 
 
 def test_reordering_groups_over_http(client: TestClient) -> None:
-    workspace = _create(client, sidebar_items=["charts", "desk"])
+    workspace = _create(client, sidebar_items=["markets:charts", "propdesk:accounts"])
     ws = workspace["workspace_id"]
     base = f"/api/v1/workspaces/{ws}/sidebar"
     rail = _data(client.get(f"{base}"))
@@ -144,31 +167,31 @@ def test_reordering_groups_over_http(client: TestClient) -> None:
     assert [g["group_id"] for g in rail["groups"]] == list(reversed(order))
 
 
-def test_resetting_restores_the_modes_rail(client: TestClient) -> None:
-    workspace = _create(client, name="Prop", mode="prop_firm", sidebar_items=["charts"])
+def test_resetting_restores_the_products_rail(client: TestClient) -> None:
+    workspace = _create(client, name="Prop", mode="prop_firm", sidebar_items=["markets:charts"])
     ws = workspace["workspace_id"]
     reset = _data(client.post(f"/api/v1/workspaces/{ws}/sidebar/reset"))
     routes = {
         item["route"] for group in reset["sidebar"]["groups"] for item in group["items"]
     }
-    assert {"desk", "drawdown"} <= routes
-    assert "charts" not in routes
+    assert {"propdesk", "campaigns", "trading", "chat"} <= routes
+    assert "markets:charts" not in routes
 
 
 # ── persistence ──────────────────────────────────────────────────────────────
 def test_a_rail_survives_a_reload(client: TestClient) -> None:
-    workspace = _create(client, sidebar_items=["charts", "campaigns"])
+    workspace = _create(client, sidebar_items=["markets:charts", "campaigns"])
     ws = workspace["workspace_id"]
     _data(client.post(f"/api/v1/workspaces/{ws}/open"))
     reloaded = _data(client.get(f"/api/v1/workspaces/{ws}"))
     routes = {
         item["route"] for group in reloaded["sidebar"]["groups"] for item in group["items"]
     }
-    assert routes == {"charts", "campaigns"}
+    assert routes == {"markets:charts", "campaigns"}
 
 
 def test_cloning_copies_the_rail_and_marks_the_copy(client: TestClient) -> None:
-    workspace = _create(client, sidebar_items=["charts", "campaigns"])
+    workspace = _create(client, sidebar_items=["markets:charts", "campaigns"])
     ws = workspace["workspace_id"]
     clone = _data(
         client.post(f"/api/v1/workspaces/{ws}/clone", json={"name": "ES version"})
@@ -176,7 +199,7 @@ def test_cloning_copies_the_rail_and_marks_the_copy(client: TestClient) -> None:
     routes = {
         item["route"] for group in clone["sidebar"]["groups"] for item in group["items"]
     }
-    assert routes == {"charts", "campaigns"}
+    assert routes == {"markets:charts", "campaigns"}
     assert clone["kind"] == "CLONED"
     assert clone["name"] == "ES version"
 

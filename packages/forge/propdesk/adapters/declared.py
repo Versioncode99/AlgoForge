@@ -167,19 +167,30 @@ class DeclaredAdapter:
         }
 
 
+#: What a connector that can *send an order* would still need. The read-only
+#: connector in `forge.propdesk.rithmic` is built: transport, the per-plant state
+#: machine, account discovery, snapshots and order-state mapping are implemented
+#: and tested, and this is deliberately no longer a list of them. What remains is
+#: order release — which is gated on an observation nobody here can make — and
+#: the external gates, which no amount of engineering removes.
 RITHMIC_WORK = RequiredWork(
     engineering=(
-        "Implement R | Protocol over WebSocket with protobuf framing, one login "
-        "and one heartbeat per plant (order, PnL, ticker, history).",
-        "Map rithmic and exchange order notifications onto the normalised order "
-        "lifecycle, including the bracket-modify case that one commercial vendor "
-        "shipped a fix for after reading it as a cancellation.",
-        "Account discovery over the order plant, keyed by system, FCM, IB and account id.",
-        "Carry the deterministic idempotency key in the protocol's user tag field.",
-        "Session recovery: re-login per plant and resubscribe after a transport drop.",
+        "Verify the read-only path against Rithmic Test: log in, list systems, "
+        "discover accounts and take a position snapshot against a real gateway. "
+        "Every capability this build reports is IMPLEMENTED_NOT_CONNECTED until "
+        "one of those is observed working.",
+        "Verify the order lifecycle against Rithmic Test, including the "
+        "bracket-modify case that one commercial vendor shipped a fix for after "
+        "reading it as a cancellation.",
+        "Enable order release, which nothing in this repository enables: `place`, "
+        "`modify`, `cancel` and `flatten` translate and refuse to send.",
     ),
     external=(
-        "Obtain the R | API+ development kit; the protocol specification is not public.",
+        "Obtain the R | Protocol SDK. AlgoForge does not ship it — it is licensed to "
+        "the operator and its .proto files are the adapter's vocabulary.",
+        "Log in to Rithmic Test through R | Trader or R | Trader Pro first and accept "
+        "the required digital agreements. An API login before that fails on the "
+        "agreement, and the agreement may not be bypassed or auto-accepted.",
         "Pass Rithmic's conformance process for the application before it may reach "
         "production systems.",
         "Agree commercial terms; API fees may apply per user.",
@@ -187,6 +198,8 @@ RITHMIC_WORK = RequiredWork(
     credentials=(
         "A Rithmic system name, username and password per connection. There is no "
         "delegated authentication, so a connector holds the password for the session.",
+        "A gateway URI. AlgoForge ships none: the endpoint differs per system and "
+        "environment and is in the operator's own Rithmic documentation.",
     ),
     open_questions=(
         "Whether one Rithmic credential may hold concurrent sessions from a platform "

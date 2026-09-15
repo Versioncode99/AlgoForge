@@ -6,7 +6,7 @@
  * are testable without a server.
  */
 
-import { format } from './route'
+import { format } from './navigation'
 
 export type InboxOutcome = 'done' | 'failed' | 'cancelled'
 
@@ -32,24 +32,38 @@ export type InboxPayload = { items: InboxItem[]; unread: number }
  * Empty is a real answer and is rendered as such. A button that goes somewhere
  * unrelated is worse than no button: it moves the operator away from what they
  * were doing and looks deliberate doing it.
+ *
+ * Which is what three of these did. `#prop` was not a route at all -- `prop` is
+ * a panel kind -- so a finished prop matrix offered an Open button that landed
+ * on Home, and the unit test asserted the string `'#prop'` rather than that it
+ * went anywhere. `#actions` sent a finished mission to the action registry,
+ * which is a different screen from the missions it ran.
+ *
+ * So every destination here names its route *and* its tab, against the shipped
+ * manifest, rather than relying on the legacy map to translate a spelling this
+ * product no longer uses. `tests/modes/test_manifest.py` resolves each one.
  */
 export function destination(item: InboxItem): string {
   const strategy = item.refs.strategy_id ?? ''
   const account = item.refs.account_id ?? ''
   switch (item.kind) {
     case 'backtest':
-      return strategy ? format('strategies', { strategy, pane: 'summary' }) : ''
+      return strategy ? format('strategies', 'library', { strategy, pane: 'summary' }) : ''
     case 'sweep_surface':
     case 'surface':
-      return strategy ? format('strategies', { strategy }) : ''
+      return strategy ? format('strategies', 'library', { strategy }) : ''
     case 'prop_matrix':
-      return '#prop'
+      return format('propdesk', 'simulation')
     case 'mission':
-      return '#actions'
+      return format('campaigns', 'automation')
     case 'agent':
-      return '#agents'
+      return format('settings', 'diagnostics')
     default:
-      return strategy ? format('strategies', { strategy }) : account ? format('desk', { account }) : ''
+      return strategy
+        ? format('strategies', 'library', { strategy })
+        : account
+          ? format('propdesk', 'accounts', { account })
+          : ''
   }
 }
 

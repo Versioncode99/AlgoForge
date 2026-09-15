@@ -36,6 +36,7 @@ export type ArtifactKind =
   | 'analysis'
   | 'workspace'
   | 'port'
+  | 'campaign'
 
 export type ToolCall = {
   name: string

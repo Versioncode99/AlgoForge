@@ -1,0 +1,71 @@
+{
+  "note": "Local work only. No provider is called: provider time is not this application's to improve, and including it would swamp what is.",
+  "measured_at": "2026-09-15T02:21:32Z",
+  "python": "3.13.12",
+  "strategies": 400,
+  "samples": 25,
+  "library_write_ms": 486.5,
+  "context_before": {
+    "p50_ms": 15.104,
+    "p95_ms": 15.941,
+    "min_ms": 14.759,
+    "max_ms": 18.844,
+    "samples": 25
+  },
+  "context_after": {
+    "p50_ms": 3.525,
+    "p95_ms": 3.649,
+    "min_ms": 3.435,
+    "max_ms": 6.684,
+    "samples": 25
+  },
+  "context_cold_after": {
+    "p50_ms": 16.371,
+    "p95_ms": 16.371,
+    "min_ms": 16.061,
+    "max_ms": 45.079,
+    "samples": 3
+  },
+  "conversation_create": {
+    "p50_ms": 1.01,
+    "p95_ms": 1.197,
+    "min_ms": 0.94,
+    "max_ms": 1.259,
+    "samples": 25
+  },
+  "conversation_append": {
+    "p50_ms": 1.201,
+    "p95_ms": 1.283,
+    "min_ms": 1.063,
+    "max_ms": 1.36,
+    "samples": 25
+  },
+  "conversation_read": {
+    "p50_ms": 0.372,
+    "p95_ms": 0.447,
+    "min_ms": 0.332,
+    "max_ms": 0.512,
+    "samples": 25
+  },
+  "conversation_list": {
+    "p50_ms": 0.771,
+    "p95_ms": 0.807,
+    "min_ms": 0.702,
+    "max_ms": 0.824,
+    "samples": 25
+  },
+  "run_accept": {
+    "p50_ms": 1.693,
+    "p95_ms": 9.929,
+    "min_ms": 1.114,
+    "max_ms": 23.295,
+    "samples": 25
+  },
+  "local_turn_total": {
+    "p50_ms": 7.931,
+    "p95_ms": 8.85,
+    "min_ms": 7.47,
+    "max_ms": 11.599,
+    "samples": 8
+  }
+}

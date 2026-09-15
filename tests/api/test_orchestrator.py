@@ -30,11 +30,10 @@ def client(tmp_path: Path, monkeypatch) -> TestClient:
     monkeypatch.setenv("ALGOFORGE_VAULT", str(tmp_path))
     import forge_api.orchestrator as orchestrator
 
-    monkeypatch.setattr(
-        orchestrator,
-        "credential_for",
-        lambda *a, **k: type("Absent", (), {"present": False})(),
-    )
+    # The orchestrator asks `model_choice.reachable` now, which is one question
+    # -- "can a model be called at all?" -- rather than a credential lookup the
+    # test had to know the shape of.
+    monkeypatch.setattr(orchestrator, "model_reachable", lambda settings: False)
     from forge_api.main import create_app
 
     with TestClient(create_app()) as client:

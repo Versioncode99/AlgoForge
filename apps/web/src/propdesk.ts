@@ -53,6 +53,11 @@ export type ProviderDescriptor = {
   rate_limit_per_minute: number | null
   session_seconds: number | null
   live_connector_implemented: boolean
+  /** Whether this build can *read* from the provider without being able to
+   * place an order. Separate from the flag above, and the separation is the
+   * point: collapsing them would either claim this build can trade or claim it
+   * cannot reach the provider at all, and for Rithmic both are false. */
+  read_only_connector_implemented: boolean
   documentation_url: string
   evidence: string
   limitations: string[]
@@ -67,6 +72,41 @@ export type PlatformBinding = {
   evidence: string
 }
 
+/** One rule set on disk, with the claim about where its numbers came from. */
+export type RuleSet = {
+  schema_version: string
+  rule_id: string
+  display_name: string
+  origin: string
+  rules: Record<string, unknown>
+  rules_id: string
+  provenance: {
+    source_url: string
+    source_hash: string
+    verified: boolean
+    reviewed_by: string
+    effective_from: string | null
+    review_expires_at: string | null
+    status: 'UNVERIFIED' | 'VERIFIED' | 'EXPIRED'
+    effective: boolean
+  }
+  status: 'UNVERIFIED' | 'VERIFIED' | 'EXPIRED'
+  /** True for unverified *and* expired: both mean nobody can currently say
+   * these numbers match a contract. */
+  needs_review: boolean
+}
+
+export type RuleCatalogue = {
+  schema_version: string
+  rule_sets: RuleSet[]
+  /** Files that could not be read, each with the reason. Carried rather than
+   * dropped: a catalogue short by one has to say which one. */
+  rejected: { origin: string; reason: string }[]
+  counts: { loaded: number; rejected: number; needing_review: number }
+  warnings: string[]
+  directory: string
+}
+
 export type RequiredWork = {
   engineering: string[]
   external: string[]
@@ -79,8 +119,12 @@ export type ProviderCatalogue = {
   platforms: PlatformBinding[]
   data_feeds: { feed_id: string; name: string; routes_orders: false; note: string }[]
   live_connectors_implemented: string[]
+  read_only_connectors_implemented: string[]
   adapters: Record<string, string>
   required_work: Record<string, RequiredWork>
+  /** What stands between this installation and a Rithmic connection, or "".
+   * Empty means the connector is available here, not that it has been used. */
+  rithmic_blocker: string
 }
 
 export type AdapterHealth = {
@@ -531,6 +575,16 @@ export function useConnections() {
   })
 }
 
+export function useRuleSets() {
+  return useQuery({
+    queryKey: key('rule-sets'),
+    // Not `staleTime: Infinity` like the provider catalogue: these are files an
+    // operator edits, and a corrected limit that does not appear until a
+    // restart is stale in the one direction that matters.
+    queryFn: () => getJson<RuleCatalogue>('/propdesk/rules'),
+  })
+}
+
 export function usePolicies() {
   return useQuery({
     queryKey: key('policies'),
@@ -594,15 +648,6 @@ export function useRisk(accountUid?: string) {
   })
 }
 
-export function useDisclosures() {
-  return useQuery({
-    queryKey: key('disclosures'),
-    queryFn: () =>
-      getJson<{ disclosures: Disclosure[]; acknowledgements: Acknowledgement[] }>(
-        '/propdesk/disclosures',
-      ),
-  })
-}
 
 export function useDeskAudit(accountUid?: string, limit = 200) {
   return useQuery({

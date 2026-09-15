@@ -199,20 +199,34 @@ def test_the_oms_will_not_route_an_order_without_gate_clearance() -> None:
             oms.submit(order, None, reference_price=100.0)
 
 
+#: The only modules under `forge.execution` and `forge.propdesk` that may import
+#: a network client, each for a reason stated in the test named after it.
+#:
+#: This list is the point of the test below. Adding to it is the deliberate act
+#: of letting one more module reach a socket, and every entry has a companion
+#: test asserting that what it reaches cannot place an order.
+NETWORKED: dict[str, str] = {
+    "propdesk/news.py": "reads a public statistical API for the economic calendar",
+    "propdesk/rithmic/transport.py": (
+        "the WebSocket client for the read-only Rithmic connector; it frames "
+        "bytes and knows nothing about orders"
+    ),
+}
+
+
 def test_the_execution_packages_reach_no_network() -> None:
     """The modules that own the boundary must not cross it.
 
     Covers `forge.execution` and `forge.propdesk`: the desk holds provider
-    adapters, and an adapter that opened a socket would be the moment this build
-    stopped being unable to trade. The one module in the repository that does
-    reach a network for the desk is the economic-calendar client, which is
-    excluded by name — it reads a public statistical API and cannot place an
-    order.
+    adapters, and an adapter that opened a socket would — on its own — be the
+    moment this build stopped being unable to trade. Two modules are excluded by
+    name in `NETWORKED`, and the tests under this one assert that neither can
+    send an order.
     """
-    calendar = FORGE / "propdesk" / "news.py"
+    allowed = {FORGE / relative for relative in NETWORKED}
     offenders: list[str] = []
     for path in python_sources(FORGE / "execution", FORGE / "propdesk"):
-        if path == calendar:
+        if path in allowed:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -230,11 +244,69 @@ def test_the_execution_packages_reach_no_network() -> None:
     )
 
 
-def test_the_calendar_client_is_the_only_networked_desk_module() -> None:
-    """Named so that the exception above cannot quietly become two."""
+def test_every_networked_module_is_named_and_exists() -> None:
+    """An exemption for a file that is gone is an exemption nobody is checking."""
+    for relative in NETWORKED:
+        assert (FORGE / relative).is_file(), f"{relative} is exempted and does not exist"
+
+
+def test_the_calendar_client_reaches_a_statistical_api_and_nothing_else() -> None:
     source = (FORGE / "propdesk" / "news.py").read_text(encoding="utf-8")
     assert "api.stlouisfed.org" in source
     assert "order" not in source.lower().split("def events")[0].split("class ")[0]
+
+
+def test_the_rithmic_transport_cannot_place_an_order() -> None:
+    """The second exemption, checked the same way as the first.
+
+    The transport is allowed a socket because it is *only* a socket: it sends
+    and receives frames of bytes and has no idea what is in them. If an order
+    verb ever appears in it, the layering that keeps order release in one
+    refusable place has been broken, and this is where that shows up.
+    """
+    import ast as _ast
+
+    path = FORGE / "propdesk" / "rithmic" / "transport.py"
+    tree = _ast.parse(path.read_text(encoding="utf-8"))
+    defined = {
+        node.name
+        for node in _ast.walk(tree)
+        if isinstance(node, _ast.FunctionDef | _ast.AsyncFunctionDef)
+    }
+    assert not defined & {"place", "modify", "cancel", "flatten", "submit"}
+
+    # And it imports nothing from the desk: no adapter, no intent, no credential.
+    imported = {
+        (node.module or "")
+        for node in _ast.walk(tree)
+        if isinstance(node, _ast.ImportFrom)
+    }
+    assert not any(name.startswith("forge.") for name in imported), (
+        "the transport imports from the desk, so it is no longer only a socket"
+    )
+
+
+def test_the_rithmic_adapter_reaches_the_network_only_through_that_transport() -> None:
+    """No other Rithmic module may open its own socket around the exemption."""
+    import ast as _ast
+
+    transport = FORGE / "propdesk" / "rithmic" / "transport.py"
+    offenders: list[str] = []
+    for path in python_sources(FORGE / "propdesk" / "rithmic"):
+        if path == transport:
+            continue
+        tree = _ast.parse(path.read_text(encoding="utf-8"))
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Import):
+                names = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, _ast.ImportFrom):
+                names = [(node.module or "").split(".")[0]]
+            else:
+                continue
+            for name in names:
+                if name in {"requests", "httpx", "urllib", "socket", "aiohttp", "http"}:
+                    offenders.append(f"{path.relative_to(ROOT)}: {name}")
+    assert not offenders, "\n".join(offenders)
 
 
 def test_live_execution_is_reported_as_unavailable() -> None:

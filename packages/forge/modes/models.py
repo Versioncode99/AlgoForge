@@ -43,6 +43,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from forge.product.navigation import DESTINATIONS
+
 
 class WorkspaceMode(StrEnum):
     """The three environments the product opens into."""
@@ -134,10 +136,26 @@ class ModeDescriptor:
 
 
 # ── the manifests ────────────────────────────────────────────────────────────
-# Ordered as they appear in the shell. Every route here has a view behind it and
-# every panel kind names a `PanelKind` that renders; `tests/modes` asserts both,
-# because a manifest that offers a destination with nothing behind it is exactly
-# the fake functionality the product rules refuse.
+#: The product's destinations, shared by all three descriptors.
+#:
+#: They used to be three hand-written tuples of twenty-odd sections each, and
+#: the duplication was not the worst of it: a mode is not a permission boundary
+#: on the *human* — every mode could always reach validation, the judge and the
+#: strategy library — so three navigations for one product meant the rail
+#: changed while what it could reach did not. There is one now, in
+#: `forge.product.navigation`, and this derives from it so a descriptor cannot
+#: offer a destination the shell does not have.
+PRODUCT_SECTIONS: tuple[Section, ...] = tuple(
+    Section(
+        route=destination.route,
+        label=destination.label,
+        detail=destination.detail,
+        group=destination.group,
+        panel_kinds=destination.panels(),
+    )
+    for destination in DESTINATIONS
+)
+
 
 _NORMAL = ModeDescriptor(
     mode=WorkspaceMode.NORMAL,
@@ -149,42 +167,7 @@ _NORMAL = ModeDescriptor(
         "supplies the tools and leaves the arrangement to you."
     ),
     workspace_template="normal_desk",
-    sections=(
-        Section("overview", "Overview", "Where things stand", "Desk", ("activity",)),
-        Section("workspace", "Workspace", "Your panels, arranged your way", "Desk",
-                ("chart", "watchlist", "notes")),
-        Section("charts", "Charts", "Candles over the local archives", "Markets",
-                ("chart",)),
-        Section("trades", "Strategy Trades", "Historical trades on the bars they happened on",
-                "Markets", ("chart",)),
-        Section("strategies", "Strategies", "Build, run and judge", "Strategy",
-                ("strategies",)),
-        Section("runs", "Runs", "Immutable execution ledger", "Strategy", ("runs",)),
-        Section("validation", "Validation", "Walk-forward, CSCV and CPCV", "Strategy",
-                ("validation",)),
-        Section("evidence", "Evidence", "Why a result is trusted, or not", "Strategy",
-                ("evidence",)),
-        Section("positions", "Positions & Orders", "Paper book and working orders", "Book",
-                ("positions", "orders", "account")),
-        Section("portfolio", "Portfolio", "From signals to sizes, inside constraints", "Book",
-                ("portfolio", "positions")),
-        Section("risk", "Risk", "Exposure, leverage, concentration and tail", "Book",
-                ("risk",)),
-        Section("gate", "Pre-Trade Gate", "Every proposed order, checked", "Book",
-                ("pretrade_gate", "orders")),
-        Section("execution", "Execution", "Orders, fills and what they cost", "Book",
-                ("orders", "positions")),
-        Section("operations", "Operations", "Book, reconciliation, jobs and health", "Book",
-                ("positions", "account", "logs")),
-        Section("book", "Book Overview", "Capital, exposure and the state of the loop", "Book",
-                ("fund_summary", "activity")),
-        Section("performance", "Performance", "Return, risk and where both came from", "Book",
-                ("runs",)),
-        Section("data", "Data Health", "Coverage and provenance", "Data", ("data_health",)),
-        Section("assistant", "Assistant", "Ask the ledger, or ask for a strategy", "System",
-                ("agent",)),
-        Section("settings", "Settings", "Providers, data and storage", "System", ()),
-    ),
+    sections=PRODUCT_SECTIONS,
     limitations=(
         "Paper only. No live-order path exists anywhere in this application.",
         "Fills are modelled from bar data, not calibrated against a broker.",
@@ -205,49 +188,7 @@ _PROP_FIRM = ModeDescriptor(
         "not a copy of any one firm's contract."
     ),
     workspace_template="prop_desk",
-    sections=(
-        Section("account", "Account Status", "Balance, equity and today", "Account",
-                ("prop", "account")),
-        Section("rules", "Rules", "The contract this account is held to", "Account", ("prop",)),
-        Section("drawdown", "Drawdown", "Buffer to the floor, and how it trails", "Risk",
-                ("prop", "risk")),
-        Section("daily", "Daily Loss", "What is left of today", "Risk", ("prop", "risk")),
-        Section("target", "Profit Target", "Distance, and what it takes", "Risk", ("prop",)),
-        Section("risk", "Risk", "Exposure and per-trade size", "Risk", ("risk", "positions")),
-        Section("desk", "Prop Desk", "Every connected account, its provider and its health",
-                "Desk", ("desk_accounts",)),
-        Section("allocation", "Allocation",
-                "Which validated strategy each account should be running, and why",
-                "Desk", ("desk_allocation",)),
-        Section("copy", "Copy Trader", "Leaders, followers, sizing and execution status",
-                "Desk", ("desk_copy",)),
-        Section("limits", "Desk Limits",
-                "Firm permissions, contract caps, copy limits and drawdown protection",
-                "Desk", ("desk_accounts", "risk")),
-        Section("risk_management", "Risk Management",
-                "Manual, adaptive or AI-managed, inside the boundaries you set",
-                "Desk", ("desk_risk",)),
-        Section("ai_management", "AI Management",
-                "What AI is permitted to control, what it may never touch, and what it did",
-                "Desk", ("desk_ai",)),
-        Section("news", "News", "Scheduled economic events and blackout windows",
-                "Desk", ("desk_news",)),
-        Section("desk_activity", "Desk Activity",
-                "Orders, refusals, reconciliation passes and allocation changes",
-                "Desk", ("desk_activity",)),
-        Section("book", "Trades", "What was done, and what it cost", "Record",
-                ("positions", "orders")),
-        Section("simulation", "Rule Simulation", "How this account fares over many paths",
-                "Record", ()),
-        Section("performance", "Performance", "Return and consistency", "Record", ("runs",)),
-        Section("strategies", "Strategies", "Build, run and judge", "Strategy",
-                ("strategies",)),
-        Section("validation", "Validation", "Walk-forward, CSCV and CPCV", "Strategy",
-                ("validation",)),
-        Section("assistant", "Assistant", "Ask the ledger, or ask for a strategy", "System",
-                ("agent",)),
-        Section("settings", "Settings", "Providers, data and storage", "System", ()),
-    ),
+    sections=PRODUCT_SECTIONS,
     limitations=(
         "Rule sets are supplied by you. AlgoForge makes no claim about what any "
         "named firm's live contract says.",
@@ -278,49 +219,7 @@ _AI = ModeDescriptor(
         "have."
     ),
     workspace_template="ai_desk",
-    sections=(
-        Section("assistant", "AI Workspace", "Ask, and watch what it does", "AI", ("agent",)),
-        Section("agents", "Agents", "Specialists and their contracts", "AI", ("agent",)),
-        Section("actions", "Actions", "The verbs, their schemas and who may call them",
-                "AI", ()),
-        Section("activity", "Activity", "Every call, in order", "AI", ("activity",)),
-        Section("orchestrator", "Orchestrator", "What the AI did, and what it was refused",
-                "AI", ("agent", "activity")),
-        Section("approvals", "Approvals", "Consequential actions awaiting a person", "AI",
-                ("approvals",)),
-        Section("audit", "Audit Log", "Who did what, on what, and with what result", "AI",
-                ("audit",)),
-        Section("strategies", "Strategies", "Build, run and judge", "Work", ("strategies",)),
-        Section("research", "Research", "Sources and replication gaps", "Work",
-                ("research_library",)),
-        Section("experiments", "Experiments", "What was tried", "Work", ("experiments",)),
-        Section("validation", "Validation", "Walk-forward, CSCV and CPCV", "Work",
-                ("validation",)),
-        Section("evidence", "Evidence", "Why a result is trusted, or not", "Work",
-                ("evidence",)),
-        Section("missions", "Automation", "Objectives, declared steps, run verbatim",
-                "Work", ()),
-        Section(
-            "research_control",
-            "Research Control",
-            "Every campaign, every agent, and what the engine is actually doing",
-            "Autonomous",
-            (),
-        ),
-        Section(
-            "campaigns",
-            "Research Campaign",
-            "The objective, the frontier and what it is doing now",
-            "Autonomous",
-            (),
-        ),
-        Section("pipeline", "Engine Pipeline", "The graph, with live counts", "Autonomous", ()),
-        Section("memory", "Research Memory", "Classified failures", "Autonomous",
-                ("research_memory",)),
-        Section("lineage", "Lineage", "Experiment ancestry", "Autonomous", ("lineage",)),
-        Section("lab", "Research Lab", "Ask a question, get back to the trades", "Work", ()),
-        Section("settings", "Settings", "Providers, data and storage", "System", ()),
-    ),
+    sections=PRODUCT_SECTIONS,
     stances=(Stance.HUMAN_IN_THE_LOOP, Stance.AUTONOMOUS),
     limitations=(
         "AI reaches only the registered actions. There is no arbitrary-code verb.",

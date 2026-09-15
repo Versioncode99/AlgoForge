@@ -70,17 +70,29 @@ async function send<T>(path: string, method: string, body?: unknown): Promise<T>
   return payload.data as T
 }
 
-const PANEL_KINDS = [
-  'chart', 'watchlist', 'strategies', 'experiments', 'runs', 'validation',
-  'evidence', 'research_memory', 'lineage', 'data_health', 'research_library',
-  'dom', 'order_ticket', 'positions', 'orders', 'account', 'risk', 'prop',
-  'replay', 'agent', 'activity', 'logs', 'notes',
-]
+/** Every panel a workspace can hold, from the server.
+ *
+ * This was a list in this file, and it had drifted: it offered twenty-three of
+ * the thirty-five kinds the build renders, so the approvals queue, the audit
+ * trail, the pre-trade gate, the portfolio and the desk's own eight panels
+ * existed, worked, and could only appear if a workspace template happened to
+ * seed one. A second copy of a server list is a copy that eventually disagrees.
+ */
+function usePanelKinds() {
+  return useQuery({
+    queryKey: ['panel-kinds'],
+    // A build-time fact: it changes when the application is rebuilt, never
+    // while it is running.
+    staleTime: Infinity,
+    queryFn: () => getJson<{ panel_kinds: string[] }>('/workspaces/panel-kinds'),
+  })
+}
 
 export function WorkspaceView({ workspaceId = '' }: { workspaceId?: string } = {}) {
   const client = useQueryClient()
   const surface = useRef<HTMLDivElement | null>(null)
   const [adding, setAdding] = useState(false)
+  const panelKinds = usePanelKinds()
   const [managing, setManaging] = useState(false)
 
   /* Which workspace this window is showing.
@@ -357,7 +369,7 @@ export function WorkspaceView({ workspaceId = '' }: { workspaceId?: string } = {
 
       {adding && (
         <div className="panel-picker" role="group" aria-label="Panel kinds">
-          {PANEL_KINDS.map((kind) => (
+          {(panelKinds.data?.panel_kinds ?? []).map((kind) => (
             <button
               key={kind}
               type="button"

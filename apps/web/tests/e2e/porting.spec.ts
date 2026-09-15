@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { API, enterMode } from './mode'
+import { API } from './authority'
 
 /* Carrying a strategy to another platform, through the interface.
  *
@@ -7,10 +7,6 @@ import { API, enterMode } from './mode'
  * Generate and says nothing else is how somebody pastes a file that compiles
  * and trades a strategy that is not the one they validated.
  */
-
-test.beforeEach(async ({ request }) => {
-  await enterMode(request, 'normal')
-})
 
 test('the port surface leads with what did not cross', async ({ page, request }) => {
   /* From a blueprint rather than a template: porting renders the Strategy IR,

@@ -1,25 +1,41 @@
 import { expect, test } from '@playwright/test'
-import { API, enterMode, leaveMode } from './mode'
+import { API } from './authority'
 
 /* End-to-end against a live API on 8765 and Vite on 5173. The config starts
  * neither — run both before this suite or every test fails on connection
  * refused rather than on anything about the application. */
 
-/* The navigation now comes from the mode manifest rather than from a constant
- * in the shell, so this suite reads the same manifest instead of holding a
- * second copy of it. A section added in `forge.modes` is covered here the
- * moment it exists, and one removed stops being asserted rather than failing
- * forever against a list nobody updated.
+/* The navigation comes from `forge.product.navigation`, one manifest served at
+ * `/navigation`, so this suite reads that manifest instead of holding a second
+ * copy of it. A destination added there is covered here the moment it exists,
+ * and one removed stops being asserted rather than failing forever against a
+ * list nobody updated.
  *
- * `Agents` left the removed list: it is a real section in AI mode now, and the
- * thing that was removed was the old fixture-driven screen of the same name. */
+ * There is no mode to enter first. Every destination is in the rail at all
+ * times, which is the whole point of the change: a section used to be absent
+ * because of which mode was open, and a test then had to pick a mode before it
+ * could navigate. `Agents` left the removed list — it is a real destination
+ * now, and what was removed was the old fixture-driven screen of that name. */
 const REMOVED = ['Verdict', 'Regimes', 'Risk & Monte Carlo', 'Evolution']
 
-/* AI mode carries the widest section list, so it is where the tests that are
- * about the shell rather than about one mode do their work. */
-test.beforeEach(async ({ request }) => {
-  await enterMode(request, 'ai')
-})
+/** Whether any dataset on this machine holds bars something could run on.
+ *
+ * A backtest, a rule matrix and a chart all need the same thing, and an
+ * installation without a market-data credential has none of it. The tests that
+ * need bars skip here, naming the blocker, and each has a counterpart that runs
+ * in exactly that case and asserts the refusal is what appears — so there is no
+ * configuration in which this file checks nothing.
+ */
+async function archiveLoaded(
+  request: import('@playwright/test').APIRequestContext,
+): Promise<boolean> {
+  const response = await request.get(`${API}/datasets`)
+  if (!response.ok()) return false
+  const rows = (await response.json()).data as { loaded?: boolean; bar_count?: number }[]
+  return rows.some((row) => row.loaded && (row.bar_count ?? 0) > 0)
+}
+
+const NO_ARCHIVE = 'no dataset on this machine holds bars, so nothing can be run over them'
 
 /** Strategies opens on the catalogue, so the detail pane is one row-click away.
  *  Returns false when the configured vault holds no strategies at all, which is
@@ -38,23 +54,121 @@ async function openFirstStrategy(page: import('@playwright/test').Page): Promise
   return true
 }
 
-test('every section every mode declares is reachable, in every mode', async ({ page, request }) => {
+test('every destination the manifest declares is reachable', async ({ page, request }) => {
   test.setTimeout(180_000)
-  const manifest = await (await request.get(`${API}/modes`)).json()
-  for (const mode of manifest.data.modes) {
-    await enterMode(request, mode.mode, mode.stances[0] ?? undefined)
-    await page.goto('/')
+  const manifest = await (await request.get(`${API}/navigation`)).json()
+  const destinations = manifest.data.destinations as { label: string }[]
+  expect(destinations.length, 'the navigation manifest is empty').toBeGreaterThan(0)
+
+  await page.goto('/')
+  await expect(page.getByText('PAPER ONLY').last()).toBeVisible({ timeout: 30_000 })
+  for (const destination of destinations) {
+    const rail = page.getByRole('navigation', { name: 'Sections' })
+    await rail.getByRole('link', { name: destination.label, exact: true }).click()
+    // On the rail, and `page`. The tab bar below marks the current *view* with
+    // `aria-current="true"` — two elements claiming to be the current page is
+    // one claim too many, so the values differ on purpose.
+    await expect(
+      rail.getByRole('link', { name: destination.label, exact: true }),
+    ).toHaveAttribute('aria-current', 'page')
+    // The paper-only label is chrome, so it must survive every navigation. It
+    // is the one claim the application makes on every screen.
+    await expect(page.getByText('PAPER ONLY').last()).toBeVisible()
+  }
+})
+
+test('the content fills the viewport, not the tab bar', async ({ page }) => {
+  /* The shell is a grid of three rows: the context bar, the destination's tabs
+   * and the content. Two stylesheets each declared those rows, in different
+   * orders, and the one that won the cascade was the one that still had a
+   * status bar in the third row. So the tab row got the whole viewport, the
+   * content got the 34px the status bar used to have, and every screen opened
+   * blank with its tabs floating in the middle of the page.
+   *
+   * jsdom has no layout, so the unit suite could not see it. This is the
+   * geometry, measured. */
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#research')
+  await expect(page.getByText('PAPER ONLY').last()).toBeVisible({ timeout: 30_000 })
+  const tabs = page.getByRole('navigation', { name: 'Research views' })
+  await expect(tabs).toBeVisible()
+  const main = page.locator('#main-content')
+  const tabBox = await tabs.boundingBox()
+  const mainBox = await main.boundingBox()
+  expect(tabBox, 'the tab bar has no box').not.toBeNull()
+  expect(mainBox, 'the content has no box').not.toBeNull()
+  // A row of tabs is a strip. The content is everything under it.
+  expect(tabBox!.height, 'the tab row is taller than a strip').toBeLessThan(80)
+  expect(mainBox!.y, 'the content does not start under the tabs').toBeGreaterThanOrEqual(
+    tabBox!.y + tabBox!.height - 1,
+  )
+  expect(mainBox!.height, 'the content has less than half the viewport').toBeGreaterThan(450)
+})
+
+test('no destination is hidden behind a setting', async ({ page, request }) => {
+  /* The mode chooser used to decide which sections existed, and Campaigns was
+   * one of the things it could hide. Nothing hides a destination now, and this
+   * is the assertion that says so: the rail carries the whole manifest on a
+   * plain load, with no mode entered and nothing configured. */
+  const manifest = await (await request.get(`${API}/navigation`)).json()
+  await page.goto('/')
+  await expect(page.getByText('PAPER ONLY').last()).toBeVisible({ timeout: 30_000 })
+  for (const destination of manifest.data.destinations as { label: string }[]) {
+    await expect(
+      page.getByRole('link', { name: destination.label, exact: true }),
+    ).toHaveCount(1)
+  }
+})
+
+test('every link the interface renders names a route this product has', async ({
+  page,
+  request,
+}) => {
+  /* Four separate surfaces shipped a link that resolved to nothing.
+   *
+   * `locate` sends every route it does not recognise to Home, deliberately, so
+   * a link naming nothing behaves exactly like a link naming Home on purpose
+   * and the difference is invisible by inspection. The inbox offered `#prop`
+   * on a finished matrix, the book loop offered `#alpha`, and the skip link
+   * wrote the landmark fragment into the hash. Each was fixed with a test of
+   * its own; this is the one that does not need to know where the next one
+   * will be.
+   *
+   * The rule is the manifest's: the part before `?` must be a destination or a
+   * legacy spelling. A legacy link is fine -- that map exists so links outlive
+   * navigation -- and a link naming neither is the bug.
+   */
+  const manifest = (await (await request.get(`${API}/navigation`)).json()).data
+  const known = new Set<string>([
+    ...(manifest.destinations as { route: string }[]).map((d) => d.route),
+    ...Object.keys(manifest.legacy_routes as Record<string, string>),
+  ])
+  expect(known.size, 'the navigation manifest is empty').toBeGreaterThan(0)
+
+  const dead: string[] = []
+  for (const destination of manifest.destinations as { route: string; label: string }[]) {
+    await page.goto(`/#${destination.route}`)
     await expect(page.getByText('PAPER ONLY').last()).toBeVisible({ timeout: 30_000 })
-    for (const section of mode.sections) {
-      await page.getByRole('link', { name: section.label, exact: true }).click()
-      await expect(
-        page.locator(`a[href="#${await page.evaluate(() => location.hash.slice(1))}"]`),
-      ).toHaveAttribute('aria-current', 'page')
-      // The paper-only label is chrome, so it must survive every navigation in
-      // every mode. It is the one claim the application makes on every screen.
-      await expect(page.getByText('PAPER ONLY').last()).toBeVisible()
+    await expect(page.locator('#main-content > div.state[role="status"]')).toHaveCount(0, {
+      timeout: 30_000,
+    })
+    const links = await page.evaluate(() =>
+      [...document.querySelectorAll('a[href^="#"]')].map((a) => a.getAttribute('href') ?? ''),
+    )
+    for (const href of links) {
+      const route = href.slice(1).split('?')[0].split(':')[0]
+      // The skip link is a fragment on this page rather than a destination,
+      // and is the one anchor allowed not to name a route. It is asserted
+      // separately in accessibility.spec.ts, which checks that activating it
+      // does not navigate.
+      if (!route || route === 'main-content') continue
+      if (!known.has(route)) dead.push(`${destination.label}: ${href}`)
     }
   }
+  expect(
+    [...new Set(dead)].sort(),
+    'these links name no destination and no legacy route, so they resolve to Home',
+  ).toEqual([])
 })
 
 test('the fixture-driven sections stay removed', async ({ page }) => {
@@ -68,7 +182,6 @@ test('the fixture-driven sections stay removed', async ({ page }) => {
 })
 
 test('overview lists the library rather than leaving the page empty', async ({ page, request }) => {
-  await enterMode(request, 'normal')
   await page.goto('/')
   await expect(page.locator('.engine-state')).toContainText('AUTONOMOUS ENGINE')
   await expect(page.getByRole('button', { name: /Start engine/ })).toBeVisible()
@@ -107,9 +220,13 @@ test('a data set and a history range are chosen before anything runs', async ({ 
   await expect(page.getByText(/bars · about/)).toBeVisible()
 })
 
-test('a backtest runs as a job with live progress and lands real trades', async ({ page }) => {
+test('a backtest runs as a job with live progress and lands real trades', async ({
+  page,
+  request,
+}) => {
   // A real backtest on real bars outlives the 30s default in the config.
   test.setTimeout(240_000)
+  test.skip(!(await archiveLoaded(request)), NO_ARCHIVE)
   await page.goto('/')
   test.skip(!(await openFirstStrategy(page)), 'No strategy records in the current configured vault')
 
@@ -144,15 +261,25 @@ test('an unjudged strategy withholds the pass rather than granting it', async ({
   await expect(page.getByText(/withholds the pass/)).toBeVisible()
 })
 
-test('prop firm runs a matrix over every strategy, not one at a time', async ({ page, request }) => {
+test('prop firm runs a matrix over every strategy, not one at a time', async ({
+  page,
+  request,
+}) => {
   test.setTimeout(180_000)
-  await enterMode(request, 'prop_firm')
-  await page.goto('/')
-  await page.getByRole('link', { name: 'Rule Simulation', exact: true }).click()
+  test.skip(!(await archiveLoaded(request)), NO_ARCHIVE)
+  // Simulation is a tab of the Prop Desk now, not a destination of its own.
+  await page.goto('/#propdesk?tab=simulation')
   await expect(page.getByRole('button', { name: /Run the matrix/ })).toBeVisible()
   await expect(page.getByRole('group', { name: 'Account phase' })).toBeVisible()
 
-  const strategyCount = Number(await page.locator('.context-facts > span').filter({ hasText: 'STRATEGIES' }).locator('b').textContent())
+  /* From the API, not from the chrome. The context bar used to carry a
+   * STRATEGIES count and this test read it; the bar now carries only the three
+   * facts that are safety-critical — paper-only, offline, degraded — so the
+   * count is asked for where it actually lives. Reading a number off chrome
+   * that no longer displays it is how a test hangs for three minutes on a
+   * locator that will never resolve. */
+  const library = await (await request.get(`${API}/strategies`)).json()
+  const strategyCount = Array.isArray(library?.data) ? library.data.length : 0
   if (strategyCount === 0 || await page.getByRole('button', { name: /Run the matrix/ }).isDisabled()) {
     await expect(page.getByText('No matrix yet')).toBeVisible()
     return
@@ -203,43 +330,90 @@ test('updates live in settings, not on a tab of their own', async ({ page }) => 
 })
 
 test('validation lab distinguishes selection paths from Monte Carlo', async ({ page }) => {
-  await page.goto('/')
-  await page.getByRole('link', { name: 'Validation', exact: true }).click()
-  await expect(page.getByText(/Selection risk, temporal stability and path risk/)).toBeVisible()
+  // Validation is a tab of Research now, not a destination of its own: it is
+  // one reading about a strategy rather than a place to go.
+  await page.goto('/#research?tab=validation')
+  await expect(page.getByText(/Selection risk, temporal stability and path risk/)).toBeVisible({
+    timeout: 30_000,
+  })
   await expect(page.getByRole('button', { name: /Run WF \+ CSCV \+ CPCV/ })).toBeVisible()
   await expect(page.getByText(/it is not a Monte Carlo account simulation/)).toBeVisible()
 })
 
 test('capture desktop evidence', async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop-chromium', 'desktop evidence only')
+  test.setTimeout(300_000)
 
-  // The chooser first: it is the screen the product opens on, so it is the one
-  // screenshot that has to exist before any of the others mean anything.
-  await leaveMode(request)
+  /* One screenshot per destination in the shipped manifest, at the width the
+   * product is designed for. Driven by the manifest rather than a list, for the
+   * same reason the navigation sweep is: a hand-written list captures the
+   * screens somebody remembered, and the point of visual evidence is the ones
+   * nobody looked at.
+   *
+   * The first shot used to be the mode chooser, which no longer exists. There
+   * is no "way in" screen to capture now — the product opens on Home. */
+  const manifest = await (await request.get(`${API}/navigation`)).json()
+  const rows = manifest.data.destinations as { route: string; label: string }[]
+  expect(rows.length, 'the navigation manifest is empty').toBeGreaterThan(0)
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  for (const destination of rows) {
+    await page.goto(`/#${destination.route}`)
+    await expect(page.getByText('PAPER ONLY').last()).toBeVisible({ timeout: 30_000 })
+    // Past the lazy boundary and past the entry animation, so the capture is
+    // the screen rather than a fade.
+    await expect(page.locator('#main-content > div.state[role="status"]')).toHaveCount(0, {
+      timeout: 30_000,
+    })
+    await page.waitForFunction(
+      () => document.getAnimations().every((animation) => animation.playState !== 'running'),
+      null,
+      { timeout: 30_000 },
+    )
+    await page.screenshot({
+      path: `../../artifacts/qa/${destination.route}-desktop.png`,
+      fullPage: true,
+    })
+  }
+})
+
+
+test('a run with no archive is refused with the reason, not started and failed', async ({
+  page,
+  request,
+}) => {
+  /* The counterpart to the backtest test, and the one that runs on an
+   * installation with no market data.
+   *
+   * What must not happen is a job that starts, works, and ends `failed` with
+   * nothing said — which is what this build did before the guard above existed,
+   * and what made the test above hang for three minutes watching a job bar go
+   * red. A backtest over bars that are not there is knowable in advance, so it
+   * is refused in advance, with the reason.
+   */
+  test.skip(
+    await archiveLoaded(request),
+    'this installation holds a loaded archive, so a run is started rather than refused',
+  )
+
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: /choose your workspace/i })).toBeVisible()
-  await page.screenshot({ path: '../../artifacts/qa/mode-select.png', fullPage: true })
+  test.skip(!(await openFirstStrategy(page)), 'No strategy records in the current configured vault')
 
-  await enterMode(request, 'normal')
-  await page.goto('/')
-  await expect(page.getByText('Active mission')).toBeVisible()
-  await page.screenshot({ path: '../../artifacts/qa/overview-desktop.png', fullPage: true })
-  await page.getByRole('link', { name: 'Strategies', exact: true }).click()
-  await expect(page.getByLabel('Filter strategies')).toBeVisible()
-  await page.screenshot({ path: '../../artifacts/qa/strategies-desktop.png', fullPage: true })
-  await page.getByRole('link', { name: 'Validation', exact: true }).click()
-  await expect(page.getByRole('button', { name: /Run WF \+ CSCV \+ CPCV/ })).toBeVisible()
-  await page.waitForTimeout(500)
-  await page.screenshot({ path: '../../artifacts/qa/validation-lab-desktop.png', fullPage: true })
+  await page.getByRole('group', { name: 'History range' })
+    .getByRole('button', { name: /^3 months/ }).click()
+  await page.getByRole('button', { name: /Run backtest/ }).click()
 
-  await enterMode(request, 'prop_firm')
-  await page.goto('/')
-  await page.getByRole('link', { name: 'Rule Simulation', exact: true }).click()
-  await expect(page.getByRole('button', { name: /Run the matrix/ })).toBeVisible()
-  await page.screenshot({ path: '../../artifacts/qa/propfirm-desktop.png', fullPage: true })
+  /* Either the run is refused before it starts, or the job bar ends `failed`
+   * carrying the reason. Both are honest; silence is not, and neither is a bar
+   * that goes red with no text. */
+  const refusal = page.getByRole('alert')
+  const failed = page.locator('.jobbar[data-status="failed"]')
+  await expect(refusal.or(failed).first()).toBeVisible({ timeout: 60_000 })
 
-  await enterMode(request, 'normal')
-  await page.goto('/#book')
-  await expect(page.getByText('NAV')).toBeVisible({ timeout: 30_000 })
-  await page.screenshot({ path: '../../artifacts/qa/book-command-desktop.png', fullPage: true })
+  const said = await (await failed.isVisible() ? failed : refusal.first()).innerText()
+  expect(
+    said.trim().length,
+    'the run stopped without saying why, which is the failure this test exists for',
+  ).toBeGreaterThan(0)
+  expect(said).toMatch(/unavailable|not set|no (bars|archive|data)|insufficient|refus/i)
 })

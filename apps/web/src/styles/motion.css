@@ -32,16 +32,6 @@
   to   { transform: translateX(340%); }
 }
 
-@keyframes af-pulse-once {
-  0%   { background-color: var(--brand-wash); }
-  100% { background-color: transparent; }
-}
-
-@keyframes af-blink {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.35; }
-}
-
 @keyframes af-spin { to { transform: rotate(360deg); } }
 
 /* Rows arriving in a list. The delay is set inline per row so a long table
@@ -54,11 +44,6 @@
 /* A bar or fill drawing itself left to right — used for the equity sparkline
    and the matrix cells, where direction carries meaning. */
 .af-wipe-in { animation: af-wipe var(--t-slow) var(--ease-soft) both; }
-
-/* A row that just received a result. Fires once, then leaves no trace. */
-.af-landed { animation: af-pulse-once 1.1s var(--ease-soft) both; }
-
-.af-blink { animation: af-blink 1.4s var(--ease-soft) infinite; }
 .af-spin { animation: af-spin 900ms linear infinite; }
 
 /* Interactive feedback. A control that does nothing on hover reads as dead. */
@@ -72,7 +57,17 @@
     transition-duration: 1ms !important;
     scroll-behavior: auto !important;
   }
-  .af-row-in, .af-panel-in, .af-wipe-in, .af-landed { animation: none; opacity: 1; transform: none; clip-path: none; }
+
+  .af-row-in,
+  .af-panel-in,
+  .af-wipe-in { animation: none; opacity: 1; transform: none; clip-path: none; }
+
+  /* The spinner is the exception, and it is the reason the rule above is not
+     the whole story. The universal reset sets `animation-iteration-count: 1`,
+     which stops a spinner dead — and a frozen spinner is not less motion, it is
+     a control that has stopped telling the truth about whether work is running.
+     So it keeps turning, slowly enough not to be the thing that moves. */
+  .af-spin { animation: af-spin 3s linear infinite !important; }
 }
 
 /* ── Additions for the graph and the mission log ─────────────────────────────
@@ -91,11 +86,6 @@
 }
 
 /* Something that has just been created, as opposed to just re-rendered. */
-@keyframes af-pop {
-  0%   { opacity: 0; transform: scale(.94); }
-  60%  { transform: scale(1.012); }
-  100% { opacity: 1; transform: none; }
-}
 
 /* Waiting on the network. Travels once per cycle rather than pulsing, so it
    reads as "in flight" instead of "broken". */
@@ -106,10 +96,6 @@
 
 /* A ring breathing around a node that is live. Opacity only — a transform here
    would nudge the layout of everything beside it. */
-@keyframes af-halo {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pass) 0%, transparent); }
-  50%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--pass) 9%, transparent); }
-}
 
 /* A value that changed for the better, and one that changed for the worse. Two
    colours, one gesture: the direction is the information. */
@@ -121,13 +107,8 @@
   0%   { color: var(--fail); transform: translateY(-2px); }
   100% { color: inherit; transform: none; }
 }
-
-.af-pop { animation: af-pop var(--t) var(--ease-out) both; }
-.af-halo { animation: af-halo 2.4s var(--ease-soft) infinite; }
 .af-tick-up { animation: af-tick-up 520ms var(--ease-out) both; }
-.af-tick-down { animation: af-tick-down 520ms var(--ease-out) both; }
-
-.skeleton, .af-shimmer {
+.af-tick-down { animation: af-tick-down 520ms var(--ease-out) both; }.skeleton {
   background: linear-gradient(90deg, var(--bg-2) 8%, var(--bg-3) 22%, var(--bg-2) 36%);
   background-size: 280% 100%;
   animation: af-shimmer 1.5s linear infinite;
@@ -137,12 +118,12 @@
    animated — a crossfade would need both alive at once for no gain. */
 .view-content > * { animation: af-rise var(--t-slow) var(--ease-out) both; }
 
-@media (prefers-reduced-motion: reduce) {
-  .af-pop, .af-halo, .af-tick-up, .af-tick-down,
-  .af-shimmer, .skeleton, .view-content > * {
+@media (prefers-reduced-motion: reduce) {.af-tick-up,
+.af-tick-down,
+.skeleton,
+.view-content > * {
     animation: none;
     opacity: 1;
     transform: none;
     box-shadow: none;
-  }
-}
+  }}

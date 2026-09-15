@@ -32,6 +32,11 @@ type Campaign = {
   dataset: string
   symbol: string
   timeframe: string
+  /** The research window this campaign selected, empty when it never chose one.
+   *  Part of the campaign's identity: resuming uses the same window, and
+   *  changing it is a new campaign rather than the same question re-asked. */
+  start_date: string
+  end_date: string
   status: string
   web_research: boolean
   allocation: Record<string, number>
@@ -222,6 +227,9 @@ export function ResearchCampaignView() {
   const [composing, setComposing] = useState(false)
   const [tab, setTab] = useState<'frontier' | 'hypotheses' | 'validation' | 'sources'>('frontier')
   const [stateFilter, setStateFilter] = useState<string>('')
+  //: Which campaign is one click from being deleted. Two steps rather than a
+  //: browser confirm: the second button is where the consequence is stated.
+  const [confirming, setConfirming] = useState<string | null>(null)
 
   const active = useQuery({
     queryKey: ['campaign-active'],
@@ -295,6 +303,18 @@ export function ResearchCampaignView() {
     onSuccess: () => { setError(null); refresh() },
     onError: (e: Error) => setError(e.message),
   })
+  /* Deleting a campaign deletes the *programme*, not what it found: the API
+   * leaves the frontier, the hypotheses and the journal in place and says so in
+   * its answer. Without this control the route existed and nothing in the
+   * product could reach it, so a campaign could be created and started and
+   * never removed. */
+  const remove = useMutation({
+    mutationFn: (id: string) => send<{ deleted: string; research_retained: boolean }>(
+      `/campaigns/${id}`, 'DELETE',
+    ),
+    onSuccess: () => { setError(null); setConfirming(null); refresh() },
+    onError: (e: Error) => { setConfirming(null); setError(e.message) },
+  })
 
   if (active.isLoading) return <p className="muted">Loading the campaign…</p>
 
@@ -338,9 +358,33 @@ export function ResearchCampaignView() {
                           {row.stopped_reason ? ` · ${row.stopped_reason}` : ''}
                         </span>
                       </div>
-                      <button className="btn" onClick={() => start.mutate(row.campaign_id)}>
-                        <Play size={12} /> Resume
-                      </button>
+                      <div className="campaign-row-actions">
+                        <button className="btn" onClick={() => start.mutate(row.campaign_id)}>
+                          <Play size={12} /> Resume
+                        </button>
+                        {confirming === row.campaign_id ? (
+                          <>
+                            <button
+                              className="btn bad"
+                              disabled={remove.isPending}
+                              onClick={() => remove.mutate(row.campaign_id)}
+                            >
+                              Delete — findings kept
+                            </button>
+                            <button className="btn" onClick={() => setConfirming(null)}>
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            className="btn"
+                            aria-label={`Delete ${row.name}`}
+                            onClick={() => setConfirming(row.campaign_id)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -356,9 +400,52 @@ export function ResearchCampaignView() {
   const { campaign, frontier: map, hypotheses: graph, validation: queue } = overview
   const progress = campaign.progress
   const spent = Object.values(progress.spend ?? {}).reduce((a, b) => a + b, 0)
+  const others = (campaigns.data ?? []).filter((row) => row.campaign_id !== campaign.campaign_id)
+
+  if (composing) {
+    return (
+      <div className="campaign">
+        <PanelHead title="Research campaigns" meta={`${(campaigns.data ?? []).length}`} />
+        <CampaignForm
+          onCancel={() => setComposing(false)}
+          onCreated={() => { setComposing(false); refresh() }}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="campaign">
+      {/* Campaigns is a list with one of them open, not a single "Research
+        * Campaign" screen. Starting another one used to require finishing or
+        * stopping the current one first, because the create control only
+        * appeared in the empty state — which is how a first-class concept ends
+        * up feeling like a mode. */}
+      <div className="campaign-bar">
+        <span>{running ? 'Running' : 'Not running'}</span>
+        {others.length > 0 && (
+          <details className="campaign-others">
+            <summary>{others.length} other campaign{others.length === 1 ? '' : 's'}</summary>
+            <ul>
+              {others.map((row) => (
+                <li key={row.campaign_id}>
+                  <b>{row.name}</b>
+                  <span className="mono muted">
+                    {row.status}
+                    {row.start_date || row.end_date
+                      ? ` · ${row.start_date || 'start'} — ${row.end_date || 'end'}`
+                      : ' · window not selected'}
+                    {row.stopped_reason ? ` · ${row.stopped_reason}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        <button className="btn" onClick={() => setComposing(true)}>
+          <Plus size={13} /> New campaign
+        </button>
+      </div>
       <header className="campaign-head">
         <div className="campaign-title">
           <i className={running ? 'pulse' : 'pulse is-off'} />
@@ -366,6 +453,23 @@ export function ResearchCampaignView() {
             <span className="mono muted">{campaign.dataset} · {campaign.symbol} · {campaign.timeframe}</span>
             <h2>{campaign.name}</h2>
             <p>{campaign.objective}</p>
+            {/* The window, beside the objective rather than three screens in.
+              * A result is a claim about a span of history, and a campaign whose
+              * span is not on the same screen as its question has separated the
+              * two halves of the claim. */}
+            <p className="campaign-window">
+              {campaign.start_date || campaign.end_date ? (
+                <>
+                  <b>Research window</b>{' '}
+                  {campaign.start_date || 'archive start'} — {campaign.end_date || 'archive end'}
+                </>
+              ) : (
+                <>
+                  <b>Research window</b> not selected — this campaign runs on whatever the
+                  engine last loaded, which is the most recent bars rather than a chosen span.
+                </>
+              )}
+            </p>
           </div>
         </div>
         <div className="campaign-controls">
@@ -724,25 +828,233 @@ function SourceList({
   )
 }
 
+/** The research window, as a choice rather than as whatever was last loaded.
+ *
+ * **The problem this fixes.** `Campaign.start_date` and `Campaign.end_date`
+ * were on the model, stored in their own columns, returned by the API — and
+ * this form never sent them. The engine asked `MarketService.load` for
+ * `max_bars=250_000`, which is `frame.tail(250_000)`: about nine months of
+ * one-minute bars, always the most recent nine months, shared by every worker
+ * and every experiment in the campaign. A day-of-week seasonality hypothesis
+ * got nine months and nothing anywhere said so. The default objective even
+ * claimed "the full available history", which was the one thing it never got.
+ *
+ * **Why the numbers come from the server.** Every figure below —  the
+ * reservoir, the resolved window, the bar estimate, the warm-up, the
+ * sufficiency bound — is computed by `campaign_scope`, which calls the same
+ * `Campaign.time_scope` the engine calls and reads the warm-up from the same
+ * template catalogue `chronological_split` reads. A form doing its own range
+ * arithmetic would be a second answer to "what will this run on", and the two
+ * would disagree the first time a template's warm-up changed.
+ */
+const PRESETS: { id: string; label: string }[] = [
+  { id: '0.0833', label: '1 month' },
+  { id: '0.25', label: '3 months' },
+  { id: '0.5', label: '6 months' },
+  { id: '1', label: '1 year' },
+  { id: '2', label: '2 years' },
+  { id: '3', label: '3 years' },
+  { id: '5', label: '5 years' },
+  { id: '10', label: '10 years' },
+  { id: 'full', label: 'Full dataset' },
+  { id: 'custom', label: 'Custom range' },
+]
+
+type ScopePreview = {
+  dataset: string
+  available_start: string
+  available_end: string
+  available_years?: number
+  selected: boolean
+  reason?: string
+  selected_start?: string
+  selected_end?: string
+  selected_days?: number
+  selected_years?: number
+  approximate_bars?: number
+  bars_per_year?: number
+  warmup_bars?: number
+  required_bars?: number
+  sufficient?: boolean
+  clamped?: boolean
+  method?: string
+  fingerprint?: string
+  timezone?: string
+  warning?: string
+  note?: string
+}
+
+const day = (iso: string | undefined) => (iso ? iso.slice(0, 10) : '—')
+
+function ScopeChooser({
+  dataset, preset, start, end, onPreset, onStart, onEnd,
+}: {
+  dataset: string
+  preset: string
+  start: string
+  end: string
+  onPreset: (value: string) => void
+  onStart: (value: string) => void
+  onEnd: (value: string) => void
+}) {
+  const custom = preset === 'custom'
+  const scope = useQuery({
+    queryKey: ['campaign-scope', dataset, preset, start, end],
+    retry: false,
+    queryFn: () => {
+      const params = new URLSearchParams({ dataset })
+      if (custom) {
+        if (start) params.set('start', start)
+        if (end) params.set('end', end)
+      } else {
+        params.set('preset', preset)
+      }
+      return getJson<ScopePreview>(`/campaigns/scope?${params}`)
+    },
+    enabled: Boolean(dataset) && (!custom || Boolean(start || end)),
+  })
+  const data = scope.data
+
+  return (
+    <fieldset className="scope-chooser">
+      <legend>Research window</legend>
+      <div className="scope-presets" role="radiogroup" aria-label="Research window">
+        {PRESETS.map((option) => (
+          <label key={option.id} data-on={preset === option.id || undefined}>
+            <input
+              type="radio"
+              name="scope-preset"
+              checked={preset === option.id}
+              onChange={() => onPreset(option.id)}
+            />
+            {option.label}
+          </label>
+        ))}
+      </div>
+
+      {custom && (
+        <div className="scope-custom">
+          <label className="field-block">
+            From
+            <input type="date" value={start} onChange={(e) => onStart(e.target.value)} required />
+          </label>
+          <label className="field-block">
+            To
+            <input type="date" value={end} onChange={(e) => onEnd(e.target.value)} required />
+          </label>
+        </div>
+      )}
+
+      {scope.isError && (
+        <p className="warning bad" role="alert">{(scope.error as Error).message}</p>
+      )}
+
+      {data && (
+        <dl className="scope-readout">
+          <div>
+            <dt>Reservoir</dt>
+            <dd>
+              {day(data.available_start)} — {day(data.available_end)}
+              {data.available_years ? ` · ${data.available_years} years` : ''}
+            </dd>
+          </div>
+          {data.selected ? (
+            <>
+              <div>
+                <dt>Selected window</dt>
+                <dd className="scope-window">
+                  {day(data.selected_start)} — {day(data.selected_end)}
+                  {data.selected_years ? ` · ${data.selected_years} years` : ''}
+                </dd>
+              </div>
+              <div>
+                <dt>Approximate bars</dt>
+                <dd>{(data.approximate_bars ?? 0).toLocaleString()}</dd>
+              </div>
+              <div>
+                <dt>Warm-up</dt>
+                <dd>
+                  {(data.warmup_bars ?? 0).toLocaleString()} bars, loaded from before the
+                  window and purged out of the scored partitions
+                </dd>
+              </div>
+              <div>
+                <dt>Evaluation range</dt>
+                <dd>{day(data.selected_start)} — {day(data.selected_end)}</dd>
+              </div>
+              <div>
+                <dt>Scope fingerprint</dt>
+                <dd className="mono">{(data.fingerprint ?? '').slice(0, 16)}</dd>
+              </div>
+              <div>
+                <dt>Timezone</dt>
+                <dd>{data.timezone}</dd>
+              </div>
+            </>
+          ) : (
+            <div>
+              <dt>Selected window</dt>
+              <dd className="warn">{data.reason}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+
+      {data?.clamped && (
+        <p className="warning">
+          The requested range reaches past this archive, so it was clamped to what exists.
+          The window above is what will run.
+        </p>
+      )}
+      {data?.warning && <p className="warning bad" role="alert">{data.warning}</p>}
+    </fieldset>
+  )
+}
+
 function CampaignForm({ onCancel, onCreated }: { onCancel: () => void; onCreated: () => void }) {
   const [name, setName] = useState('NQ Intraday Alpha Discovery')
   const [objective, setObjective] = useState(
-    'Discover intraday alpha on NQ one-minute bars across the full available history, ' +
+    'Discover intraday alpha on NQ one-minute bars over the selected research window, ' +
     'preferring mechanisms that can be stated and falsified.',
   )
   const [dataset, setDataset] = useState('nq_1m_16y')
   const [symbol, setSymbol] = useState('NQ')
   const [webResearch, setWebResearch] = useState(false)
   const [maxExperiments, setMaxExperiments] = useState(500)
+  const [preset, setPreset] = useState('2')
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   const datasets = useQuery({ queryKey: ['datasets'], queryFn: () => getJson<DatasetInfo[]>('/datasets') })
+  /* The window the campaign will carry, resolved by the server. Read here as
+   * well as in the chooser so Create sends the *dates* rather than the preset:
+   * a preset is a way of saying a window, and storing the saying instead of the
+   * window would make "the last two years" mean something different next year. */
+  const resolved = useQuery({
+    queryKey: ['campaign-scope', dataset, preset, start, end],
+    retry: false,
+    queryFn: () => {
+      const params = new URLSearchParams({ dataset })
+      if (preset === 'custom') {
+        if (start) params.set('start', start)
+        if (end) params.set('end', end)
+      } else {
+        params.set('preset', preset)
+      }
+      return getJson<ScopePreview>(`/campaigns/scope?${params}`)
+    },
+    enabled: Boolean(dataset) && (preset !== 'custom' || Boolean(start || end)),
+  })
+
   const create = useMutation({
     mutationFn: () => send<Campaign>('/campaigns', 'POST', {
       name,
       objective,
       dataset,
       symbol,
+      start_date: day(resolved.data?.selected_start) === '—' ? '' : day(resolved.data?.selected_start),
+      end_date: day(resolved.data?.selected_end) === '—' ? '' : day(resolved.data?.selected_end),
       web_research: webResearch,
       stopping: { max_experiments: maxExperiments },
     }),
@@ -751,6 +1063,7 @@ function CampaignForm({ onCancel, onCreated }: { onCancel: () => void; onCreated
   })
 
   const chosen = datasets.data?.find((d) => d.key === dataset)
+  const unusable = resolved.data?.sufficient === false
 
   return (
     <form
@@ -802,6 +1115,17 @@ function CampaignForm({ onCancel, onCreated }: { onCancel: () => void; onCreated
           />
         </label>
       </div>
+
+      <ScopeChooser
+        dataset={dataset}
+        preset={preset}
+        start={start}
+        end={end}
+        onPreset={setPreset}
+        onStart={setStart}
+        onEnd={setEnd}
+      />
+
       <label className="field-inline">
         <input type="checkbox" checked={webResearch} onChange={(e) => setWebResearch(e.target.checked)} />
         Search arXiv and Crossref for mechanisms
@@ -820,7 +1144,11 @@ function CampaignForm({ onCancel, onCreated }: { onCancel: () => void; onCreated
       {error && <p className="warning bad">{error}</p>}
       <div className="campaign-form-actions">
         <button type="button" className="btn" onClick={onCancel}>Cancel</button>
-        <button type="submit" className="btn primary" disabled={create.isPending}>
+        <button
+          type="submit"
+          className="btn primary"
+          disabled={create.isPending || unusable || resolved.isPending}
+        >
           {create.isPending ? 'Creating…' : 'Create campaign'}
         </button>
       </div>

@@ -25,13 +25,8 @@ const BUILT_INS: { mode: string; name: string; icon: string; detail: string }[] 
   { mode: 'ai', name: 'AI', icon: '◇', detail: 'Campaigns, agents and the research record.' },
 ]
 
-export function WorkspaceSwitcher({ onOpened, onLeaveMode }: {
+export function WorkspaceSwitcher({ onOpened }: {
   onOpened?: () => void
-  /** Return to the chooser. Kept, and kept *here*, because changing
-   *  mode changes what an assistant may do on your behalf — it is a permissions
-   *  decision, not a navigation one, and it belongs beside the arrangements
-   *  rather than in the header where it read as "switch screens". */
-  onLeaveMode?: () => void
 }) {
   const [creating, setCreating] = useState(false)
   const workspaces = useWorkspaces()
@@ -109,12 +104,14 @@ export function WorkspaceSwitcher({ onOpened, onLeaveMode }: {
         </div>
       </section>
 
-      {onLeaveMode && (
-        <button className="ws-leave-mode" onClick={onLeaveMode}>
-          Change operating mode
-          <small>Decides what an assistant may do on your behalf. Your workspaces are unaffected.</small>
-        </button>
-      )}
+      {/* "Change operating mode" used to live here, and the mode it changed
+        * decided two unrelated things at once. Navigation is the rail now, and
+        * what an assistant may do is a setting with its own screen — so the
+        * link goes there and says what it actually does. */}
+      <a className="ws-leave-mode" href="#settings?tab=permissions">
+        What an assistant may do
+        <small>Whether it may start unattended work, and whether it may reach the book. Your workspaces are unaffected.</small>
+      </a>
 
       {creating && <CreateWorkspace onClose={() => setCreating(false)} onCreated={onOpened} />}
       {active.isError && <p className="ws-error" role="alert">The active workspace could not be loaded.</p>}

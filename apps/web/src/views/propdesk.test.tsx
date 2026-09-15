@@ -27,6 +27,7 @@ const PROVIDERS = {
       rate_limit_per_minute: null,
       session_seconds: null,
       live_connector_implemented: true,
+      read_only_connector_implemented: false,
       documentation_url: '',
       evidence: 'local',
       limitations: ['Fills are modelled, not calibrated against any venue.'],
@@ -42,9 +43,26 @@ const PROVIDERS = {
       rate_limit_per_minute: null,
       session_seconds: null,
       live_connector_implemented: false,
+      read_only_connector_implemented: true,
       documentation_url: 'https://www.rithmic.com/apis',
       evidence: 'dossier',
       limitations: ['Password custody: there is no delegated auth.'],
+    },
+    {
+      provider: 'tradovate',
+      display_name: 'Tradovate',
+      what_it_is: 'Order-routing and account infrastructure.',
+      auth_method: 'oauth',
+      environments: ['demo', 'live'],
+      account_key_fields: ['account_id'],
+      bracket_model: 'native_oso',
+      rate_limit_per_minute: null,
+      session_seconds: null,
+      live_connector_implemented: false,
+      read_only_connector_implemented: false,
+      documentation_url: 'https://api.tradovate.com',
+      evidence: 'dossier',
+      limitations: ['Third-party access is not self-serve.'],
     },
   ],
   platforms: [
@@ -59,18 +77,22 @@ const PROVIDERS = {
   ],
   data_feeds: [],
   live_connectors_implemented: ['simulated'],
+  read_only_connectors_implemented: ['rithmic'],
   adapters: {
     simulated: 'executes against a local simulator',
-    rithmic: 'declared; refuses every command, no live connector in this build',
+    rithmic:
+      'read-only connector: connects, discovers accounts and takes snapshots. ' +
+      'Refuses to place, modify, cancel or flatten.',
   },
   required_work: {
     rithmic: {
-      engineering: ['Implement R | Protocol over WebSocket.'],
+      engineering: ['Verify the order lifecycle against Rithmic Test.'],
       external: ['Pass conformance before it may reach production systems.'],
       credentials: ['A Rithmic system, username and password per connection.'],
       open_questions: [],
     },
   },
+  rithmic_blocker: '',
 }
 
 const CONNECTIONS = {
@@ -266,11 +288,39 @@ afterEach(() => {
 describe('the desk says what it cannot reach', () => {
   test('a provider with no live connector says so, and what it would take', async () => {
     draw('desk')
-    expect(await screen.findByText('Rithmic (R | Protocol)')).toBeInTheDocument()
+    expect(await screen.findByText('Tradovate')).toBeInTheDocument()
     expect(screen.getAllByText('No live connector').length).toBeGreaterThan(0)
     expect(screen.getByText('Connector implemented')).toBeInTheDocument()
     expect(
       screen.getByText('Pass conformance before it may reach production systems.'),
+    ).toBeInTheDocument()
+  })
+
+  test('an installation missing what a connection needs is told what is missing', async () => {
+    /* The read-only connector is only reachable where the operator's SDK and a
+     * protobuf compiler are installed. Where they are not, the screen says so
+     * rather than offering a connection that would fail on the first click. */
+    ROUTES['/propdesk/providers'] = {
+      ...PROVIDERS,
+      rithmic_blocker: "the operator's R | Protocol SDK is not installed",
+    }
+    draw('desk')
+    expect(
+      await screen.findByText(/R \| Protocol SDK is not installed/),
+    ).toBeInTheDocument()
+    ROUTES['/propdesk/providers'] = PROVIDERS
+  })
+
+  test('a provider this build can read but not trade is neither of the other two', async () => {
+    /* Three states, and the middle one is the easiest to lose. Rithmic can be
+     * read from — accounts, positions, health — and cannot be traded through,
+     * and a screen that drew it as "connector implemented" would be claiming an
+     * order can leave the machine. */
+    draw('desk')
+    expect(await screen.findByText('Rithmic (R | Protocol)')).toBeInTheDocument()
+    expect(screen.getByText('Read-only connector')).toBeInTheDocument()
+    expect(
+      screen.getByText('What sending an order through this would need'),
     ).toBeInTheDocument()
   })
 

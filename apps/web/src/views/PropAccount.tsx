@@ -7,6 +7,7 @@ import {
   LEVEL_LABEL, LEVEL_TONE, type AccountAssessment, type RuleStatus,
   usePropAccounts, usePropMutations, usePropStatus,
 } from '../prop'
+import { useRuleSets, type RuleSet } from '../propdesk'
 import type { StrategyListItem } from '../types'
 
 /* Prop Firm mode: one question, answered before anything else.
@@ -276,8 +277,110 @@ function RulesSection({ status }: { status: { account: { rules: Record<string, u
       {Boolean(rules.source_note) && (
         <Limitations items={[String(rules.source_note)]} title="Where this rule set came from" />
       )}
+
+      {/* The files on disk, beside the account's own numbers. An operator
+          checking a contract wants both: what this account is held to, and what
+          the directory currently says the contract is. They can differ — an
+          account keeps the numbers it opened with — and seeing them together is
+          how that gets noticed. */}
+      <RuleCatalogue />
     </>
   )
+}
+
+/** What is readable from the rules directory, and how far it can be trusted.
+ *
+ * The four files in `rules/` shipped for months with nothing able to read them.
+ * Now that they load, the thing that must not happen is their numbers arriving
+ * on this screen looking authoritative: a rule set is a claim somebody typed,
+ * and the only question that matters is whether anybody checked it against a
+ * contract. So every row leads with its review state, and an unchecked one says
+ * so in the same breath as its balance.
+ */
+function RuleCatalogue() {
+  const catalogue = useRuleSets()
+  if (catalogue.isPending) {
+    return <div className="state" role="status">Reading the rules directory…</div>
+  }
+  const data = catalogue.data
+  const sets = data?.rule_sets ?? []
+  const rejected = data?.rejected ?? []
+
+  return (
+    <section className="prop-block">
+      <PanelHead
+        title="Rule sets on disk"
+        meta={data ? `${data.directory} · schema ${data.schema_version}` : 'the rules directory'}
+      />
+      {sets.length === 0 && rejected.length === 0 ? (
+        <Empty
+          title="The rules directory is empty"
+          detail="A rule set is a file describing one account's contract: its starting balance, its loss limits, its trailing behaviour and who checked those numbers against the firm's terms."
+        />
+      ) : null}
+
+      {(data?.warnings ?? []).length > 0 && (
+        <Limitations title="Before you trade to these numbers" items={data!.warnings} />
+      )}
+
+      {sets.length > 0 && (
+        <table className="measure-table is-plain">
+          <thead>
+            <tr>
+              <th scope="col">Rule set</th>
+              <th scope="col">Checked</th>
+              <th scope="col">Balance</th>
+              <th scope="col">Max loss</th>
+              <th scope="col">Trailing</th>
+            </tr>
+          </thead>
+          <tbody>
+          {sets.map((row) => (
+            <tr key={row.rule_id}>
+              <td>
+                <strong>{row.display_name}</strong>
+                <small className="table-note mono">{row.origin}</small>
+              </td>
+              <td>
+                <StatusPill tone={reviewTone(row)} label={reviewLabel(row)} />
+              </td>
+              <td className="mono num">{String(row.rules.starting_balance ?? '—')}</td>
+              <td className="mono num">{String(row.rules.maximum_loss ?? '—')}</td>
+              <td>{String(row.rules.trail_mode ?? '—').replace(/_/g, ' ')}</td>
+            </tr>
+          ))}
+          </tbody>
+        </table>
+      )}
+
+      {rejected.length > 0 && (
+        /* Named, never quietly absent. A catalogue short by one reads as though
+         * the file was never written. */
+        <Limitations
+          title={`${rejected.length} file${rejected.length > 1 ? 's' : ''} could not be read`}
+          items={rejected.map((row) => `${row.origin}: ${row.reason}`)}
+        />
+      )}
+    </section>
+  )
+}
+
+/** Three states, and only one of them is "checked".
+ *
+ * `VERIFIED` is the only tone that reads as good. `EXPIRED` is a warning rather
+ * than an error: the numbers were checked once and the window has passed, which
+ * is a reason to look again rather than a reason to distrust them outright.
+ */
+function reviewLabel(row: RuleSet): string {
+  if (row.status === 'VERIFIED') return 'Checked'
+  if (row.status === 'EXPIRED') return 'Review lapsed'
+  return 'Never checked'
+}
+
+function reviewTone(row: RuleSet): 'good' | 'warn' | 'unknown' {
+  if (row.status === 'VERIFIED') return 'good'
+  if (row.status === 'EXPIRED') return 'warn'
+  return 'unknown'
 }
 
 function NoAccount() {
@@ -298,6 +401,10 @@ function NoAccount() {
           'Shipping one firm’s numbers as a starting point would mean every account was measured against a contract nobody had read.',
         ]}
       />
+      {/* The files on disk, offered as a starting point and labelled with how
+          far anybody has checked them. This is the screen where an operator
+          decides what to trust, so the review state is on it. */}
+      <RuleCatalogue />
     </div>
   )
 }

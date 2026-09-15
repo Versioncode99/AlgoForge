@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 import pytest
 from forge.modes.models import MODES, WorkspaceMode
+from forge.product.navigation import DESTINATIONS
 from forge.workstation.models import Workspace, WorkspaceKind
 from forge.workstation.sidebar import (
     CATALOGUE,
@@ -59,20 +60,24 @@ def test_an_unknown_route_cannot_enter_a_sidebar() -> None:
 
 
 # ── the built-in rails ───────────────────────────────────────────────────────
-def test_each_built_in_mode_keeps_the_rail_it_always_had() -> None:
-    for mode in WorkspaceMode:
-        rail = default_sidebar_for(mode)
-        routes = set(rail.routes())
-        assert routes == {s.route for s in MODES[mode].sections}
+def test_every_workspace_starts_from_the_products_own_rail() -> None:
+    """One navigation, so one default rail.
+
+    It used to be one per mode, which is why creating a workspace asked which
+    mode to start from — a question about navigation dressed as a question about
+    what kind of trader you are.
+    """
+    rails = {mode: default_sidebar_for(mode) for mode in WorkspaceMode}
+    for mode, rail in rails.items():
+        assert set(rail.routes()) == {d.route for d in DESTINATIONS}, mode
+    assert len({rail.routes() for rail in rails.values()}) == 1
 
 
 def test_a_workspace_with_no_sidebar_falls_back_to_its_mode() -> None:
     """A layout saved before sidebars existed still opens with navigation."""
     workspace = _workspace(mode="prop_firm")
     assert workspace.sidebar is None
-    assert set(workspace.rail().routes()) == {
-        s.route for s in MODES[WorkspaceMode.PROP_FIRM].sections
-    }
+    assert set(workspace.rail().routes()) == {d.route for d in DESTINATIONS}
 
 
 def test_a_workspace_with_no_mode_and_no_sidebar_is_empty_not_broken() -> None:
@@ -80,35 +85,69 @@ def test_a_workspace_with_no_mode_and_no_sidebar_is_empty_not_broken() -> None:
 
 
 # ── composition: the point of the exercise ───────────────────────────────────
+def test_a_rail_saved_under_the_old_route_names_still_opens() -> None:
+    """A workspace built before the mode navigation was replaced keeps working.
+
+    Its items name `desk`, `charts`, `portfolio` — routes this product no longer
+    has. They still name a *screen*, so they are translated on the way in and
+    stored canonically, and every subsequent edit finds them under either
+    spelling. Refusing them would have deleted somebody's arrangement to make a
+    rename tidy.
+    """
+    rail = (
+        Sidebar()
+        .with_group("mine", "Mine")
+        .with_item("desk", group_id="mine")
+        .with_item("charts", group_id="mine")
+        .with_item("portfolio", group_id="mine")
+    )
+    assert rail.routes() == (
+        "propdesk:accounts", "markets:charts", "trading:portfolio",
+    )
+    # Found by the name it was saved under, as well as by the current one.
+    assert rail.has("desk") and rail.has("propdesk:accounts")
+    assert rail.without_item("charts").routes() == (
+        "propdesk:accounts", "trading:portfolio",
+    )
+
+
 def test_one_workspace_can_hold_prop_and_research_without_switching_modes() -> None:
     workspace = (
         _workspace(name="My Prop Research", mode="prop_firm")
-        .adding_sidebar_group("research", "RESEARCH")
-        .adding_sidebar_item("campaigns", group_id="research")
-        .adding_sidebar_item("agents", group_id="research")
-        .adding_sidebar_item("experiments", group_id="research")
+        .adding_sidebar_group("mine", "MY DESK")
+        .adding_sidebar_item("propdesk:copy", group_id="mine")
+        .adding_sidebar_item("propdesk:drawdown", group_id="mine")
+        .adding_sidebar_item("research:experiments", group_id="mine")
+        .adding_sidebar_item("markets:charts", group_id="mine")
     )
     routes = set(workspace.rail().routes())
-    # Prop destinations from Prop Firm mode...
-    assert "desk" in routes
-    assert "copy" in routes
-    # ...and research destinations that live in AI mode, side by side, with no
-    # mode switch and nothing lost from the prop rail.
-    assert {"campaigns", "agents", "experiments"} <= routes
+    # A prop operator's four screens on one rail, two of which are tabs inside
+    # different destinations. This used to be impossible twice over: the rail
+    # was whichever mode was open, and a tab could not be named at all.
+    assert {
+        "propdesk:copy",
+        "propdesk:drawdown",
+        "research:experiments",
+        "markets:charts",
+    } <= routes
+    # And the product's own nine are still there underneath it.
+    assert {d.route for d in DESTINATIONS} <= routes
 
 
 def test_a_workspace_can_be_composed_from_nothing() -> None:
     workspace = (
         _workspace(name="My Quant Desk")
         .adding_sidebar_group("trading", "MY TRADING")
-        .adding_sidebar_item("charts", group_id="trading")
-        .adding_sidebar_item("desk", group_id="trading")
+        .adding_sidebar_item("markets:charts", group_id="trading")
+        .adding_sidebar_item("propdesk:accounts", group_id="trading")
         .adding_sidebar_group("research", "RESEARCH")
         .adding_sidebar_item("campaigns", group_id="research")
     )
     rendered = workspace.rail().as_dict()
     assert [g["label"] for g in rendered["groups"]] == ["MY TRADING", "RESEARCH"]
-    assert [i["route"] for i in rendered["groups"][0]["items"]] == ["charts", "desk"]
+    assert [i["route"] for i in rendered["groups"][0]["items"]] == [
+        "markets:charts", "propdesk:accounts",
+    ]
 
 
 def test_the_first_item_into_an_empty_sidebar_gets_a_group() -> None:
@@ -126,7 +165,7 @@ def test_add_remove_reorder_rename_group_collapse_pin_hide_all_work() -> None:
         .adding_sidebar_item("charts", group_id="a")
         .adding_sidebar_item("desk", group_id="b")
     )
-    assert workspace.rail().routes() == ("charts", "desk")
+    assert workspace.rail().routes() == ("markets:charts", "propdesk:accounts")
 
     workspace = workspace.reordering_sidebar_groups(["b", "a"])
     assert [g.group_id for g in workspace.rail().groups] == ["b", "a"]
@@ -140,7 +179,10 @@ def test_add_remove_reorder_rename_group_collapse_pin_hide_all_work() -> None:
     workspace = workspace.renaming_sidebar_item("charts", "NQ Chart")
     rendered = workspace.rail().as_dict()
     charts = next(
-        i for g in rendered["groups"] for i in g["items"] if i["route"] == "charts"
+        i
+        for g in rendered["groups"]
+        for i in g["items"]
+        if i["route"] == "markets:charts"
     )
     assert charts["label"] == "NQ Chart"
     assert charts["renamed"] is True
@@ -168,7 +210,7 @@ def test_moving_an_item_between_groups_keeps_its_settings() -> None:
         .moving_sidebar_item("charts", group_id="b")
     )
     rail = workspace.rail()
-    assert rail.locate("charts")[0] == "b"
+    assert rail.locate("markets:charts")[0] == "b"
     item = rail.require_group("b").items[0]
     assert item.label == "NQ"
     assert item.pinned is True

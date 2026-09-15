@@ -13,10 +13,18 @@
  *
  * Collapsed by default. A thread is a record of a session's work and a wall of
  * charts is not readable; the reader asks for the one they want.
+ *
+ * **The renderers are loaded when a chart is opened, not when the chat is.**
+ * They used to be static imports, which put ECharts and the canvas renderer —
+ * about 1.2 MB of JavaScript between them — into the module graph of every
+ * conversation, including one that never mentions a chart. Opening Chat paid
+ * for the entire visualisation stack before the composer worked. Each one is
+ * behind `lazy` now, so the cost arrives when somebody presses "Show the
+ * chart", which is the only moment it is worth anything.
  */
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { getJson } from '../api'
 import type { Artifact } from '../chat'
 import {
@@ -26,9 +34,15 @@ import {
   visualFor,
   type Visual,
 } from '../chat-visuals'
-import { CurveChart, PathBand } from '../charts'
-import { AnalysisChart, type AnalysisResult } from './AnalysisChart'
-import { RegimeMatrix, type RegimeCell } from './RegimeMatrix'
+import type { AnalysisResult } from './AnalysisChart'
+import type { RegimeCell } from './RegimeMatrix'
+
+const AnalysisChart = lazy(() =>
+  import('./AnalysisChart').then((m) => ({ default: m.AnalysisChart })))
+const RegimeMatrix = lazy(() =>
+  import('./RegimeMatrix').then((m) => ({ default: m.RegimeMatrix })))
+const CurveChart = lazy(() => import('../charts').then((m) => ({ default: m.CurveChart })))
+const PathBand = lazy(() => import('../charts').then((m) => ({ default: m.PathBand })))
 
 export function ArtifactVisual({ artifact }: { artifact: Artifact }) {
   const visual = visualFor(artifact)
@@ -80,7 +94,9 @@ function Drawn({ visual }: { visual: Visual }) {
 
   return (
     <div className="art-visual-body">
-      {body}
+      <Suspense fallback={<p className="art-visual-state">Loading the renderer…</p>}>
+        {body}
+      </Suspense>
       <p className="art-visual-caption">{visual.caption}</p>
     </div>
   )

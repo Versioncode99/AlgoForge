@@ -150,16 +150,6 @@ export function token(name: string, fallback: string): string {
   }
 }
 
-/** Whether motion should be suppressed, from the setting or the OS. */
-export function motionReduced(): boolean {
-  if (typeof document === 'undefined') return false
-  if (document.documentElement.dataset.motion === 'reduced') return true
-  try {
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  } catch {
-    return false
-  }
-}
 
 /** A value that changes whenever the appearance does.
  *

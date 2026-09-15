@@ -162,7 +162,12 @@ export function OverviewView({ onRoute }: { onRoute?: (id: string) => void }) {
               <div><strong>Nothing has happened yet</strong><p>Events appear as the engine invents, backtests and judges candidates.</p></div>
             </div>
           ) : (
-            <ol className="research-timeline">
+            /* Focusable because it scrolls. A scroll container with no
+               focusable children is unreachable from a keyboard: the content
+               is there and no key press moves it.
+               No `role` — an explicit one replaces the list semantics, and the
+               `<li>` children then belong to nothing. */
+            <ol className="research-timeline" tabIndex={0} aria-label="Research timeline">
               {events.data.map((event, i) => (
                 <li key={`${event.ts}-${i}`} data-level={event.level}>
                   <time className="mono">{event.ts.slice(11, 19)}</time>
@@ -202,7 +207,13 @@ export function OverviewView({ onRoute }: { onRoute?: (id: string) => void }) {
         {coverage && (
           <div className="panel">
             <PanelHead title="Family × market coverage" meta="observed expectancy, not a verdict" />
-            <div className="coverage-matrix" style={{ gridTemplateColumns: `minmax(120px, 1fr) repeat(${coverage.markets.length}, minmax(74px, .7fr))` }}>
+            <div
+              className="coverage-matrix"
+              tabIndex={0}
+              role="group"
+              aria-label="Family by market coverage"
+              style={{ gridTemplateColumns: `minmax(120px, 1fr) repeat(${coverage.markets.length}, minmax(74px, .7fr))` }}
+            >
               <span />{coverage.markets.map(m => <strong key={m}>{m}</strong>)}
               {coverage.rows.flatMap(row => [
                 <b key={`${row.key}-name`}>{row.name}</b>,

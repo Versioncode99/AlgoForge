@@ -4,93 +4,125 @@ import { cleanup, configure, fireEvent, render, screen, within } from '@testing-
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { App } from './App'
 
-/* The four-mode shell, exercised through the interface a person uses.
+/* The shell, exercised through the interface a person uses.
  *
  * The fixtures below are the *shape* the API returns, not a convenience: the
- * mode manifest drives the rail, so a test that invented its own navigation
- * would pass while the real one was empty. `session` is mutable so a test can
- * say which mode is open before rendering, which is the only piece of state the
- * whole shell hangs off.
+ * product manifest drives the rail, so a test that invented its own navigation
+ * would pass while the real one was empty.
+ *
+ * There is no mode to set up any more. The shell opens on the product, and a
+ * test says where it is by setting the hash — which is also how a person gets
+ * there. Everything the mode-scoped tests used to assert about *reachability*
+ * is still asserted; what is gone is the state before the product.
  */
 
 vi.mock('echarts-for-react/lib/core', () => ({ default: () => <div data-testid="chart" /> }))
 configure({ asyncUtilTimeout: 12000 })
 
-const section = (route: string, label: string, group: string, detail = 'detail') => ({
-  route, label, group, detail, panel_kinds: [],
+const tab = (id: string, label: string, detail = 'detail', advanced = false) => ({
+  tab: id, label, detail, panel_kinds: [], advanced,
+})
+const dest = (
+  route: string,
+  label: string,
+  group: string,
+  tabs: ReturnType<typeof tab>[] = [],
+) => ({
+  route, label, detail: `${label} detail`, group, panel_kinds: [], tabs,
+  default_tab: tabs.length ? tabs[0].tab : '',
 })
 
-type Descriptor = {
-  mode: string; name: string; tagline: string; purpose: string; workspace_template: string
-  sections: { route: string; label: string; group: string; detail: string; panel_kinds: string[] }[]
-  stances: string[]; default_stance: string | null; limitations: string[]
-}
-
-const NORMAL: Descriptor = {
-  mode: 'normal',
-  name: 'Normal',
-  tagline: 'Your trading environment.',
-  purpose: 'Trade, analyse and monitor markets without a firm’s constraints.',
-  workspace_template: 'normal_desk',
-  sections: [
-    section('overview', 'Overview', 'Desk'),
-    section('strategies', 'Strategies', 'Strategy'),
-    section('evidence', 'Evidence', 'Strategy'),
-    section('positions', 'Positions & Orders', 'Book'),
-    // The deterministic book loop, carried over when the Hedge Fund mode was
-    // removed. Normal is the environment for somebody trading their own book,
-    // so this is where the gate and the portfolio belong.
-    section('portfolio', 'Portfolio', 'Book'),
-    section('gate', 'Pre-Trade Gate', 'Book'),
-    section('book', 'Book Overview', 'Book'),
-    section('settings', 'Settings', 'System'),
+/* The manifest, as `/navigation` serves it. Deliberately the real shape and the
+ * real routes: a fixture that invented its own would let the rail pass here and
+ * be empty in the product. */
+const NAVIGATION = {
+  groups: ['Workspace', 'Research', 'Trading', 'System'],
+  destinations: [
+    dest('home', 'Home', 'Workspace', [tab('summary', 'Summary'), tab('workspace', 'Panels')]),
+    dest('chat', 'Chat', 'Workspace'),
+    dest('research', 'Research', 'Research', [
+      tab('workbench', 'Workbench'), tab('findings', 'Findings'),
+      tab('experiments', 'Experiments'), tab('validation', 'Validation'),
+      tab('evidence', 'Evidence'),
+    ]),
+    dest('campaigns', 'Campaigns', 'Research', [
+      tab('all', 'Campaigns'), tab('control', 'Control'), tab('lineage', 'Lineage'),
+      tab('memory', 'Memory'), tab('pipeline', 'Pipeline', 'd', true),
+      tab('automation', 'Automation', 'd', true),
+    ]),
+    dest('strategies', 'Strategies', 'Research', [
+      tab('library', 'Library'), tab('runs', 'Runs'), tab('trades', 'Trades'),
+    ]),
+    dest('markets', 'Markets', 'Research', [tab('charts', 'Charts'), tab('data', 'Data')]),
+    dest('trading', 'Trading', 'Trading', [
+      tab('overview', 'Overview'), tab('book', 'Positions & Orders'),
+      tab('portfolio', 'Portfolio'), tab('risk', 'Risk'), tab('gate', 'Pre-trade gate'),
+      tab('execution', 'Execution'), tab('performance', 'Performance'),
+      tab('operations', 'Operations', 'd', true),
+    ]),
+    dest('propdesk', 'Prop Desk', 'Trading', [
+      tab('accounts', 'Accounts'), tab('status', 'Status'), tab('rules', 'Rules'),
+      tab('drawdown', 'Drawdown'),
+      tab('daily', 'Daily loss'), tab('target', 'Profit target'),
+      tab('allocation', 'Allocation'), tab('copy', 'Copy'), tab('risk', 'Risk controls'),
+      tab('limits', 'Limits'), tab('news', 'News'), tab('simulation', 'Simulation'),
+      tab('activity', 'Activity', 'd', true), tab('ai', 'AI control', 'd', true),
+    ]),
+    dest('settings', 'Settings', 'System', [
+      tab('general', 'General'), tab('models', 'Models'), tab('data', 'Data'),
+      tab('connections', 'Connections'), tab('permissions', 'Permissions'),
+      tab('approvals', 'Approvals'), tab('audit', 'Audit', 'd', true),
+      tab('diagnostics', 'Diagnostics', 'd', true),
+    ]),
   ],
-  stances: [],
-  default_stance: null,
-  limitations: ['Paper only. No live-order path exists anywhere in this application.'],
+  legacy_routes: {
+    overview: 'home?tab=summary',
+    assistant: 'chat',
+    evidence: 'research?tab=evidence',
+    gate: 'trading?tab=gate',
+    positions: 'trading?tab=book',
+    book: 'trading?tab=overview',
+    approvals: 'settings?tab=approvals',
+    actions: 'settings?tab=diagnostics',
+    orchestrator: 'settings?tab=diagnostics',
+    activity: 'settings?tab=diagnostics',
+    desk: 'propdesk?tab=accounts',
+    account: 'propdesk?tab=status',
+    charts: 'markets?tab=charts',
+  },
 }
 
-const PROP: Descriptor = {
-  ...NORMAL,
-  mode: 'prop_firm',
-  name: 'Prop Firm',
-  tagline: 'Trade within account constraints.',
-  purpose: 'Operate a funded or evaluation account against its own rule set.',
-  workspace_template: 'prop_desk',
-  sections: [section('account', 'Account Status', 'Account'), section('rules', 'Rules', 'Account')],
-  limitations: ['Rule sets are supplied by you.'],
-}
-
-const AI: Descriptor = {
-  ...NORMAL,
-  mode: 'ai',
-  name: 'AI',
-  tagline: 'Build, analyse and automate with AI.',
-  purpose: 'Use AI across research, strategy work and automation.',
-  workspace_template: 'ai_desk',
-  sections: [
-    section('actions', 'Actions', 'AI'),
-    section('activity', 'Activity', 'AI'),
-    section('approvals', 'Approvals', 'AI'),
+let authority = {
+  profile: {
+    unattended_work: true, unattended_execution: false,
+    label: 'Unattended research',
+    summary: 'The assistant also starts and stops campaigns on its own.',
+    equivalent_mode: 'ai', equivalent_stance: 'human_in_the_loop',
+  },
+  available: [
+    {
+      unattended_work: false, unattended_execution: false, label: 'Assisted',
+      summary: 'The assistant researches, backtests, validates and explains.',
+      equivalent_mode: 'normal', equivalent_stance: null,
+    },
+    {
+      unattended_work: true, unattended_execution: false, label: 'Unattended research',
+      summary: 'The assistant also starts and stops campaigns on its own.',
+      equivalent_mode: 'ai', equivalent_stance: 'human_in_the_loop',
+    },
+    {
+      unattended_work: true, unattended_execution: true, label: 'Unattended execution',
+      summary: 'The assistant runs the whole loop unattended, submission included.',
+      equivalent_mode: 'ai', equivalent_stance: 'autonomous',
+    },
   ],
-  // The stance moved here with the oversight surfaces when the Hedge Fund mode
-  // was removed. It grants exactly what it granted there, behind the same
-  // two-step opt-in.
-  stances: ['human_in_the_loop', 'autonomous'],
-  default_stance: 'human_in_the_loop',
-  limitations: [
-    'AI reaches only the registered actions.',
-    'Execution is simulated locally. No broker, OMS vendor or venue is connected.',
-  ],
+  policy: {
+    mode: 'ai', stance: 'human_in_the_loop', summary: 'AI assists.',
+    always_denied_to_ai: ['protected controls', 'high-risk actions'],
+  },
 }
 
-const DESCRIPTORS: Record<string, Descriptor> = {
-  normal: NORMAL, prop_firm: PROP, ai: AI,
-}
-
-let session: { mode: string | null; stance: string | null; workspace_id: string | null } = {
-  mode: null, stance: null, workspace_id: null,
-}
+let requested: string[] = []
 let propStatus: unknown = { account: null, assessment: null, reason: 'no state has been recorded' }
 let fundState: unknown = null
 let screened: unknown[] = []
@@ -132,20 +164,13 @@ const operations = {
 
 globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input)
+  requested.push(url)
   if (init?.method === 'POST' || init?.method === 'PUT') posted.push(url)
 
-  const mode = session.mode ?? 'ai'
-  const descriptor = DESCRIPTORS[mode]
-
-  const data = url.endsWith('/modes') ? { modes: [NORMAL, PROP, AI], loop: [] }
-    : url.endsWith('/modes/session') ? {
-        session, descriptor, policy_applies: session.mode !== null,
-        policy: { mode, stance: session.stance, summary: 'AI assists.', always_denied_to_ai: [] },
-      }
-    : url.includes('/modes/') && url.endsWith('/enter') ? { session }
-    : url.endsWith('/modes/leave') ? { session: { mode: null, stance: null, workspace_id: null } }
+  const data = url.includes('/navigation') ? NAVIGATION
+    : url.endsWith('/authority') ? authority
     : url.endsWith('/modes/permissions') ? {
-        mode, stance: session.stance,
+        mode: 'ai', stance: 'human_in_the_loop',
         actions: [
           { action: 'backtest_strategy', summary: 'Run a backtest.', mutating: true, risk: 'safe', protected: false, ruling: 'allow', reason: 'preparatory' },
           { action: 'submit_orders', summary: 'Route cleared orders.', mutating: true, risk: 'safe', protected: false, ruling: 'require_approval', reason: 'reaches the book' },
@@ -156,7 +181,7 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
     : url.endsWith('/fund/risk') ? { risk: RISK_OK }
     : url.endsWith('/fund/operations') ? operations
     : url.endsWith('/fund/orders/screened') ? screened
-    : url.endsWith('/approvals') ? { pending: [], history: [] }
+    : url.includes('/approvals') ? { pending: [], history: [] }
     : url.includes('/audit') ? { entries: [], summary: {} }
     : url.includes('/prop/accounts/status') ? propStatus
     : url.endsWith('/prop/accounts') ? { accounts: propStatus && (propStatus as { account?: unknown }).account ? [(propStatus as { account: unknown }).account] : [], selected: null }
@@ -178,7 +203,7 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
 })
 
 beforeEach(() => {
-  session = { mode: null, stance: null, workspace_id: null }
+  requested = []
   propStatus = { account: null, assessment: null, reason: 'no state has been recorded' }
   fundState = null
   screened = []
@@ -198,126 +223,165 @@ const open = async (name: string | RegExp) => {
 
 // ── mode selection ───────────────────────────────────────────────────────────
 
-describe('the opening screen', () => {
-  test('offers every workspace rather than defaulting into one', async () => {
+describe('the front door', () => {
+  test('opens on the product rather than on a choice about the product', async () => {
     renderApp()
-    expect(await screen.findByRole('heading', { name: /choose your workspace/i })).toBeInTheDocument()
-    for (const name of ['Normal', 'Prop Firm', 'AI']) {
-      expect(await screen.findByRole('heading', { name, level: 2 })).toBeInTheDocument()
+    // No chooser, no "which kind of user are you" — the first screen is Home.
+    expect(await screen.findByRole('link', { name: 'Home' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /choose your workspace/i })).not.toBeInTheDocument()
+    for (const gone of ['Normal', 'Prop Firm', 'AI']) {
+      expect(screen.queryByRole('heading', { name: gone, level: 2 })).not.toBeInTheDocument()
     }
-    // Each panel says what it is for. Names with no purpose would be a pricing
-    // page, which is the thing this screen must not be.
-    expect(screen.getByText(/trade within account constraints/i)).toBeInTheDocument()
-    expect(screen.getByText(/build, analyse and automate with ai/i)).toBeInTheDocument()
-    // The removed mode is gone from the front door, not merely unreachable.
-    expect(screen.queryByRole('heading', { name: 'Hedge Fund', level: 2 })).not.toBeInTheDocument()
+    expect(window.location.hash).toBe('#home?tab=summary')
   })
 
-  test('asks for the AI stance before entering, not after', async () => {
+  test('the primary destinations fit on one screen and name the work', async () => {
     renderApp()
-    await screen.findByRole('heading', { name: /choose your workspace/i })
-    // The stance changes what an assistant may do unattended. Entering first and
-    // asking later would mean the mode opens on a stance nobody picked.
-    expect(await screen.findByRole('radiogroup', { name: /operating stance/i })).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: /human in the loop/i })).toBeChecked()
-    fireEvent.click(screen.getByRole('radio', { name: /autonomous/i }))
-    expect(screen.getByRole('radio', { name: /autonomous/i })).toBeChecked()
-    expect(screen.getByText(/inside the risk engine, the pre-trade gate and the kill switch/i)).toBeInTheDocument()
+    await screen.findByRole('link', { name: 'Home' })
+    const rail = screen.getByRole('navigation', { name: /sections/i })
+    const rows = within(rail).getAllByRole('link')
+    // Nine, from sixty-two across three rails. The number is the requirement.
+    expect(rows.length).toBe(9)
+    for (const name of ['Home', 'Chat', 'Research', 'Campaigns', 'Strategies', 'Trading', 'Prop Desk', 'Settings']) {
+      expect(within(rail).getByRole('link', { name })).toBeInTheDocument()
+    }
   })
 
-  test('states the paper-only boundary on the way in', async () => {
+  test('campaigns is a primary destination, not something buried in AI', async () => {
     renderApp()
-    await screen.findByRole('heading', { name: /choose your workspace/i })
-    expect(screen.getByText(/no broker, venue or order-routing vendor is connected/i)).toBeInTheDocument()
+    const rail = await screen.findByRole('navigation', { name: /sections/i })
+    expect(within(rail).getByRole('link', { name: 'Campaigns' })).toBeInTheDocument()
   })
 
-  test('opening a mode calls the API rather than only changing the screen', async () => {
+  test('AI is presented as a conversation, never as a mode or a console', async () => {
     renderApp()
-    await screen.findByRole('heading', { name: /choose your workspace/i })
-    fireEvent.click(await screen.findByRole('button', { name: /open ai/i }))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    // Mode is server state: each mode remembers its own layout, so entering one
-    // has to be recorded somewhere a refresh can read it back.
-    expect(posted.some((url) => url.endsWith('/modes/ai/enter'))).toBe(true)
+    const rail = await screen.findByRole('navigation', { name: /sections/i })
+    expect(within(rail).getByRole('link', { name: 'Chat' })).toBeInTheDocument()
+    for (const banned of [/AI mode/i, /AI workspace/i, /control cent/i, /console/i, /orchestrator/i]) {
+      expect(within(rail).queryByText(banned)).not.toBeInTheDocument()
+    }
+  })
+
+  test('the machinery is reachable but is not a primary destination', async () => {
+    renderApp()
+    const rail = await screen.findByRole('navigation', { name: /sections/i })
+    for (const banned of ['Orchestrator', 'Actions', 'Activity', 'Approvals', 'Audit Log', 'Agents']) {
+      expect(within(rail).queryByRole('link', { name: banned })).not.toBeInTheDocument()
+    }
+    // Reachable, though: the link a bookmark still carries lands on it.
+    window.history.replaceState(null, '', '#orchestrator')
+    cleanup()
+    renderApp()
+    await screen.findByRole('link', { name: 'Home' })
+    expect(window.location.hash).toBe('#settings?tab=diagnostics')
+  })
+
+  test('the safety-critical facts stay in the header and the rest leave it', async () => {
+    renderApp()
+    await screen.findByRole('link', { name: 'Home' })
+    // In the header specifically. Home says it too, which is fine — it is the
+    // one fact worth repeating.
+    const header = screen.getByRole('banner', { name: /workspace status/i })
+    expect(within(header).getByText(/paper only/i)).toBeInTheDocument()
+    // Eleven header facts became two. Strategy, tested and OOS counts belong on
+    // the screens that own them, not beside the paper-only boundary.
+    for (const gone of [/^STRATEGIES$/, /^TESTED$/, /^OOS$/, /recent events/i]) {
+      expect(screen.queryByText(gone)).not.toBeInTheDocument()
+    }
   })
 })
 
-// ── the mode-scoped shell ────────────────────────────────────────────────────
+// ── the tabbed destinations ──────────────────────────────────────────────────
 
-describe('the shell inside a mode', () => {
-  test('builds its navigation from the mode manifest', async () => {
-    session = { mode: 'normal', stance: null, workspace_id: 'w1' }
+describe('destinations and their tabs', () => {
+  test('a destination shows its own views as tabs rather than as rail rows', async () => {
+    window.history.replaceState(null, '', '#research')
     renderApp()
-    expect(await screen.findByRole('link', { name: /strategies/i })).toBeInTheDocument()
-    for (const group of ['Desk', 'Strategy', 'Book', 'System']) {
-      expect(screen.getByRole('heading', { name: group })).toBeInTheDocument()
+    const tabs = await screen.findByRole('navigation', { name: /research views/i })
+    for (const name of ['Workbench', 'Findings', 'Experiments', 'Validation', 'Evidence']) {
+      expect(within(tabs).getByRole('link', { name })).toBeInTheDocument()
     }
-    // A mode's rail is its manifest and nothing else: Prop Firm's account
-    // sections must not leak into Normal's.
-    expect(screen.queryByRole('link', { name: /profit target/i })).not.toBeInTheDocument()
+    // And none of them is competing for a row in the rail.
+    const rail = screen.getByRole('navigation', { name: /sections/i })
+    expect(within(rail).queryByRole('link', { name: 'Validation' })).not.toBeInTheDocument()
   })
 
-  test('names the open mode and offers a way back to the chooser', async () => {
-    session = { mode: 'ai', stance: 'autonomous', workspace_id: 'w2' }
-    fundState = {
-      nav: 1_000_000, cash: 1_000_000, capital: 1_000_000, realised_pnl: 0,
-      gross_exposure: 0, net_exposure: 0, leverage: 0, risk: RISK_OK,
-      execution_mode: 'PAPER', simulated: true, stance: 'autonomous',
-      stages: [stage('fund', 'Data', 'idle', 'no universe configured')],
-      limitations: [],
-    }
+  test('a link written for the old rail lands on the screen it named', async () => {
+    window.history.replaceState(null, '', '#evidence')
     renderApp()
-    const badge = (await screen.findByTestId('mode-badge'))
-    // The autonomous stance is the one state where the machine acts unasked, so
-    // it is named in the chrome rather than only on the screen that set it.
-    expect(within(badge as HTMLElement).getByText(/autonomous/i)).toBeInTheDocument()
+    await screen.findByRole('link', { name: 'Home' })
+    // Translated, not dropped, and the hash is rewritten so the reader can see
+    // where they actually are.
+    expect(window.location.hash).toBe('#research?tab=evidence')
+  })
 
-    // Switch now opens the workspace switcher rather than leaving the mode.
-    // Changing mode changes what an assistant may do on your behalf, which is a
-    // permissions decision and not a navigation one, so it lives inside the
-    // switcher beside the arrangements rather than in the header where it read
-    // as "switch screens".
-    fireEvent.click(within(badge as HTMLElement).getByRole('button', { name: /switch/i }))
-    const leave = await screen.findByRole('button', { name: /change operating mode/i })
-    fireEvent.click(leave)
+  test('a link naming a tab that does not exist lands on the default, visibly', async () => {
+    window.history.replaceState(null, '', '#research?tab=nonsense')
+    renderApp()
+    await screen.findByRole('link', { name: 'Home' })
+    expect(window.location.hash).toBe('#research?tab=workbench')
+  })
+
+  test('a deep link keeps the target it carried', async () => {
+    window.history.replaceState(null, '', '#strategies?strategy=abc')
+    renderApp()
+    await screen.findByRole('link', { name: 'Home' })
+    expect(window.location.hash).toBe('#strategies?tab=library&strategy=abc')
+  })
+
+  test('an unknown route lands on Home rather than on a blank screen', async () => {
+    window.history.replaceState(null, '', '#no_such_screen')
+    renderApp()
+    await screen.findByRole('link', { name: 'Home' })
+    expect(window.location.hash).toBe('#home?tab=summary')
+  })
+})
+
+// ── what an assistant may do ─────────────────────────────────────────────────
+
+describe('permissions, where the mode chooser\'s second job went', () => {
+  test('the settings screen offers the three configurations and names the current one', async () => {
+    window.history.replaceState(null, '', '#settings?tab=permissions')
+    renderApp()
+    expect(await screen.findByRole('heading', { name: /what an assistant may do/i })).toBeInTheDocument()
+    for (const label of ['Assisted', 'Unattended research', 'Unattended execution']) {
+      expect(screen.getByRole('radio', { name: new RegExp(label, 'i') })).toBeInTheDocument()
+    }
+    expect(screen.getByRole('radio', { name: /unattended research/i })).toBeChecked()
+  })
+
+  test('changing it calls the API rather than only changing the screen', async () => {
+    window.history.replaceState(null, '', '#settings?tab=permissions')
+    renderApp()
+    await screen.findByRole('heading', { name: /what an assistant may do/i })
+    fireEvent.click(screen.getByRole('radio', { name: /^assisted/i }))
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(posted.some((url) => url.endsWith('/modes/leave'))).toBe(true)
+    // Authority is server state: it decides what an unattended run may do, so a
+    // choice that lived only in the browser would be no choice at all.
+    expect(posted.some((url) => url.endsWith('/authority'))).toBe(true)
   })
 
-  test('a hash that is not a route in this mode falls back rather than blanking', async () => {
-    session = { mode: 'prop_firm', stance: null, workspace_id: 'w3' }
-    window.history.replaceState(null, '', '#gate')
+  test('what is never permitted is stated on every setting', async () => {
+    window.history.replaceState(null, '', '#settings?tab=permissions')
     renderApp()
-    // "gate" is a Normal route. Prop Firm opens on its own first section.
-    await screen.findByRole('link', { name: /account status/i })
-    expect(window.location.hash).toBe('#account')
-  })
-
-  test('a hash chosen before a mode is entered is left alone', async () => {
-    /* The opening screen is up, so the hash is not a route at all and the
-     * session still carries whichever mode was last described. Correcting
-     * against that manifest is how the front door's "start here" landed
-     * somebody on the previous mode's first section every time. */
-    session = { mode: null, stance: null, workspace_id: null }
-    window.history.replaceState(null, '', '#desk')
-    renderApp()
-    await screen.findByRole('heading', { name: /choose your workspace/i })
-    expect(window.location.hash).toBe('#desk')
+    await screen.findByRole('heading', { name: /what an assistant may do/i })
+    expect(screen.getByText(/protected controls/i)).toBeInTheDocument()
+    expect(screen.getByText(/high-risk actions/i)).toBeInTheDocument()
   })
 })
 
 // ── prop firm ────────────────────────────────────────────────────────────────
 
-describe('prop firm mode', () => {
+describe('the prop desk', () => {
   test('refuses to invent an account, and says why there is no default', async () => {
-    session = { mode: 'prop_firm', stance: null, workspace_id: 'w3' }
+    window.history.replaceState(null, '', '#propdesk?tab=status')
     renderApp()
     expect(await screen.findByText(/no account is configured/i)).toBeInTheDocument()
     expect(screen.getByText(/nothing here is a copy of any firm/i)).toBeInTheDocument()
   })
 
   test('shows every rule with its buffer, and keeps unmeasured apart from passing', async () => {
-    session = { mode: 'prop_firm', stance: null, workspace_id: 'w3' }
+    window.history.replaceState(null, '', '#propdesk?tab=status')
     const account = {
       account_id: 'a1', name: '50k Evaluation', rules_id: 'r1',
       created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
@@ -350,11 +414,14 @@ describe('prop firm mode', () => {
 
 // ── ai mode ──────────────────────────────────────────────────────────────────
 
-describe('ai mode', () => {
+describe('the action registry, under diagnostics', () => {
   test('shows the permission policy per action, including what is denied outright', async () => {
-    session = { mode: 'ai', stance: null, workspace_id: 'w4' }
-    window.history.replaceState(null, '', '#actions')
+    // Reclassified, not removed. The registry is machinery — somebody inspects
+    // it when a run went wrong — so it is a tab under Settings rather than a
+    // row in the rail beside Strategies.
+    window.history.replaceState(null, '', '#settings?tab=diagnostics')
     renderApp()
+    fireEvent.click(await screen.findByRole('tab', { name: /actions/i }))
     expect(await screen.findByText('backtest_strategy')).toBeInTheDocument()
     expect(screen.getByText('ALLOWED')).toBeInTheDocument()
     expect(screen.getByText('NEEDS YOU')).toBeInTheDocument()
@@ -373,7 +440,6 @@ describe('ai mode', () => {
 
 describe('the book loop', () => {
   const openFund = (risk = RISK_OK) => {
-    session = { mode: 'normal', stance: null, workspace_id: 'w5' }
     fundState = {
       nav: 1_000_000, cash: 1_000_000, capital: 1_000_000, realised_pnl: 0,
       gross_exposure: 0, net_exposure: 0, leverage: 0, risk,
@@ -389,7 +455,7 @@ describe('the book loop', () => {
 
   test('the command centre leads with the book and the state of every stage', async () => {
     openFund()
-    window.history.replaceState(null, '', '#book')
+    window.history.replaceState(null, '', '#trading?tab=overview')
     renderApp()
     expect(await screen.findByText('NAV')).toBeInTheDocument()
     expect(screen.getByText('WITHIN LIMITS')).toBeInTheDocument()
@@ -400,7 +466,7 @@ describe('the book loop', () => {
 
   test('a disabled limit set is reported as a kill switch, not as a setting', async () => {
     openFund({ ...RISK_OK, enabled: false, within_limits: false })
-    window.history.replaceState(null, '', '#book')
+    window.history.replaceState(null, '', '#trading?tab=overview')
     renderApp()
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/kill switch/i)
@@ -409,7 +475,7 @@ describe('the book loop', () => {
 
   test('the gate shows the full ladder and the reasons a blocked order failed', async () => {
     openFund()
-    window.history.replaceState(null, '', '#gate')
+    window.history.replaceState(null, '', '#trading?tab=gate')
     screened = [
       {
         order: { order_id: 'o1', symbol: 'CL', side: 'buy', quantity: 1, order_type: 'market', strategy_id: 's1', reference_price: 78 },
@@ -438,8 +504,7 @@ describe('the book loop', () => {
     // The approval queue went to AI, not to Normal: it exists to hold what an
     // AI actor proposed, so it belongs beside the actor it is holding.
     openFund()
-    session = { mode: 'ai', stance: 'human_in_the_loop', workspace_id: 'w6' }
-    window.history.replaceState(null, '', '#approvals')
+    window.history.replaceState(null, '', '#settings?tab=approvals')
     renderApp()
     expect(await screen.findByText(/nothing is waiting/i)).toBeInTheDocument()
     expect(screen.getByText(/approving runs it as you, now/i)).toBeInTheDocument()
@@ -449,8 +514,7 @@ describe('the book loop', () => {
 // ── the book, shared across modes ────────────────────────────────────────────
 
 test('an open position is never drawn as flat when nothing marked it', async () => {
-  session = { mode: 'normal', stance: null, workspace_id: 'w1' }
-  window.history.replaceState(null, '', '#positions')
+  window.history.replaceState(null, '', '#trading?tab=book')
   operations.book.positions = [
     { symbol: 'NQ', quantity: 1, average_price: 20_000.25, realised_pnl: 0 },
   ] as never
@@ -463,8 +527,7 @@ test('an open position is never drawn as flat when nothing marked it', async () 
   operations.book.positions = [] as never
 })
 
-test('the Normal overview still leads with research state', async () => {
-  session = { mode: 'normal', stance: null, workspace_id: 'w1' }
+test('home still leads with research state', async () => {
   renderApp()
   expect(await screen.findByText(/active mission/i)).toBeInTheDocument()
   expect(await screen.findByRole('heading', { name: /strongest candidates/i })).toBeInTheDocument()
@@ -475,47 +538,83 @@ test('the Normal overview still leads with research state', async () => {
   }
 })
 
-test('the event drawer still renders committed activity', async () => {
-  session = { mode: 'normal', stance: null, workspace_id: 'w1' }
+test('the event ledger is still rendered, under diagnostics', async () => {
+  /* The footer drawer is gone: it carried the latest event and a count of
+   * recent ones on every screen in the product, which is a permanent strip
+   * nobody was looking for. The ledger itself did not move an inch. */
+  window.history.replaceState(null, '', '#settings?tab=diagnostics')
   renderApp()
-  await screen.findByRole('link', { name: /strategies/i })
-  fireEvent.click(screen.getByRole('button', { name: /open event drawer/i }))
+  expect(await screen.findByRole('tab', { name: /event stream/i })).toBeInTheDocument()
   expect((await screen.findAllByText(/finished — 63 trades/)).length).toBeGreaterThan(0)
 })
 
-test('the command palette indexes the open mode’s sections', async () => {
-  session = { mode: 'normal', stance: null, workspace_id: 'w1' }
+test('the command palette indexes every destination and every tab', async () => {
   renderApp()
-  await screen.findByRole('link', { name: /strategies/i })
+  await screen.findByRole('link', { name: 'Home' })
   fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
   expect(await screen.findByRole('dialog', { name: /search and run commands/i })).toBeInTheDocument()
   fireEvent.change(screen.getByPlaceholderText(/run a command/i), { target: { value: 'Positions' } })
-  expect(screen.getByRole('button', { name: /Positions & Orders.*Book/i })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /Trading · Positions & Orders/i })).toBeInTheDocument()
 })
 
 test('a palette row says what it does, not which key does it', async () => {
   // "open" and "stop" are very different things to be one keystroke away from,
   // and the row used to end in a bare ↵ for both.
-  session = { mode: 'normal', stance: null, workspace_id: 'w1' }
   renderApp()
-  await screen.findByRole('link', { name: /strategies/i })
+  await screen.findByRole('link', { name: 'Home' })
   fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
   await screen.findByRole('dialog', { name: /search and run commands/i })
   fireEvent.change(screen.getByPlaceholderText(/run a command/i), { target: { value: 'Positions' } })
-  expect(screen.getByRole('button', { name: /Positions & Orders.*Book.*open/i })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /Trading · Positions & Orders.*open/i })).toBeInTheDocument()
 })
 
 test('strategies still opens on the catalogue rather than one record', async () => {
-  session = { mode: 'normal', stance: null, workspace_id: 'w1' }
+  window.history.replaceState(null, '', '#strategies')
   renderApp()
-  await open(/strategies/i)
   expect(await screen.findByLabelText(/filter strategies/i)).toBeInTheDocument()
   expect(await screen.findByText(/no strategies yet/i)).toBeInTheDocument()
 })
 
 test('evidence still explains an honest empty state', async () => {
-  session = { mode: 'normal', stance: null, workspace_id: 'w1' }
+  window.history.replaceState(null, '', '#research?tab=evidence')
   renderApp()
-  await open(/evidence/i)
   expect(await screen.findByText(/NO STRATEGIES/i)).toBeInTheDocument()
+})
+
+// ── what opening a screen costs ──────────────────────────────────────────────
+//
+// The shell used to fetch health, summary, *every strategy*, the activity feed,
+// the inbox, the appearance and the active workspace on every route. Opening
+// Chat therefore paid for the entire strategy library before the composer
+// worked, for a screen that does not show a single strategy.
+
+test('opening Chat does not fetch the strategy library', async () => {
+  window.history.replaceState(null, '', '#chat')
+  renderApp()
+  await screen.findByLabelText(/ask a question/i)
+  const strategies = requested.filter((url) => /\/strategies(\?|$)/.test(url))
+  expect(strategies).toHaveLength(0)
+})
+
+test('opening Chat does not fetch the activity feed', async () => {
+  window.history.replaceState(null, '', '#chat')
+  renderApp()
+  await screen.findByLabelText(/ask a question/i)
+  expect(requested.filter((url) => url.includes('/activity'))).toHaveLength(0)
+})
+
+test('the composer is usable before anything but the shell has loaded', async () => {
+  window.history.replaceState(null, '', '#chat')
+  renderApp()
+  const composer = await screen.findByLabelText(/ask a question/i)
+  expect(composer).toBeEnabled()
+})
+
+test('the strategy library is still fetched by the screen that shows it', async () => {
+  window.history.replaceState(null, '', '#strategies')
+  renderApp()
+  await screen.findByLabelText(/filter strategies/i)
+  // Route-local, not removed. A screen that stopped loading what it displays
+  // would be a faster screen showing nothing.
+  expect(requested.some((url) => /\/strategies(\?|$)/.test(url))).toBe(true)
 })

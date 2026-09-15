@@ -111,3 +111,46 @@ def test_parameters_of_the_wrong_shape_says_what_was_given(service) -> None:
     with pytest.raises(ValueError) as refusal:
         service.propose(_proposal(parameters=["fast", "slow"]), SOURCES)
     assert "list" in str(refusal.value), "the refusal did not say what was passed"
+
+
+def test_a_generated_catalogue_does_not_displace_the_shipped_names(service) -> None:
+    """The refusal that failed in a full run and passed on its own.
+
+    `TEMPLATES` is a process-wide dictionary that the research director and the
+    template store register into at run time. The refusal used to list
+    ``sorted(TEMPLATES)[:12]``, so once a campaign had composed a few hundred
+    variants with machine-generated names, twelve alphabetically-first entries
+    were all generated ones and the proposer was told about nothing it was meant
+    to ask for. In a full pytest session an earlier test did the registering,
+    which is why the failure looked like flakiness.
+    """
+    from forge.strategy import SHIPPED_TEMPLATE_KEYS
+    from forge.strategy.templates import TEMPLATES as LIVE
+
+    shipped = TEMPLATES[TEMPLATE]
+    # Named to sort before every shipped key, which is what a machine-generated
+    # `displacement_reversion_*` family happened to do and what made the failure
+    # depend on test order.
+    generated = [f"aaa_displacement_reversion_{index:03d}" for index in range(200)]
+    for key in generated:
+        LIVE[key] = shipped
+    try:
+        with pytest.raises(ValueError) as refusal:
+            service.propose(_proposal(template="wishful_thinking"), SOURCES)
+        message = str(refusal.value)
+        assert TEMPLATE in message, (
+            "two hundred generated templates pushed every shipped name out of the refusal"
+        )
+        assert "200 further templates" in message or "further template" in message, (
+            "the refusal hid how much of the catalogue it was not showing"
+        )
+    finally:
+        for key in generated:
+            LIVE.pop(key, None)
+    assert set(LIVE) >= SHIPPED_TEMPLATE_KEYS, "the cleanup removed a shipped template"
+
+
+def test_a_near_miss_is_offered_the_name_it_nearly_typed(service) -> None:
+    with pytest.raises(ValueError) as refusal:
+        service.propose(_proposal(template="momentum_breakut"), SOURCES)
+    assert "momentum_breakout" in str(refusal.value)

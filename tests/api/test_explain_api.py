@@ -59,11 +59,25 @@ class TestTheFrontDoor:
         payload = data(client.get("/api/v1/modes/intents"))
         assert len(payload["intents"]) == len(INTENTS)
 
-    def test_it_can_be_narrowed_to_one_mode(self, client) -> None:
+    def test_the_mode_parameter_survives_but_no_longer_narrows(self, client) -> None:
+        """The front door is the same door for everybody now.
+
+        It used to differ by mode: "manage prop accounts" was hidden from
+        anybody who had not declared themselves a prop trader first. There is
+        one navigation, the Prop Desk is a destination everybody has, and
+        hiding it would be a second navigation nobody can see. The parameter is
+        still accepted so a client built against it keeps working, and still
+        refused when it names a mode that does not exist.
+        """
         prop = data(client.get("/api/v1/modes/intents?mode=prop_firm"))["intents"]
         normal = data(client.get("/api/v1/modes/intents?mode=normal"))["intents"]
-        assert {i["intent"] for i in prop} != {i["intent"] for i in normal}
+        assert {i["intent"] for i in prop} == {i["intent"] for i in normal}
         assert all("prop_firm" in i["modes"] for i in prop)
+        assert any(i["intent"] == "manage_prop_accounts" for i in normal)
+
+    def test_every_intent_publishes_links_the_shell_can_navigate_to(self, client) -> None:
+        for intent in data(client.get("/api/v1/modes/intents"))["intents"]:
+            assert intent["destinations"], f"{intent['intent']} goes nowhere"
 
     def test_an_unknown_mode_is_refused_rather_than_ignored(self, client) -> None:
         response = client.get("/api/v1/modes/intents?mode=casino")

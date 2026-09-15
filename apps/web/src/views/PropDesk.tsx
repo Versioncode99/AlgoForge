@@ -10,6 +10,7 @@ import {
   type DeskDecision,
   type Disclosure,
   type Permission,
+  type ProviderDescriptor,
   type RiskBand,
   type RiskDriver,
   type RiskMode,
@@ -101,6 +102,28 @@ export function PropDeskView({ section }: { section: SectionKey }) {
 
 /* ── Accounts, connections and what this build can actually reach ─────────── */
 
+/** Three states, not two.
+ *
+ * A provider this build can read from but not trade through is neither
+ * "connector implemented" nor "no live connector", and showing it as either is
+ * a claim about whether an order can leave the machine. Rithmic is the case:
+ * accounts, positions and connection health are readable; place, modify, cancel
+ * and flatten are refused.
+ */
+function connectorLabel(provider: ProviderDescriptor): string {
+  if (provider.live_connector_implemented) return 'Connector implemented'
+  if (provider.read_only_connector_implemented) return 'Read-only connector'
+  return 'No live connector'
+}
+
+function connectorTone(provider: ProviderDescriptor): 'good' | 'warn' | 'unknown' {
+  if (provider.live_connector_implemented) return 'good'
+  // `warn`, not `good`: a half connector is a thing to be aware of rather than
+  // a thing to be reassured by.
+  if (provider.read_only_connector_implemented) return 'warn'
+  return 'unknown'
+}
+
 function AccountsSection() {
   const providers = useProviders()
   const connections = useConnections()
@@ -130,12 +153,8 @@ function AccountsSection() {
               <header>
                 <h3>{provider.display_name}</h3>
                 <StatusPill
-                  tone={provider.live_connector_implemented ? 'good' : 'unknown'}
-                  label={
-                    provider.live_connector_implemented
-                      ? 'Connector implemented'
-                      : 'No live connector'
-                  }
+                  tone={connectorTone(provider)}
+                  label={connectorLabel(provider)}
                 />
               </header>
               <p>{provider.what_it_is}</p>
@@ -154,10 +173,19 @@ function AccountsSection() {
               {provider.limitations.length > 0 && (
                 <Limitations items={provider.limitations} />
               )}
+              {provider.read_only_connector_implemented && catalogue?.rithmic_blocker && (
+                <p className="desk-note">
+                  Not available here: {catalogue.rithmic_blocker}.
+                </p>
+              )}
               {!provider.live_connector_implemented &&
                 catalogue?.required_work[provider.provider] && (
                   <details className="desk-details">
-                    <summary>What a live connector would need</summary>
+                    <summary>
+                      {provider.read_only_connector_implemented
+                        ? 'What sending an order through this would need'
+                        : 'What a live connector would need'}
+                    </summary>
                     <RequiredWorkList work={catalogue.required_work[provider.provider]} />
                   </details>
                 )}

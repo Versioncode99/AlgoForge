@@ -71,11 +71,10 @@ function campaignCommands(campaign: { campaign_id: string; name: string; status:
  * does not work, drawn as one that does.
  */
 export function CommandPalette({
-  open, routes, strategies, onClose, onRoute,
+  open, routes, onClose, onRoute,
 }: {
   open: boolean
   routes: PaletteRoute[]
-  strategies: StrategyListItem[]
   onClose: () => void
   onRoute: (id: string) => void
 }) {
@@ -86,6 +85,11 @@ export function CommandPalette({
   const input = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
 
+  /* Fetched here, not handed down. The shell used to hold the whole strategy
+   * library so the palette could search it, which meant opening Chat paid for
+   * every strategy on disk before the composer worked. `enabled: open` is the
+   * same pattern the five queries below already used. */
+  const strategies = useQuery({ queryKey: ['strategies'], enabled: open, queryFn: () => getJson<StrategyListItem[]>('/strategies') })
   const datasets = useQuery({ queryKey: ['datasets'], enabled: open, queryFn: () => getJson<DatasetInfo[]>('/datasets') })
   const runs = useQuery({ queryKey: ['runs'], enabled: open, queryFn: () => getJson<Run[]>('/runs') })
   const memory = useQuery({ queryKey: ['research-memory'], enabled: open, queryFn: () => getJson<ResearchMemoryPayload>('/memory?limit=250') })
@@ -125,29 +129,29 @@ export function CommandPalette({
       ...(campaigns.data ?? []).map(campaign => ({
         key: `campaign-${campaign.campaign_id}`, label: campaign.name,
         detail: `${campaign.status} · priority ${campaign.priority}`,
-        route: 'campaigns', group: 'Campaigns', verb: 'open',
+        route: 'campaigns?tab=all', group: 'Campaigns', verb: 'open',
       })),
-      ...strategies.map(s => ({
+      ...(strategies.data ?? []).map(s => ({
         key: `strategy-${s.strategy_id}`, label: s.name,
         detail: `${s.family} · ${s.symbol} · ${s.latest ? s.latest.evidence_tier : 'never run'}`,
-        route: 'strategies', group: 'Strategies', verb: 'open',
+        route: `strategies?tab=library&strategy=${s.strategy_id}`, group: 'Strategies', verb: 'open',
       })),
       ...(experiments.data ?? []).map(e => ({
         key: `experiment-${e.id}`, label: e.id,
         detail: `${e.template} · ${e.status ?? 'reserved'}${e.failure_class ? ` · ${e.failure_class}` : ''}`,
-        route: 'experiments', group: 'Experiments', verb: 'open',
+        route: 'research?tab=experiments', group: 'Experiments', verb: 'open',
       })),
       ...(runs.data ?? []).map(r => ({
         key: `run-${r.run_id}`, label: r.run_id,
-        detail: `${r.tier} · ${r.engine_version}`, route: 'runs', group: 'Runs', verb: 'open',
+        detail: `${r.tier} · ${r.engine_version}`, route: 'strategies?tab=runs', group: 'Runs', verb: 'open',
       })),
       ...(memory.data?.constraints ?? []).map((c, i) => ({
         key: `constraint-${c.template}-${i}`, label: c.failure_class,
-        detail: `${c.template} · ${c.reason}`, route: 'memory', group: 'Constraints', verb: 'open',
+        detail: `${c.template} · ${c.reason}`, route: 'campaigns?tab=memory', group: 'Constraints', verb: 'open',
       })),
       ...(datasets.data ?? []).map(d => ({
         key: `dataset-${d.key}`, label: d.label,
-        detail: `${d.provider} · ${d.symbol} ${d.interval}`, route: 'data', group: 'Datasets', verb: 'open',
+        detail: `${d.provider} · ${d.symbol} ${d.interval}`, route: 'markets?tab=data', group: 'Datasets', verb: 'open',
       })),
     ]
     const matched = rows.filter(item => !needle || `${item.label} ${item.detail}`.toLowerCase().includes(needle))

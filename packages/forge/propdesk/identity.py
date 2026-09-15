@@ -225,9 +225,20 @@ class ProviderDescriptor(FrozenModel):
     #: which is not the same as no limit.
     rate_limit_per_minute: int | None = None
     session_seconds: int | None = None
-    #: False everywhere in this build. The single field a future live adapter
-    #: has to set to `True` deliberately.
+    #: Whether this build can *execute* at the provider. False everywhere but
+    #: the simulator. The single field a future live adapter has to set to
+    #: `True` deliberately, and the tests that assert this build cannot trade
+    #: read it.
     live_connector_implemented: bool = False
+    #: Whether this build can *read* from the provider — connect, discover
+    #: accounts, take a snapshot — without being able to place an order.
+    #:
+    #: Separate from the field above, and the separation is the point. Rithmic
+    #: has a read-only connector now; collapsing the two would either claim this
+    #: build can trade through it, or claim it cannot reach it at all, and both
+    #: are false. A reader asking "can this send an order?" reads the first
+    #: field and gets the answer it has always given.
+    read_only_connector_implemented: bool = False
     documentation_url: str = ""
     evidence: str = ""
     limitations: tuple[str, ...] = ()
@@ -439,6 +450,9 @@ RITHMIC_DESCRIPTOR = ProviderDescriptor(
     auth_method=AuthMethod.USERNAME_PASSWORD,
     environments=(Environment.DEMO, Environment.LIVE),
     account_key_fields=("system", "fcm_id", "ib_id", "account_id"),
+    # Read-only, and only with the operator's own licensed SDK present. See
+    # `forge.propdesk.rithmic` and `docs/ADR-0001-rithmic-transport.md`.
+    read_only_connector_implemented=True,
     bracket_model=BracketModel.NATIVE_OSO,
     idempotency_field="user_tag",
     rate_limit_per_minute=None,
@@ -664,6 +678,10 @@ def catalogue() -> dict[str, Any]:
         "live_connectors_implemented": [
             d.provider.value for d in PROVIDER_DESCRIPTORS.values()
             if d.live_connector_implemented
+        ],
+        "read_only_connectors_implemented": [
+            d.provider.value for d in PROVIDER_DESCRIPTORS.values()
+            if d.read_only_connector_implemented
         ],
         "generated_at": datetime.now(UTC).isoformat(),
     }

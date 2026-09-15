@@ -56,6 +56,14 @@ addopts = "-q --strict-markers"
 module = ["pyarrow.*"]
 ignore_missing_imports = true
 
+# Optional dependencies of the Rithmic connector only. Neither ships type
+# information, and neither is installed in an AlgoForge that never configures
+# Rithmic — see `forge.propdesk.rithmic.vocabulary`, which imports both inside
+# the functions that use them.
+[[tool.mypy.overrides]]
+module = ["google.protobuf.*", "grpc_tools.*"]
+ignore_missing_imports = true
+
 [tool.ruff]
 target-version = "py313"
 line-length = 100

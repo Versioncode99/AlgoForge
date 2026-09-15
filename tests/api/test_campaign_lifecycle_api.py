@@ -258,3 +258,47 @@ def test_the_mechanism_total_does_not_count_one_idea_once_per_campaign(
         search_kind=SearchKind.HYPOTHESIS,
     )
     assert _data(client.get("/api/v1/campaigns/control-center"))["totals"]["mechanisms"] == 2
+
+
+# ── deleting ─────────────────────────────────────────────────────────────────
+def test_a_campaign_can_be_deleted_and_its_research_is_kept(client: TestClient) -> None:
+    """The route existed and nothing could reach it until Horizon wired it.
+
+    What it does is the interesting part: it removes the *programme* and leaves
+    the frontier, the hypotheses and the journal in place. A delete that took
+    the findings with it would make "tidy up my campaign list" an expensive
+    mistake, so the answer says which it did.
+    """
+    campaign = _create(client, "Disposable")
+    payload = _data(client.delete(f"/api/v1/campaigns/{campaign['campaign_id']}"))
+    assert payload["deleted"] == campaign["campaign_id"]
+    assert payload["research_retained"] is True
+
+    listed = _data(client.get("/api/v1/campaigns"))
+    assert campaign["campaign_id"] not in [row["campaign_id"] for row in listed]
+
+
+def test_deleting_an_unknown_campaign_says_which(client: TestClient) -> None:
+    response = client.delete("/api/v1/campaigns/never-existed")
+    assert response.status_code == 404
+    assert "never-existed" in response.text
+
+
+def test_a_running_campaign_is_not_deleted_out_from_under_itself(
+    client: TestClient,
+) -> None:
+    """Stop it first. Deleting the row while workers are cycling against it
+    would leave the engine researching a programme that no longer exists."""
+    campaign = _create(client, "Busy")
+    started = client.post(
+        f"/api/v1/campaigns/{campaign['campaign_id']}/start",
+        json={"workers": 1, "cycle_seconds": 60, "max_strategies": 1, "max_bars": 5000},
+    )
+    if started.status_code != 200:
+        pytest.skip(f"this installation could not start a campaign: {started.text[:200]}")
+    try:
+        response = client.delete(f"/api/v1/campaigns/{campaign['campaign_id']}")
+        assert response.status_code == 409
+        assert "stop the campaign before deleting it" in response.text
+    finally:
+        client.post(f"/api/v1/campaigns/{campaign['campaign_id']}/stop")

@@ -14,10 +14,12 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
 
     assert set(tools) == {
         "analysis_trades",
+        "authority",
         "audit_log",
         "calculate_risk",
         "campaign_agents",
         "campaign_frontier",
+        "campaign_scope",
         "campaign_skips",
         "current_mode",
         "data_health",
@@ -43,11 +45,16 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
         "list_instruments",
         "list_modes",
         "list_prop_accounts",
+        # Reads the rule files and nothing else. Opening an account against one
+        # is deliberately not an action at all, so it cannot appear here — see
+        # `tests/api/test_prop_rules_api.py`.
+        "list_rule_sets",
         "list_sidebar_destinations",
         "list_strategies",
         "list_templates",
         "list_workspace_templates",
         "list_workspaces",
+        "navigation",
         "pending_approvals",
         "port_strategy",
         "port_targets",
@@ -67,6 +74,7 @@ def test_mcp_is_read_only_by_default(tmp_path, monkeypatch):
         "propose_time_scope",
         "read_research",
         "research_memory",
+        "resolve_link",
         "review_research_plan",
         "scope_exposure",
         "search_instruments",

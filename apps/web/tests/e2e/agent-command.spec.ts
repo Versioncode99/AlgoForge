@@ -1,16 +1,16 @@
 import { expect, test } from '@playwright/test'
-import { enterMode } from './mode'
+import { openDiagnostics } from './authority'
 
-// The specialists live in AI mode's navigation.
-test.beforeEach(async ({ request }) => {
-  await enterMode(request, 'ai')
-})
-
+/* The specialist register.
+ *
+ * It used to be a destination of its own, reachable only in AI mode. It is a
+ * reading about what the machine is doing rather than a place to work, so it is
+ * a pane of Settings → Diagnostics now, and every test here goes through
+ * `openDiagnostics`. */
 test('agent register exposes specialists and bounded controls', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await page.goto('/')
-  await page.getByRole('link', { name: 'Agents', exact: true }).click()
+  await openDiagnostics(page, 'Agents')
   await expect(page.locator('.agent-register > button')).toHaveCount(8)
   await expect(page.locator('.agent-register-coordinator')).toContainText('ORCHESTRATOR')
   await expect(page.locator('.compute-worker')).toHaveCount(8)
@@ -24,8 +24,7 @@ test('agent register exposes specialists and bounded controls', async ({ page })
 })
 
 test('research brain shows sources and replication gaps', async ({ page }) => {
-  await page.goto('/')
-  await page.getByRole('link', { name: 'Agents', exact: true }).click()
+  await openDiagnostics(page, 'Agents')
   await page.getByRole('button', { name: /Research brain/ }).click()
   await expect(page.locator('.source-card').first()).toBeVisible()
   await page.getByLabel('Filter library').fill('Moskowitz')
@@ -37,8 +36,7 @@ test('research brain shows sources and replication gaps', async ({ page }) => {
 })
 
 test('command layout fits the viewport and reduced motion stops animations', async ({ page }, testInfo) => {
-  await page.goto('/')
-  await page.getByRole('link', { name: 'Agents', exact: true }).click()
+  await openDiagnostics(page, 'Agents')
   await expect(page.locator('.agent-register > button')).toHaveCount(8)
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)
   expect(overflow).toBe(false)
@@ -51,8 +49,7 @@ test('command layout fits the viewport and reduced motion stops animations', asy
 })
 
 test('PC layouts fit laptop, desktop and ultrawide windows', async ({ page }) => {
-  await page.goto('/')
-  await page.getByRole('link', { name: 'Agents', exact: true }).click()
+  await openDiagnostics(page, 'Agents')
   await page.emulateMedia({ reducedMotion: 'reduce' })
   for (const [width, height] of [[1280, 800], [1440, 900], [1920, 1080], [2560, 1440]]) {
     await page.setViewportSize({ width, height })
