@@ -59,14 +59,26 @@
 .skip-link:focus-visible { transform: translateY(0); }
 
 /* ── shell ─────────────────────────────────────────────────────────────────
-   Three rows, two columns. The rail spans all three rows so the wordmark sits
-   at the same height as the context bar rather than under it. */
+   Three rows, two columns: the context bar, the destination's tab row, and
+   the content. The rail spans all three rows so the wordmark sits at the same
+   height as the context bar rather than under it.
+
+   The tab row is `auto`, so a destination without tabs collapses it to
+   nothing rather than leaving a gap. The content row is the flexible one.
+
+   The third row used to be a status bar and the second the content. When the
+   status bar went, `horizon.css` restated the rows in their new order -- but
+   it is imported *before* this sheet, and a same-specificity `.app-shell`
+   rule loses to the one declared later. So the tab row took the whole
+   viewport, the content was squeezed into the 34px the status bar used to
+   have, and every screen opened blank with its tabs floating mid-page. The
+   grid is declared here, once, and nowhere else. */
 .app-shell {
   height: 100vh;
   height: 100dvh;
   display: grid;
   grid-template-columns: var(--rail-w) minmax(0, 1fr);
-  grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--statusbar-h);
+  grid-template-rows: var(--topbar-h) auto minmax(0, 1fr);
   background: var(--bg-0);
   transition: grid-template-columns var(--t) var(--ease-soft);
 }
@@ -346,7 +358,7 @@
 /* ── workspace ─────────────────────────────────────────────────────────────*/
 .workstation-main {
   grid-column: 2;
-  grid-row: 2;
+  grid-row: 3;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;

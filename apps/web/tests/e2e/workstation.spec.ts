@@ -77,6 +77,34 @@ test('every destination the manifest declares is reachable', async ({ page, requ
   }
 })
 
+test('the content fills the viewport, not the tab bar', async ({ page }) => {
+  /* The shell is a grid of three rows: the context bar, the destination's tabs
+   * and the content. Two stylesheets each declared those rows, in different
+   * orders, and the one that won the cascade was the one that still had a
+   * status bar in the third row. So the tab row got the whole viewport, the
+   * content got the 34px the status bar used to have, and every screen opened
+   * blank with its tabs floating in the middle of the page.
+   *
+   * jsdom has no layout, so the unit suite could not see it. This is the
+   * geometry, measured. */
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/#research')
+  await expect(page.getByText('PAPER ONLY').last()).toBeVisible({ timeout: 30_000 })
+  const tabs = page.getByRole('navigation', { name: 'Research views' })
+  await expect(tabs).toBeVisible()
+  const main = page.locator('#main-content')
+  const tabBox = await tabs.boundingBox()
+  const mainBox = await main.boundingBox()
+  expect(tabBox, 'the tab bar has no box').not.toBeNull()
+  expect(mainBox, 'the content has no box').not.toBeNull()
+  // A row of tabs is a strip. The content is everything under it.
+  expect(tabBox!.height, 'the tab row is taller than a strip').toBeLessThan(80)
+  expect(mainBox!.y, 'the content does not start under the tabs').toBeGreaterThanOrEqual(
+    tabBox!.y + tabBox!.height - 1,
+  )
+  expect(mainBox!.height, 'the content has less than half the viewport').toBeGreaterThan(450)
+})
+
 test('no destination is hidden behind a setting', async ({ page, request }) => {
   /* The mode chooser used to decide which sections existed, and Campaigns was
    * one of the things it could hide. Nothing hides a destination now, and this

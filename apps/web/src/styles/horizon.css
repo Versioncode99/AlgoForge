@@ -18,22 +18,10 @@
  * nobody was looking for; the events are in Diagnostics, where somebody goes to
  * look for them, and the inbox still says when work finishes.
  *
- * The tab row is `auto`, so a destination without tabs collapses it to nothing
- * rather than leaving a gap. */
-.app-shell { grid-template-rows: var(--topbar-h) auto minmax(0, 1fr); }
-.app-shell .workstation-main { grid-row: 3; }
-
-/* ── the shell grid ──────────────────────────────────────────────────────── */
-/* Three rows where there were three, but the third is the content rather than
- * a status bar. The footer carried the latest event and a count of recent ones
- * on every screen in the product: a permanent strip of information nobody was
- * looking for. The events are in Diagnostics, where somebody goes to look for
- * them, and the inbox still says when work finishes.
- *
- * The tab row is `auto`, so a destination without tabs collapses it to nothing
- * rather than leaving a gap. */
-.app-shell { grid-template-rows: var(--topbar-h) auto minmax(0, 1fr); }
-.app-shell .workstation-main { grid-row: 3; }
+ * The rows themselves are declared in `workstation.css`, which owns the shell
+ * grid. They were restated here as an override, and this sheet is imported
+ * before that one, so the override lost the cascade and the tab row was given
+ * the whole viewport. One declaration, in the sheet that owns the grid. */
 
 /* ── destination tabs ────────────────────────────────────────────────────── */
 /* Where the other twelve rail rows went. A tab is a view inside a destination,
