@@ -520,25 +520,9 @@
 .ws-leave-mode:hover { background: var(--bg-2); color: var(--fg-0); }
 .ws-leave-mode small { color: var(--fg-3); font-size: 0.7rem; line-height: 1.45; }
 
-.mode-badge-icon {
-  margin-right: var(--sp-1);
-  font-style: normal;
-  color: var(--fg-2);
-}
-.mode-origin {
-  padding: 1px var(--sp-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  color: var(--fg-3);
-  font-size: 0.62rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
 .ws-error { margin: 0; color: var(--fail); font-size: 0.8rem; }
 
 @media (max-width: 640px) {
   .ws-create-fields { grid-template-columns: 1fr; }
   .ws-builtins > div { grid-template-columns: 1fr; }
-  .ws-switcher { width: 100vw; border-right: 0; }
-}
+  .ws-switcher { width: 100vw; border-right: 0; }}

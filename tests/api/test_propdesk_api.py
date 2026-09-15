@@ -57,11 +57,41 @@ def data(response) -> dict:
 
 
 def test_the_providers_route_says_which_connectors_exist(client) -> None:
+    """Only the simulator can send an order, and every other note says so.
+
+    The phrase is load-bearing and is asserted for Rithmic too, whichever
+    adapter is serving it: this build has a read-only Rithmic connector, and the
+    moment "read-only" is allowed to soften "no live connector" the screen stops
+    saying whether an order can leave the machine.
+    """
     payload = data(client.get("/api/v1/propdesk/providers"))
     assert payload["live_connectors_implemented"] == ["simulated"]
     for provider in ("rithmic", "tradovate", "projectx"):
         assert "no live connector" in payload["adapters"][provider]
         assert payload["required_work"][provider]["external"]
+
+
+def test_the_rithmic_note_states_whether_this_installation_can_read(client) -> None:
+    """Three states for one provider, and the route distinguishes them.
+
+    `rithmic_blocker` is "" only where the operator's SDK and a protobuf
+    compiler are installed. Anywhere else the note must say what is missing
+    rather than offering a connection that would fail on the first click.
+    """
+    payload = data(client.get("/api/v1/propdesk/providers"))
+    note = payload["adapters"]["rithmic"]
+    if payload["rithmic_blocker"]:
+        assert "no read-only connector here either" in note
+        assert payload["rithmic_blocker"] in note
+    else:
+        assert "Read-only connector" in note
+
+
+def test_the_catalogue_separates_reading_from_trading(client) -> None:
+    """A provider may be readable and untradeable, and one list cannot say both."""
+    payload = data(client.get("/api/v1/propdesk/providers"))
+    assert payload["read_only_connectors_implemented"] == ["rithmic"]
+    assert "rithmic" not in payload["live_connectors_implemented"]
 
 
 def test_platforms_are_listed_apart_from_providers(client) -> None:

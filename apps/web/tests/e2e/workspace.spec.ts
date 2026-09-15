@@ -1,5 +1,4 @@
 import { expect, test, type Page } from '@playwright/test'
-import { enterMode } from './mode'
 
 /* The workstation, driven the way a person drives it.
  *
@@ -16,7 +15,6 @@ const API = process.env.ALGOFORGE_API_URL ?? 'http://127.0.0.1:8765/api/v1'
  * working, which is a different test. Deleting workspaces touches no research:
  * that is the whole point of keeping layouts in their own store. */
 test.beforeEach(async ({ request }) => {
-  await enterMode(request, 'normal')
   const listed = await request.get(`${API}/workspaces`)
   const body = await listed.json()
   for (const item of body?.data?.workspaces ?? []) {
@@ -46,7 +44,19 @@ test('a template opens a real layout and nothing is locked to it', async ({ page
   await expect(panels).toHaveCount(5)
 })
 
-test('a chart panel draws the symbol it was asked for', async ({ page }) => {
+/** Whether any dataset on this machine holds bars a chart panel could draw. */
+async function archiveLoaded(request: import('@playwright/test').APIRequestContext) {
+  const response = await request.get(`${API}/datasets`)
+  if (!response.ok()) return false
+  const rows = (await response.json()).data as { loaded?: boolean; bar_count?: number }[]
+  return rows.some((row) => row.loaded && (row.bar_count ?? 0) > 0)
+}
+
+test('a chart panel draws the symbol it was asked for', async ({ page, request }) => {
+  test.skip(
+    !(await archiveLoaded(request)),
+    'no dataset on this machine holds bars; `a chart panel with no archive says so` covers that case',
+  )
   await freshWorkspace(page, 'Systematic Trader')
 
   // The template asks for NQ and ES. Falling through to whichever archive
@@ -56,6 +66,25 @@ test('a chart panel draws the symbol it was asked for', async ({ page }) => {
   const first = await selects.nth(0).inputValue()
   const second = await selects.nth(1).inputValue()
   expect(first).not.toEqual(second)
+})
+
+test('a chart panel with no archive says so rather than drawing something else', async ({
+  page,
+  request,
+}) => {
+  /* The counterpart to the test above, and the one that runs on an installation
+   * with no market data. A panel that quietly drew a different symbol — or a
+   * synthetic series — would be the single most expensive lie this product
+   * could tell, because a chart is where a belief gets formed. */
+  test.skip(
+    await archiveLoaded(request),
+    'this installation holds a loaded archive, so the panel draws rather than refuses',
+  )
+  await freshWorkspace(page, 'Systematic Trader')
+  const panel = page.locator('.wpanel').first()
+  await expect(panel.getByText(/No archive for/i)).toBeVisible({ timeout: 30_000 })
+  // It names what to do about it rather than stopping at "no data".
+  await expect(panel.getByText(/Add one, or pick a different symbol/i)).toBeVisible()
 })
 
 test('a panel can be dragged to a new position and it stays there', async ({ page }) => {
@@ -86,8 +115,16 @@ test('a panel can be resized and the new size survives a reload', async ({ page 
   await freshWorkspace(page, 'Quant Researcher')
 
   const panel = page.locator('.wpanel').first()
-  const before = await panel.boundingBox()
   const handle = panel.locator('.wpanel-resize')
+  /* Scrolled to first, and then the boxes are read.
+   *
+   * `boundingBox()` is in page coordinates and `mouse.move` is in viewport
+   * coordinates, and the resize grip sits at the bottom of a panel that is
+   * usually below the fold. Without this the drag happened at a point outside
+   * the viewport, hit nothing, and the test reported that resizing does not
+   * work — of the product, not of the coordinates. */
+  await handle.scrollIntoViewIfNeeded()
+  const before = await panel.boundingBox()
   const grip = await handle.boundingBox()
 
   await page.mouse.move(grip!.x + 5, grip!.y + 5)

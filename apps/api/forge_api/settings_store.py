@@ -479,9 +479,12 @@ def default_routing() -> RoutingSettings:
     for key in ROLE_KEYS:
         role = ROLES_BY_KEY[key]
         chosen = DEFAULT_ROUTING.get(key) or DEFAULT_BY_DEMAND.get(role.demand.value, "")
-        roles[key] = RoleRouting(
-            recommended=chosen, fallback=DEFAULT_BY_DEMAND["balanced"]
-        )
+        # No shipped `fallback`. It used to be the generic balanced model,
+        # which is what `fallback_model` already is — and sitting in a
+        # per-role field it outranked the recommendation measured for that
+        # role, so the orchestrator's carefully chosen planner was replaced by
+        # a generic one the moment its first choice was unavailable.
+        roles[key] = RoleRouting(recommended=chosen)
     return RoutingSettings(
         mode="hybrid",
         default_model="",
@@ -566,7 +569,7 @@ def _merge_routing(routing: RoutingSettings, flat: dict[str, str]) -> RoutingSet
         merged[key] = RoleRouting(
             model=stored.model or migrated,
             recommended=stored.recommended or shipped.recommended,
-            fallback=stored.fallback or shipped.fallback,
+            fallback=stored.fallback,
             enabled=stored.enabled,
         )
     return RoutingSettings(

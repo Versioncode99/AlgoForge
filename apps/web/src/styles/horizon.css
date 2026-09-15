@@ -62,7 +62,7 @@
   white-space: nowrap;
 }
 .destination-tabs a:hover { color: var(--fg-1); }
-.destination-tabs a[aria-current='page'] {
+.destination-tabs a[aria-current] {
   color: var(--fg-1);
   border-bottom-color: var(--fg-1);
   font-weight: 560;
@@ -71,7 +71,7 @@
  * nobody can find is a diagnostics tab nobody uses when it matters. */
 .destination-tabs a[data-advanced] { color: var(--fg-3); }
 .destination-tabs a[data-advanced]:hover,
-.destination-tabs a[data-advanced][aria-current='page'] { color: var(--fg-1); }
+.destination-tabs a[data-advanced][aria-current] { color: var(--fg-1); }
 
 /* ── the header, with two facts instead of eleven ─────────────────────────── */
 .context-facts { display: flex; gap: var(--sp-4); align-items: center; }

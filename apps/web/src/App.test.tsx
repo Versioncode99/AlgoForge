@@ -122,6 +122,7 @@ let authority = {
   },
 }
 
+let requested: string[] = []
 let propStatus: unknown = { account: null, assessment: null, reason: 'no state has been recorded' }
 let fundState: unknown = null
 let screened: unknown[] = []
@@ -163,6 +164,7 @@ const operations = {
 
 globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input)
+  requested.push(url)
   if (init?.method === 'POST' || init?.method === 'PUT') posted.push(url)
 
   const data = url.includes('/navigation') ? NAVIGATION
@@ -201,6 +203,7 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
 })
 
 beforeEach(() => {
+  requested = []
   propStatus = { account: null, assessment: null, reason: 'no state has been recorded' }
   fundState = null
   screened = []
@@ -576,4 +579,42 @@ test('evidence still explains an honest empty state', async () => {
   window.history.replaceState(null, '', '#research?tab=evidence')
   renderApp()
   expect(await screen.findByText(/NO STRATEGIES/i)).toBeInTheDocument()
+})
+
+// ── what opening a screen costs ──────────────────────────────────────────────
+//
+// The shell used to fetch health, summary, *every strategy*, the activity feed,
+// the inbox, the appearance and the active workspace on every route. Opening
+// Chat therefore paid for the entire strategy library before the composer
+// worked, for a screen that does not show a single strategy.
+
+test('opening Chat does not fetch the strategy library', async () => {
+  window.history.replaceState(null, '', '#chat')
+  renderApp()
+  await screen.findByLabelText(/ask a question/i)
+  const strategies = requested.filter((url) => /\/strategies(\?|$)/.test(url))
+  expect(strategies).toHaveLength(0)
+})
+
+test('opening Chat does not fetch the activity feed', async () => {
+  window.history.replaceState(null, '', '#chat')
+  renderApp()
+  await screen.findByLabelText(/ask a question/i)
+  expect(requested.filter((url) => url.includes('/activity'))).toHaveLength(0)
+})
+
+test('the composer is usable before anything but the shell has loaded', async () => {
+  window.history.replaceState(null, '', '#chat')
+  renderApp()
+  const composer = await screen.findByLabelText(/ask a question/i)
+  expect(composer).toBeEnabled()
+})
+
+test('the strategy library is still fetched by the screen that shows it', async () => {
+  window.history.replaceState(null, '', '#strategies')
+  renderApp()
+  await screen.findByLabelText(/filter strategies/i)
+  // Route-local, not removed. A screen that stopped loading what it displays
+  // would be a faster screen showing nothing.
+  expect(requested.some((url) => /\/strategies(\?|$)/.test(url))).toBe(true)
 })

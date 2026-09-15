@@ -151,8 +151,22 @@
 
   --fg-0: #f2f3f5;
   --fg-1: #c3c5ca;
-  --fg-2: #8a8d94;
-  --fg-3: #5f6269;
+  /* The grey ladder is measured against `--bg-3`, the lightest surface in this
+     theme, because that is where a dark-theme grey has the least to work with.
+     Panels and popovers sit on it, so a tone that only passes on `--bg-0`
+     passes nowhere anybody reads.
+
+     #8a8d94 measured 4.90:1 there and #5f6269 measured 3.20:1 — the second is
+     below WCAG AA's 4.5:1 for normal text, and the rail's group headings, the
+     `Ctrl K` hints and every chart caption wore it, so an axe audit failed on
+     every screen at once.
+
+     Both moved rather than only the failing one: lifting `--fg-3` to 4.58:1
+     alone would have put it within 0.3 of `--fg-2`, and a hierarchy whose two
+     quietest steps are indistinguishable is not a hierarchy. 6.37:1 and
+     4.58:1 on `--bg-3`, against 9.43:1 for `--fg-1`. */
+  --fg-2: #9fa2aa;
+  --fg-3: #848891;
 
   --brand: #b9bec7;
   --brand-dim: #6d717a;
@@ -188,7 +202,10 @@
   --tier-holdout: #a892c9;
   --tier-oos: #6fbf8b;
   --tier-insample: #7fa7d4;
-  --tier-synthetic: #6e7178;
+  /* The quietest tier, and the one that most needs reading. #6e7178 measured
+     3.33:1 on a table row — the only one of the four below AA, and the one that
+     says a result came from data nobody traded. 4.58:1. */
+  --tier-synthetic: #848890;
 
 
   /* ── quantitative intensity ───────────────────────────────────────────────
@@ -271,7 +288,10 @@
   --fg-0: #16171a;
   --fg-1: #3b3d43;
   --fg-2: #62656d;
-  --fg-3: #8c8f97;
+  /* 2.76:1 before, the worst of the three themes. Dark text on a light ground
+     has least contrast on the *darkest* surface, so this is measured against
+     `--bg-0`: 4.54:1 there, 5.11:1 on `--bg-2` and 5.33:1 on `--bg-3`. */
+  --fg-3: #696b71;
 
   --brand: #4d525b;
   --brand-dim: #9a9ea6;
@@ -299,7 +319,8 @@
   --tier-holdout: #6a4f9c;
   --tier-oos: #1f7a4b;
   --tier-insample: #2f6ea8;
-  --tier-synthetic: #7d8087;
+  /* 3.37:1 before; 4.56:1 on `--bg-0`. See the note in the dark palette. */
+  --tier-synthetic: #686b71;
 
   --shadow-1: 0 1px 2px rgb(20 22 26 / 0.10);
   --shadow-2: 0 4px 14px rgb(20 22 26 / 0.14);

@@ -423,7 +423,11 @@ export function App() {
           <a
             key={tab.tab}
             href={format(destination.route, tab.tab)}
-            aria-current={here.tab === tab.tab ? 'page' : undefined}
+            /* `true`, not `page`: the rail link for this destination is already
+               `aria-current="page"`, and two elements both claiming to be the
+               current *page* is one claim too many. The tab is the current view
+               within the page the rail already named. */
+            aria-current={here.tab === tab.tab ? 'true' : undefined}
             data-advanced={tab.advanced || undefined}
             title={tab.detail}
           >{tab.label}</a>
@@ -431,7 +435,13 @@ export function App() {
       </nav>
     )}
 
-    <main className="workstation-main" id={MAIN_LANDMARK_ID} tabIndex={-1}>
+    {/* `tabIndex={0}`, not `-1`. It is the skip link's focus target, which `-1`
+        would satisfy — but it is also the page's scroll container, and a view
+        whose content happens to hold no focusable element (a report, a table of
+        readings) would then be scrollable by mouse and unreachable by keyboard.
+        The cost is one tab stop, immediately after the skip link that aims at
+        it, which is where the keyboard was headed anyway. */}
+    <main className="workstation-main" id={MAIN_LANDMARK_ID} tabIndex={0}>
       {!online && !health.isPending && <div className="state error" role="alert">
         <span>The AlgoForge API on port 8765 is not answering. Nothing here is lost — the workspace reappears as soon as it does.</span>
         <button onClick={() => health.refetch()}><RotateCw aria-hidden="true" />Retry now</button>

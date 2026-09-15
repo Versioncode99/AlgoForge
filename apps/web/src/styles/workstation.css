@@ -357,132 +357,6 @@
   margin: 0 auto;
 }
 
-/* ── status bar ────────────────────────────────────────────────────────────*/
-.global-status {
-  grid-column: 2;
-  grid-row: 3;
-  z-index: 30;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  padding: 0 var(--sp-2) 0 var(--sp-5);
-  border-top: 1px solid var(--line);
-  background: var(--bg-1);
-  color: var(--fg-3);
-  font-size: var(--fs-nano);
-}
-.global-status > span:first-child {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.global-status svg { flex: 0 0 auto; width: 13px; height: 13px; }
-.global-status .is-pass { color: var(--pass); }
-.global-status .is-fail { color: var(--fail); }
-.global-status .is-warn { color: var(--warn); }
-.global-status button {
-  flex: 0 0 auto;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 0 var(--sp-3);
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--fg-2);
-  font-size: var(--fs-nano);
-  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
-}
-.global-status button:hover {
-  color: var(--fg-0);
-  background: var(--bg-3);
-}
-
-/* ── event drawer ──────────────────────────────────────────────────────────
-   It floats over the workspace, so it takes the large radius and the third
-   shadow step — the one step reserved for things that are actually above. */
-.event-drawer {
-  position: fixed;
-  left: calc(var(--rail-w) + var(--shell-gap));
-  right: var(--shell-gap);
-  bottom: calc(var(--statusbar-h) + var(--shell-gap));
-  z-index: 25;
-  height: min(42vh, 390px);
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-lg);
-  background: var(--bg-1);
-  box-shadow: var(--shadow-3);
-  overflow: hidden;
-  transform: translateY(calc(100% + var(--sp-6)));
-  visibility: hidden;
-  transition:
-    transform var(--t-slow) var(--ease-out),
-    left var(--t) var(--ease-soft),
-    visibility 0s linear var(--t-slow);
-}
-.event-drawer[data-open='true'] {
-  transform: translateY(0);
-  visibility: visible;
-  transition-delay: 0s;
-}
-.event-drawer header {
-  flex: 0 0 auto;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 0 var(--sp-3);
-  border-bottom: 1px solid var(--line);
-}
-.event-drawer header svg { width: 15px; height: 15px; color: var(--fg-2); }
-.event-drawer header span { flex: 1 1 auto; color: var(--fg-3); font-size: var(--fs-nano); }
-.event-drawer header button {
-  height: 26px;
-  padding: 0 var(--sp-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--bg-2);
-  color: var(--fg-1);
-  font-size: var(--fs-nano);
-}
-.event-drawer header button:hover { border-color: var(--line-strong); color: var(--fg-0); }
-.event-drawer > div {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--sp-1) var(--sp-2);
-}
-.event-drawer > div > p { padding: var(--sp-5); color: var(--fg-2); text-align: center; }
-.event-drawer article {
-  min-height: 32px;
-  display: grid;
-  grid-template-columns: 70px 108px minmax(200px, 1fr) auto;
-  gap: var(--sp-3);
-  align-items: center;
-  padding: var(--sp-1) var(--sp-3);
-  border-radius: var(--r-sm);
-  font-size: var(--fs-micro);
-}
-.event-drawer article:hover { background: var(--bg-2); }
-.event-drawer article time,
-.event-drawer article code {
-  color: var(--fg-3);
-  font-family: var(--font-mono);
-  font-size: var(--fs-nano);
-}
-.event-drawer article[data-level='pass'] strong { color: var(--pass); }
-.event-drawer article[data-level='fail'] strong { color: var(--fail); }
-.event-drawer article[data-level='warn'] strong { color: var(--warn); }
-
 /* ── collapsed rail ────────────────────────────────────────────────────────
    It has to stay usable collapsed, so the label becomes a tooltip that does
    not wait on the title attribute's delay, and the active fill still reads at
@@ -512,7 +386,6 @@
   padding-top: var(--sp-3);
   border-top: 1px solid var(--line);
 }
-.is-rail-collapsed .event-drawer { left: calc(var(--rail-w-collapsed) + var(--shell-gap)); }
 
 /* The label as a hover tooltip, drawn outside the rail.
  *
@@ -773,8 +646,7 @@
   .context-facts > span:nth-of-type(4) { display: none; }
   .command-vitals > div { min-width: 110px; }
   .agent-register > button { grid-template-columns: 28px minmax(150px, 1fr) 74px 48px; }
-  .agent-register > button > span:last-child { display: none; }
-}
+  .agent-register > button > span:last-child { display: none; }}
 
 /* Below this width the rail is an overlay rather than a column, because 200px
    of a 700px viewport spent on navigation is most of the reading width. The
@@ -833,17 +705,11 @@
   .context-search { min-width: 40px; padding-inline: var(--sp-2); }
   .context-search span,
   .context-search kbd { display: none; }
-  .event-drawer,
-  .is-rail-collapsed .event-drawer { left: var(--shell-gap); }
-  .command-workspace { grid-template-columns: 1fr; }
-}
+  .command-workspace { grid-template-columns: 1fr; }}
 
-@media (prefers-reduced-motion: reduce) {
-  .app-shell,
-  .event-drawer,
-  .workstation-rail,
-  .skip-link { transition: none; }
-}
+@media (prefers-reduced-motion: reduce) {.app-shell,
+.workstation-rail,
+.skip-link { transition: none; }}
 
 /* The palette's outcome line.
  *
@@ -914,8 +780,7 @@
   .service-row summary small { grid-column: 1 / -1; }
   .service-explain { grid-template-columns: minmax(0, 1fr); }
   .service-explain dt { margin-top: 6px; }
-  .tier-ladder dl > div { grid-template-columns: minmax(0, 1fr); }
-}
+  .tier-ladder dl > div { grid-template-columns: minmax(0, 1fr); }}
 
 /* ── what is being looked at ───────────────────────────────────────────────*/
 /* A separate group from `.context-facts`, which is telemetry, and from the
@@ -963,11 +828,9 @@
    at matters more on a phone than the strategy count, so the counts go first
    and the chips stay. */
 @media (max-width: 900px) {
-  .context-facts > span:not(:first-child) { display: none; }
-}
+  .context-facts > span:not(:first-child) { display: none; }}
 @media (max-width: 620px) {
-  .context-chip-sub { display: none; }
-}
+  .context-chip-sub { display: none; }}
 
 /* ── the inbox drawer ───────────────────────────────────────────────────────
    A right-hand panel rather than a bottom one, because it sits beside the work
@@ -1080,5 +943,4 @@
   font-size: var(--fs-nano); text-align: center;
 }
 @media (max-width: 1100px) {
-  .context-inbox span { display: none; }
-}
+  .context-inbox span { display: none; }}

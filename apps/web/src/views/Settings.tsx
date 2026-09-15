@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { getJson, patchJson, postJson } from '../api'
 import { useAuthority, useSetAuthority } from '../authority'
 import { AppearancePanel } from '../components/AppearancePanel'
-import { ChatPanel, type ChatOpening } from '../components/ChatPanel'
 import { StoragePanel } from '../components/StoragePanel'
 import { PanelHead, Stat } from '../components/ui'
 import {
@@ -279,33 +278,6 @@ function UpdatesPanel() {
         </div>
       )}
     </div>
-  )
-}
-
-/** Ask questions about this instance. Grounded in the local ledger; falls back to
- *  deterministic answers when no model is configured, and says so.
- *
- *  `opening` is what a link asked the conversation to start knowing -- the
- *  strategy somebody pressed "Ask about this" on. Without one the panel falls
- *  back to whatever the workspace is pointed at, which is the right default and
- *  was, until now, the only thing that ever happened: the panel had accepted an
- *  opening context since it was written and no caller had ever passed one. */
-export function ConsoleView({ opening }: { opening?: ChatOpening } = {}) {
-  /* The console is the conversation panel at full width.
-   *
-   * It used to be its own implementation: a thread in `useState`, lost on
-   * reload, with no history and no way back to yesterday's research. Pointing
-   * it at the same component the workspace panel uses is what stops the two
-   * drifting into different products with the same name.
-   */
-  return (
-    <section className="stack console-view">
-      <div className="section-title">
-        <p>CONSOLE</p>
-        <h2>Ask about what this instance has actually done</h2>
-      </div>
-      <ChatPanel opening={opening} />
-    </section>
   )
 }
 

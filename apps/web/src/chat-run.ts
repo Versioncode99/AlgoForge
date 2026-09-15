@@ -98,7 +98,7 @@ function parseFrame(frame: string): RunEvent | null {
  * conversation store remains the record, and the transcript is read from it
  * rather than assembled out of these events.
  */
-export function useChatRun(onFinished?: () => void) {
+export function useChatRun(onFinished?: (status: RunStatus) => void) {
   const [state, setState] = useState<RunState>(IDLE)
   const abort = useRef<AbortController | null>(null)
   const finished = useRef(onFinished)
@@ -117,7 +117,7 @@ export function useChatRun(onFinished?: () => void) {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let terminal = false
+      let terminal: RunStatus | null = null
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
@@ -130,14 +130,16 @@ export function useChatRun(onFinished?: () => void) {
           const event = parseFrame(frame)
           if (!event) continue
           setState((was) => apply(was, event))
-          if (['completed', 'cancelled', 'failed'].includes(event.event)) terminal = true
+          if (['completed', 'cancelled', 'failed'].includes(event.event)) {
+            terminal = event.event as RunStatus
+          }
         }
       }
-      if (terminal) finished.current?.()
+      if (terminal) finished.current?.(terminal)
     } catch (error) {
       if ((error as Error).name === 'AbortError') return
       setState((was) => ({ ...was, status: 'failed', error: (error as Error).message }))
-      finished.current?.()
+      finished.current?.('failed')
     }
   }, [])
 

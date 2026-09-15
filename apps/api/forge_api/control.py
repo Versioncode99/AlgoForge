@@ -974,6 +974,18 @@ def build_control_router(
     def read_settings() -> ApiEnvelope[dict[str, Any]]:
         current = settings_store.load()
         gateway_status = status_for(current.ai.provider, current.ai.base_url)
+        # Every role resolved once, under the current settings. Used twice
+        # below: as the preview the screen renders, and as the deprecated flat
+        # map, which now reports what *answers* rather than what is assigned.
+        routing_preview = [
+            resolve_route(
+                role["key"],
+                current.ai.model_routing,
+                provider=current.ai.provider,
+                catalogue=catalog_for(current.ai.provider),
+            ).as_dict()
+            for role in role_rows()
+        ]
         return ApiEnvelope(
             data={
                 "ai": {
@@ -989,8 +1001,8 @@ def build_control_router(
                     # against it keeps reading; nothing in this repository
                     # writes it or reads it to make a decision.
                     "routing": {
-                        role: current.ai.model_routing.for_role(role).model
-                        for role in current.ai.routing
+                        decision["role"]: decision["model"]
+                        for decision in routing_preview
                     },
                     "model_routing": routing_to_dict(current.ai.model_routing),
                     # `vars` would emit the enum and omit `enforced`, which is
@@ -1029,18 +1041,10 @@ def build_control_router(
                     "freshness": FRESHNESS,
                     "depths": DEPTHS,
                 },
-                # Every role resolved under the current settings, so the screen
-                # shows which model would actually answer and why — including a
-                # substitution the operator would otherwise never see.
-                "routing_preview": [
-                    resolve_route(
-                        role["key"],
-                        current.ai.model_routing,
-                        provider=current.ai.provider,
-                        catalogue=catalog_for(current.ai.provider),
-                    ).as_dict()
-                    for role in role_rows()
-                ],
+                # Which model would actually answer for each role, and why —
+                # including a substitution the operator would otherwise never
+                # see.
+                "routing_preview": routing_preview,
                 "credentials": SettingsStore.credential_status(),
                 "appearance": vars(current.appearance),
                 # The options travel with the value, so the interface never has
@@ -1130,10 +1134,18 @@ def build_control_router(
         # disagree are two tables, one of which is wrong.
         # Derived, not maintained. It used to be written alongside the rich
         # routing and kept in step by hand, which is two tables, one of which is
-        # wrong the moment somebody edits the other. Now the rich table is the
-        # record and this is a view of it — an unassigned role reads as empty
-        # rather than as whatever the copy last said.
-        routing = {role: model_routing.for_role(role).model for role in role_keys}
+        # wrong the moment somebody edits the other.
+        #
+        # Derived from the *decision* rather than from the raw assignment: a
+        # client reading this map is asking which model answers for a role, and
+        # a role that follows its feature or the default answers with one even
+        # though it names none.
+        routing = {
+            role: resolve_route(
+                role, model_routing, provider=provider, catalogue=catalog_for(provider)
+            ).model
+            for role in role_keys
+        }
         updated = Settings(
             # Carried through explicitly: `Settings` is rebuilt wholesale here,
             # so anything not named would silently revert to its default.

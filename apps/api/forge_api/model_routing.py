@@ -641,15 +641,21 @@ def resolve(
     else:
         substitute_reason = f"{role.label} names no model"
 
-    # Order is the whole design. An operator's explicit global default beats a
-    # shipped recommendation, and a shipped recommendation beats a generic
-    # fallback — so a fresh installation gets the measured per-role choice, and
-    # an operator who picks one model gets that model everywhere they have not
-    # said otherwise.
+    # Order is the whole design, and it runs from most specific to least.
+    #
+    # The role's own fallback is an operator's answer to "if this role's model
+    # fails, use that one", so it beats a global default that was not about this
+    # role at all. The global default is an operator's choice and beats the
+    # shipped recommendation, which is how "one model everywhere" works. The
+    # recommendation beats the generic global fallback, because it was measured
+    # for this role and the fallback was not.
+    #
+    # `default_routing` ships no per-role fallback, so on a fresh installation
+    # the first of these with a value is the recommendation.
     for candidate, source, label in (
+        (routing.fallback, "fallback", "the role's fallback"),
         (settings.default_model, "default", "the default model"),
         (routing.recommended, "recommended", f"the model AlgoForge ships for {role.label}"),
-        (routing.fallback, "fallback", "the role's fallback"),
         (settings.fallback_model, "fallback", "the global fallback"),
     ):
         if not candidate:

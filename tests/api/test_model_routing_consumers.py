@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from forge_api.model_choice import choose
@@ -125,7 +125,7 @@ def test_the_chat_turn_calls_the_model_the_chat_feature_names(
     class FakeSelection:
         provider = current.ai.provider
         client = FakeClient()
-        status = {"connected": True}
+        status: ClassVar[dict[str, Any]] = {"connected": True}
 
     monkeypatch.setattr(
         "forge_api.assistant.resolve", lambda provider, base_url: FakeSelection()

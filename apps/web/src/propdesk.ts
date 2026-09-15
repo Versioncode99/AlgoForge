@@ -53,6 +53,11 @@ export type ProviderDescriptor = {
   rate_limit_per_minute: number | null
   session_seconds: number | null
   live_connector_implemented: boolean
+  /** Whether this build can *read* from the provider without being able to
+   * place an order. Separate from the flag above, and the separation is the
+   * point: collapsing them would either claim this build can trade or claim it
+   * cannot reach the provider at all, and for Rithmic both are false. */
+  read_only_connector_implemented: boolean
   documentation_url: string
   evidence: string
   limitations: string[]
@@ -79,8 +84,12 @@ export type ProviderCatalogue = {
   platforms: PlatformBinding[]
   data_feeds: { feed_id: string; name: string; routes_orders: false; note: string }[]
   live_connectors_implemented: string[]
+  read_only_connectors_implemented: string[]
   adapters: Record<string, string>
   required_work: Record<string, RequiredWork>
+  /** What stands between this installation and a Rithmic connection, or "".
+   * Empty means the connector is available here, not that it has been used. */
+  rithmic_blocker: string
 }
 
 export type AdapterHealth = {

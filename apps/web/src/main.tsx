@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { ApiError } from './api'
 import { followVisibility } from './desktop'
 import { App } from './App'
 import { applyAppearance, cachedAppearance } from './theme'
@@ -24,7 +25,6 @@ import './styles/workstation.css'
 import './styles/research.css'
 import './styles/trades.css'
 import './styles/lab.css'
-import './styles/modes.css'
 import './styles/fund.css'
 import './styles/campaign.css'
 import './styles/propdesk.css'
@@ -39,7 +39,23 @@ import './styles/research-control.css'
  * real one arrives. */
 applyAppearance(cachedAppearance())
 
-const queryClient = new QueryClient({defaultOptions: {queries: {retry: 1, staleTime: 30_000}}})
+/* Retry a network fault once; never retry a refusal.
+ *
+ * `retry: 1` retried everything, including the 4xx answers this API uses to say
+ * no: 409 when a dataset needs a credential nobody has set, 422 when no
+ * workspace is open. Those cannot become 200 by being asked again, so the retry
+ * doubled the requests, doubled the console errors, and delayed the refusal the
+ * screen was going to render anyway. A 5xx or a dropped connection is the case
+ * a retry is for, and it keeps one. */
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failures, error) =>
+        failures < 1 && !(error instanceof ApiError && error.status >= 400 && error.status < 500),
+      staleTime: 30_000,
+    },
+  },
+})
 
 /* A window nobody can see stops polling.
  *

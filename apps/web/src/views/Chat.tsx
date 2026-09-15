@@ -203,8 +203,11 @@ export function ChatView({ opening }: { opening?: ChatOpening } = {}) {
   const attach = useAttachContext()
   const detach = useDetachContext()
 
-  const run = useChatRun(() => {
-    setPending(null)
+  const run = useChatRun((status) => {
+    // The question stays on screen unless it was answered. A failed or stopped
+    // run leaves it unanswered, and clearing it would take away both the record
+    // of what was asked and the thing Try again retries.
+    if (status === 'completed') setPending(null)
     void thread.refetch()
     void conversations.refetch()
   })
@@ -291,6 +294,15 @@ export function ChatView({ opening }: { opening?: ChatOpening } = {}) {
   const context = thread.data?.conversation.context ?? []
   const failed = run.state.status === 'failed'
   const lastQuestion = pending ?? [...turns].reverse().find((t) => t.role === 'user')?.text ?? ''
+  /* The finished answer, until the thread refetch brings back the real turn.
+   *
+   * Without this the reply *disappears* the instant the run completes and
+   * reappears when the refetch lands — a flash on every single turn, and on a
+   * slow read a blank transcript where an answer just was. The run's text and
+   * the stored turn are the same words; this is which of the two is on screen. */
+  const settled = run.state.text
+    && !busy
+    && !turns.some((t) => t.role === 'assistant' && t.text === run.state.text)
 
   return (
     <div className="chat-view">
@@ -387,6 +399,13 @@ export function ChatView({ opening }: { opening?: ChatOpening } = {}) {
               {run.state.text
                 ? <Markdown text={run.state.text} />
                 : <p className="chat-working">{run.state.stage || 'Working…'}</p>}
+            </article>
+          )}
+
+          {settled && (
+            <article className="chat-msg assistant">
+              <header><span className="chat-who">AlgoForge</span></header>
+              <Markdown text={run.state.text} />
             </article>
           )}
 

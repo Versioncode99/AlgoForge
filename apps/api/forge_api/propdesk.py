@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -127,6 +128,10 @@ from forge.propdesk import (
     catalogue as identity_catalogue,
 )
 from forge.propdesk.adapters import (
+    PROJECTX_WORK,
+    RITHMIC_WORK,
+    TRADOVATE_WORK,
+    RequiredWork,
     SimulatedAccount,
     SimulatedAdapter,
     projectx_adapter,
@@ -135,13 +140,22 @@ from forge.propdesk.adapters import (
 )
 from forge.propdesk.autonomy import evaluate as evaluate_deployment_gates
 from forge.propdesk.consent import catalogue as disclosure_catalogue
+from forge.propdesk.rithmic import RithmicAdapter
+from forge.propdesk.rithmic.connect import connector as rithmic_connector
+from forge.propdesk.rithmic.connect import why_not as rithmic_blocker
 from forge.propdesk.scaling import explain as explain_proposal
 from pydantic import ValidationError
 
-#: Which adapter serves which provider. The simulator executes; the other three
-#: declare their provider's interface and refuse every command with the reason.
-#: One mapping, so "which providers can this build actually reach" has a single
-#: answer that the API, the action registry and the interface all read.
+#: Which adapter serves which provider. One mapping, so "which providers can
+#: this build actually reach" has a single answer that the API, the action
+#: registry and the interface all read.
+#:
+#: Rithmic is the one entry that is not fixed. When the operator's R | Protocol
+#: SDK is installed, `adapter_for` serves a `RithmicAdapter` — which connects,
+#: discovers accounts and takes snapshots, and refuses to send an order. When it
+#: is not, the declared adapter refuses everything. The factory here is the
+#: latter, because this mapping is also read by callers that want a provider's
+#: declaration without a connection in hand.
 ADAPTERS: dict[Provider, Callable[[], Any]] = {
     Provider.SIMULATED: SimulatedAdapter,
     Provider.RITHMIC: rithmic_adapter,
@@ -149,18 +163,52 @@ ADAPTERS: dict[Provider, Callable[[], Any]] = {
     Provider.PROJECTX: projectx_adapter,
 }
 
+#: What a *live* connector — one that can send an order — still needs, per
+#: provider. Read from here rather than off an adapter instance, because the
+#: adapter serving Rithmic depends on what the operator installed and the
+#: outstanding external work does not.
+REQUIRED_WORK: dict[Provider, RequiredWork] = {
+    Provider.RITHMIC: RITHMIC_WORK,
+    Provider.TRADOVATE: TRADOVATE_WORK,
+    Provider.PROJECTX: PROJECTX_WORK,
+}
 
-def adapter_for(connection: BrokerConnection) -> Any:
+
+def rithmic_is_reachable(workspace: Path | None = None) -> bool:
+    """Whether this installation has what a Rithmic connection needs."""
+    return not rithmic_blocker(workspace)
+
+
+def adapter_for(
+    connection: BrokerConnection,
+    *,
+    broker: CredentialBroker | None = None,
+    workspace: Path | None = None,
+) -> Any:
     """The adapter that serves this connection.
 
     The simulator needs to know which connection and credential it belongs to so
-    the account keys it mints are provider-qualified like any other provider's;
-    the three declared adapters need nothing, because they do nothing.
+    the account keys it mints are provider-qualified like any other provider's.
+    Rithmic gets a real connector when the operator's SDK is installed *and* a
+    broker was supplied to resolve the password with — without one it could not
+    log in, and handing back a connector that cannot connect would move the
+    failure from here to the operator's first click. The remaining two declare
+    and do nothing.
     """
     if connection.provider is Provider.SIMULATED:
         return SimulatedAdapter(
             connection_id=connection.connection_id,
             credential_ref=connection.credential_ref,
+        )
+    if (
+        connection.provider is Provider.RITHMIC
+        and broker is not None
+        and rithmic_is_reachable(workspace)
+    ):
+        return RithmicAdapter(
+            environment=connection.environment,
+            workspace=workspace,
+            connect_with=rithmic_connector(broker, workspace=workspace),
         )
     return ADAPTERS[connection.provider]()
 
@@ -309,7 +357,7 @@ class PropDeskService:
                 continue
             self.fabric.register(
                 connection.model_copy(update={"state": ConnectionState.DISCONNECTED}),
-                adapter_for(connection),
+                adapter_for(connection, broker=self.credentials),
             )
             for account in self.store.accounts(connection.connection_id):
                 self.fabric.bind_account(account.account_uid, connection.connection_id)
@@ -317,20 +365,43 @@ class PropDeskService:
     # ── the layer model ──────────────────────────────────────────────────────
     def providers(self) -> dict[str, Any]:
         published = identity_catalogue()
+        blocker = rithmic_blocker()
         published["adapters"] = {
-            provider.value: (
-                "executes against a local simulator"
-                if provider is Provider.SIMULATED
-                else "declared; refuses every command, no live connector in this build"
-            )
-            for provider in ADAPTERS
+            provider.value: self._adapter_note(provider, blocker) for provider in ADAPTERS
         }
         published["required_work"] = {
-            provider.value: factory().work.as_dict()
-            for provider, factory in ADAPTERS.items()
-            if provider is not Provider.SIMULATED
+            provider.value: work.as_dict() for provider, work in REQUIRED_WORK.items()
         }
+        # What this installation would have to change to reach Rithmic, or "".
+        # Empty means the connector is available, not that it has been used.
+        published["rithmic_blocker"] = blocker
         return published
+
+    @staticmethod
+    def _adapter_note(provider: Provider, rithmic_blocked: str) -> str:
+        """One line per provider, true of *this* installation.
+
+        Rithmic's line changes with what the operator installed, and saying
+        "declared; refuses every command" while a read-only connector is serving
+        it would be the interface contradicting the adapter.
+        """
+        if provider is Provider.SIMULATED:
+            return "executes against a local simulator"
+        if provider is not Provider.RITHMIC:
+            return "declared; refuses every command, no live connector in this build"
+        # "No live connector" stays in every one of these, Rithmic included and
+        # whichever adapter is serving it, because it remains exactly true: no
+        # connector in this build can send an order. What changes is whether
+        # anything can be *read*.
+        if rithmic_blocked:
+            return (
+                "declared; refuses every command, no live connector in this build — and "
+                f"no read-only connector here either, because {rithmic_blocked}"
+            )
+        return (
+            "no live connector: place, modify, cancel and flatten are refused. "
+            "Read-only connector: connects, discovers accounts and takes snapshots."
+        )
 
     # ── connections and accounts ─────────────────────────────────────────────
     def connections(self) -> dict[str, Any]:
@@ -377,19 +448,31 @@ class PropDeskService:
             created_at=now,
             updated_at=now,
         )
-        self.fabric.register(connection, adapter_for(connection))
+        adapter = adapter_for(connection, broker=self.credentials)
+        self.fabric.register(connection, adapter)
         self.store.save_connection(connection)
+        described: dict[str, Any] = adapter.as_dict() if hasattr(adapter, "as_dict") else {}
+        reads = bool(described.get("read_only_connector_implemented"))
         return {
             "connection": connection.as_dict(),
+            # Never true for anything but the simulator in this build: no
+            # provider connector here can send an order.
             "live_connector_implemented": chosen is Provider.SIMULATED,
+            "read_only_connector_implemented": reads,
             "note": (
                 "The simulator executes against a local model and labels every fill "
                 "simulated."
                 if chosen is Provider.SIMULATED
                 else (
-                    f"AlgoForge has no live {chosen.value} connector. The connection is "
-                    "recorded so the desk can reason about it; every command to it is "
-                    "refused with the reason."
+                    f"AlgoForge can read from {chosen.value} — accounts, positions and "
+                    "connection health — and cannot send an order through it. Every "
+                    "place, modify, cancel and flatten is refused with the reason."
+                    if reads
+                    else (
+                        f"AlgoForge has no live {chosen.value} connector. The connection "
+                        "is recorded so the desk can reason about it; every command to "
+                        "it is refused with the reason."
+                    )
                 )
             ),
         }
@@ -1746,6 +1829,7 @@ def build_propdesk_router(service: PropDeskService) -> APIRouter:
 
 __all__ = [
     "ADAPTERS",
+    "REQUIRED_WORK",
     "PropDeskError",
     "PropDeskService",
     "build_propdesk_router",

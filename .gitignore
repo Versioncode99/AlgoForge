@@ -43,3 +43,11 @@ research/notes/Research Papers/
 # runs. It is a per-installation view of machine state, unlike the family notes
 # beside it, which are deterministic repository content.
 research/notes/AlgoForge.md
+
+# Rithmic's SDK is licensed to the operator and is not redistributable: its own
+# release notes state that reproducing or distributing any portion of it may be
+# prosecuted. An operator may unpack it here for convenience; git must refuse it.
+# Generated protobuf modules are derivatives of the .proto files, so they go too.
+vendor/rithmic/
+*_pb2.py
+*_pb2.pyi
