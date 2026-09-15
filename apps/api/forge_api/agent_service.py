@@ -35,6 +35,25 @@ Your previous reply could not be parsed. Output only the JSON object: no preambl
 no reasoning, no code fence. It must contain a "summary" string."""
 
 
+class AgentTaskFailed(RuntimeError):
+    """A specialist task that did not complete.
+
+    Raised out of the job so the registry marks it FAILED. `_run` used to
+    catch every exception, write a result with `status: "failed"` and *return*
+    it -- and a returned value is a finished job. So a scout whose provider
+    call raised was DONE in the registry, arrived in the inbox as "Finished in
+    under a second" with a green dot and no error, satisfied the orchestrator's
+    `status != "DONE"` check and so passed its "could not complete" summary
+    forward as a step result, and let the research loop hand "no new source
+    IDs" to two more specialists rather than stop at "Research scout did not
+    complete" as it was written to.
+
+    The message is the task's summary, which names only the exception class:
+    a provider error can carry request headers in its repr, and this string
+    reaches the inbox, the activity log and the job list.
+    """
+
+
 class AgentService:
     def __init__(
         self,
@@ -389,6 +408,12 @@ class AgentService:
             "fail" if result["status"] == "failed" else "info",
             handle.job_id,
         )
+        # Recorded first, then raised: the task table, the role's state and the
+        # activity log all say what happened either way. What the raise changes
+        # is the *job*, which is what the inbox, the orchestrator and the
+        # research loop read.
+        if result["status"] == "failed":
+            raise AgentTaskFailed(str(result["summary"]))
         return result
 
     def _call_model(

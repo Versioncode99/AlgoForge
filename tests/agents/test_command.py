@@ -133,6 +133,54 @@ def test_model_proposal_is_structured_and_never_executes_code(service, monkeypat
     assert service.take_proposal()["template"] == "vol_normalized_momentum"
 
 
+def test_a_task_that_fails_fails_its_job(service, monkeypatch):
+    """A provider that raises must not produce a job that reads as finished.
+
+    `_run` catches every exception so the role's state and the task table can
+    say what happened, and it used to *return* that record. A returned value is
+    a completed job, so the registry marked it DONE, the inbox recorded a green
+    "Finished in under a second" with no error, and both the orchestrator and
+    the research loop -- which decide by job status -- treated the failure as a
+    result. The record still says failed; now the job does too.
+    """
+    import forge_api.agent_service as module
+    from forge_api.jobs import REGISTRY
+
+    service.settings.save(Settings(ai=AISettings(enabled=True)))
+    monkeypatch.setattr(module, "credential_for", lambda _provider: SimpleNamespace(present=True))
+
+    def broken(**_kwargs):
+        raise RuntimeError("authorization: bearer sk-secret")
+
+    monkeypatch.setattr(module, "client_for", lambda _provider: SimpleNamespace(chat=broken))
+
+    submitted = service.submit("hypothesis", "anything")
+    deadline = time.monotonic() + 3
+    job = REGISTRY.get(submitted["job_id"])
+    while time.monotonic() < deadline and (
+        job is None or job.status not in {"DONE", "FAILED", "CANCELLED"}
+    ):
+        time.sleep(0.01)
+        job = REGISTRY.get(submitted["job_id"])
+
+    assert job is not None
+    assert job.status == "FAILED"
+    assert job.error is not None
+    assert "could not complete" in job.error
+    # The exception class reaches the operator; the exception text does not,
+    # because a provider error can carry the request that caused it.
+    assert "RuntimeError" in job.error
+    assert "bearer" not in job.error
+
+    task = service.snapshot()["tasks"][0]
+    assert task["id"] == submitted["job_id"]
+    assert task["status"] == "failed"
+    assert task["error"] == "RuntimeError"
+    # A failed role is idle again, not stuck "running" behind a job that ended.
+    assert service.snapshot()["roles"]
+    assert service.submit("hypothesis", "again")["job_id"] != submitted["job_id"]
+
+
 def test_attempt_reservations_are_atomic_and_survive_restart(tmp_path):
     path = tmp_path / "attempts.db"
     attempts = Experiments(path)
