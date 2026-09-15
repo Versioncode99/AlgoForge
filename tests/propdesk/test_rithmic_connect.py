@@ -238,18 +238,44 @@ def test_the_password_is_not_retained_on_the_factory(broker) -> None:
 
 # ── TLS ──────────────────────────────────────────────────────────────────────
 def test_the_trust_anchor_prefers_the_archive_s_own_certificate(tmp_path: Path) -> None:
-    """The archive ships a CA parameter file and the gateways present from it."""
+    """The archive ships a CA parameter file and the gateways present from it.
+
+    Two assertions, and the first is the portable one.
+
+    `ssl.create_default_context()` does not always return a stdlib context: on
+    Windows, pip's vendored `truststore` replaces it with an OS-backed one whose
+    `get_ca_certs()` raises `NotImplementedError`. So the *file* is proved
+    loadable against a context this test builds itself — plain stdlib on every
+    platform — and the anchor `trust_anchor` returns is then checked for the
+    certificate only where the platform's context can be asked. Where it cannot,
+    the claim that survives is the one the first assertion already made, plus a
+    verifying context that loaded the file without raising; the negative case is
+    `test_an_unreadable_trust_anchor_is_refused_rather_than_skipped`, which is
+    what would fail if the file were being ignored.
+    """
     import ssl
 
     root = tmp_path / "RProtocolAPI" / "0.89.0.0"
     (root / "proto").mkdir(parents=True)
     (root / "etc").mkdir()
-    (root / "etc" / "rithmic_ssl_cert_auth_params").write_text(_throwaway_ca())
+    anchor = root / "etc" / "rithmic_ssl_cert_auth_params"
+    anchor.write_text(_throwaway_ca())
+
+    # The file really is one loadable certificate authority.
+    probe = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    before = probe.cert_store_stats()["x509_ca"]
+    probe.load_verify_locations(cafile=str(anchor))
+    assert probe.cert_store_stats()["x509_ca"] == before + 1
+
     context = trust_anchor(RithmicSdk(root=root))
     assert context.verify_mode is ssl.CERT_REQUIRED
+    try:
+        loaded = context.get_ca_certs()
+    except NotImplementedError:  # pragma: no cover - Windows/truststore only
+        return
     assert any(
         entry.get("subject") and "forge-test-ca" in str(entry["subject"])
-        for entry in context.get_ca_certs()
+        for entry in loaded
     ), "the archive's anchor was loaded"
 
 
