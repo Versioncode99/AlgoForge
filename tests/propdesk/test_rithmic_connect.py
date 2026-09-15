@@ -240,18 +240,25 @@ def test_the_password_is_not_retained_on_the_factory(broker) -> None:
 def test_the_trust_anchor_prefers_the_archive_s_own_certificate(tmp_path: Path) -> None:
     """The archive ships a CA parameter file and the gateways present from it.
 
-    Two assertions, and the first is the portable one.
+    Nothing below asks a TLS context to enumerate what it trusts, and that is
+    the point. On Windows, pip's vendored `truststore` is injected into `ssl`,
+    and what it replaces is the context *class* — so `ssl.SSLContext(...)` is
+    not the stdlib class there either, and `cert_store_stats()` and
+    `get_ca_certs()` both raise `NotImplementedError` on what it returns. An
+    earlier version of this test built its own context to step around
+    `ssl.create_default_context()` and failed anyway, for exactly that reason.
 
-    `ssl.create_default_context()` does not always return a stdlib context: on
-    Windows, pip's vendored `truststore` replaces it with an OS-backed one whose
-    `get_ca_certs()` raises `NotImplementedError`. So the *file* is proved
-    loadable against a context this test builds itself — plain stdlib on every
-    platform — and the anchor `trust_anchor` returns is then checked for the
-    certificate only where the platform's context can be asked. Where it cannot,
-    the claim that survives is the one the first assertion already made, plus a
-    verifying context that loaded the file without raising; the negative case is
+    `load_verify_locations` is the portable surface: every implementation of it,
+    truststore's included, hands the file to a real OpenSSL context, so it
+    returns for a certificate and raises for anything else. That distinction
+    carries the whole claim, and it is exercised in both directions here — on
+    the archive's anchor and on a file of prose — so a `load_verify_locations`
+    that accepted whatever it was given could not leave this test green.
+
+    What `trust_anchor` itself does with the file is pinned twice over: below,
+    where the platform will still enumerate, and by
     `test_an_unreadable_trust_anchor_is_refused_rather_than_skipped`, which is
-    what would fail if the file were being ignored.
+    portable and fails if the file is ignored.
     """
     import ssl
 
@@ -261,11 +268,14 @@ def test_the_trust_anchor_prefers_the_archive_s_own_certificate(tmp_path: Path) 
     anchor = root / "etc" / "rithmic_ssl_cert_auth_params"
     anchor.write_text(_throwaway_ca())
 
-    # The file really is one loadable certificate authority.
-    probe = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    before = probe.cert_store_stats()["x509_ca"]
-    probe.load_verify_locations(cafile=str(anchor))
-    assert probe.cert_store_stats()["x509_ca"] == before + 1
+    # The file really is a loadable certificate authority: this returns.
+    ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cafile=str(anchor))
+
+    # And that is a real distinction, not a call that accepts anything.
+    prose = tmp_path / "not-a-certificate"
+    prose.write_text("this is not a certificate")
+    with pytest.raises(ssl.SSLError):
+        ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cafile=str(prose))
 
     context = trust_anchor(RithmicSdk(root=root))
     assert context.verify_mode is ssl.CERT_REQUIRED
