@@ -90,22 +90,37 @@ def _number(message: Any, field: str) -> float | None:
         return None
 
 
-def timestamp(message: Any) -> datetime:
-    """The protocol's seconds-and-microseconds pair, as one instant in UTC.
+def timestamp(message: Any) -> datetime | None:
+    """The protocol's seconds-and-microseconds pair as one UTC instant, or `None`.
 
     Rithmic sends `ssboe` (seconds since the beginning of the epoch) beside
     `usecs`. Combining them here rather than at each call site is what stops one
     caller using seconds and another using milliseconds — a discrepancy that
     shows up as an order appearing to arrive before the request that made it.
+
+    **`None` when the message carries no time**, which is the same rule the rest
+    of this module follows and this function used to be the one exception to. It
+    returned `datetime.now(UTC)`, so an account or a position whose timestamp
+    the provider never sent came back stamped with this machine's clock — and a
+    plausible datetime is indistinguishable from a reported one, which is
+    exactly what `account` says about a zeroed balance and `position` says about
+    a zeroed average price. `Account.as_of` and `Position.as_of` are both
+    `datetime | None` already: the representation for "not reported" existed and
+    this was the one place that declined to use it.
+
+    The substitution also defeated the reading it looks like it supports. A
+    snapshot that is an hour old reads as current when its `as_of` is filled in
+    on arrival, and "how old is this account state" is the question a desk
+    watching a drawdown limit is asking.
     """
     seconds: Any = getattr(message, "ssboe", None)
     micros: Any = getattr(message, "usecs", 0) or 0
     if seconds is None or seconds == "" or seconds == 0:
-        return datetime.now(UTC)
+        return None
     try:
         return datetime.fromtimestamp(int(seconds) + int(micros) / 1_000_000, tz=UTC)
     except (TypeError, ValueError, OSError, OverflowError):
-        return datetime.now(UTC)
+        return None
 
 
 def event_type(status: str) -> OrderEventType | None:
@@ -158,7 +173,8 @@ def account(
 
     `None` rather than zero, for the reason `forge.propdesk.identity.Account`
     states: a zeroed account renders as a comfortable buffer against a starting
-    balance nobody confirmed.
+    balance nobody confirmed. `as_of` follows the same rule and did not use to:
+    see `timestamp`.
     """
     return Account(
         key=account_key(message, credential_ref=credential_ref, environment=environment),
@@ -210,9 +226,15 @@ def order_event(message: Any) -> tuple[str, OrderEvent]:
             # A total that will not parse is not a total. Left unset, so the
             # event records what happened without asserting a quantity.
             cumulative = None
+    # `OrderEvent.at` is required, so an event with no reported time has to
+    # carry something. It carries the moment it arrived -- the *same* value as
+    # `received_at`, deliberately, so the two being equal is how a reader tells
+    # that the provider reported no time. Two separate `now()` calls differed by
+    # microseconds and read as two genuinely distinct instants.
+    received = datetime.now(UTC)
     return order_id, OrderEvent(
         event_type=mapped,
-        at=timestamp(message),
+        at=timestamp(message) or received,
         provider_event_id=_text(message, "exchange_order_id") or _text(message, "notify_type"),
         sequence=int(getattr(message, "sequence_number", 0) or 0) or None,
         cumulative_quantity=cumulative,
@@ -220,7 +242,7 @@ def order_event(message: Any) -> tuple[str, OrderEvent]:
         limit_price=_number(message, "price"),
         stop_price=_number(message, "trigger_price"),
         reason=_text(message, "text") or _text(message, "status"),
-        received_at=datetime.now(UTC),
+        received_at=received,
     )
 
 

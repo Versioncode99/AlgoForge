@@ -343,6 +343,44 @@ def test_the_protocols_seconds_and_microseconds_become_one_utc_instant() -> None
     assert at == datetime.fromtimestamp(1_780_000_000.5, tz=UTC)
 
 
-def test_a_message_with_no_timestamp_is_stamped_now_rather_than_at_the_epoch() -> None:
-    at = normalise.timestamp(Message())
-    assert (datetime.now(UTC) - at).total_seconds() < 5
+def test_a_message_with_no_timestamp_reports_that_rather_than_inventing_one() -> None:
+    """A time nobody sent is `None`, not this machine's clock.
+
+    This asserted the opposite -- that an unstamped message is "stamped now
+    rather than at the epoch" -- which is a choice between two wrong answers.
+    `Account.as_of` and `Position.as_of` are both `datetime | None`, so the
+    representation for "not reported" was already there, and filling it in on
+    arrival made an hour-old snapshot read as current to anyone asking how old
+    the account state is.
+    """
+    assert normalise.timestamp(Message()) is None
+    assert normalise.timestamp(Message(ssboe=0, usecs=0)) is None
+    assert normalise.timestamp(Message(ssboe="not a number")) is None
+
+
+def test_an_account_with_no_reported_time_says_so() -> None:
+    built = normalise.account(
+        Message(account_id="A1"),
+        connection_id="c1",
+        credential_ref="cred",
+        environment=Environment.DEMO,
+    )
+    assert built.as_of is None
+
+
+def test_an_order_event_with_no_reported_time_is_stamped_when_it_arrived() -> None:
+    """`OrderEvent.at` is required, so it carries arrival -- and says that it did.
+
+    `at` and `received_at` are the same value exactly when the provider
+    reported no time. They used to be two separate `now()` calls, differing by
+    microseconds, which reads as two genuinely distinct instants.
+    """
+    _, event = normalise.order_event(Message(basket_id="B1", status="fill"))
+    assert event.received_at is not None
+    assert event.at == event.received_at
+
+    _, reported = normalise.order_event(
+        Message(basket_id="B1", status="fill", ssboe=1_780_000_000, usecs=0)
+    )
+    assert reported.at == datetime.fromtimestamp(1_780_000_000, tz=UTC)
+    assert reported.at != reported.received_at
