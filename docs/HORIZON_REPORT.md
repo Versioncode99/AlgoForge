@@ -61,8 +61,21 @@ Run on this checkout, Linux x86-64, Python 3.13.12, Node 22.
 | Narrow widths | 1024 / 768 / 480 | **VERIFIED** — no horizontal overflow |
 | Secret scan | diff scan, §9 | **VERIFIED** — nothing found |
 | CI, Linux | GitHub Actions | **VERIFIED** — green |
-| CI, Windows | GitHub Actions | **PARTIAL** — one failure found and fixed; re-run in flight at the time of writing |
+| CI, Windows | GitHub Actions | **VERIFIED** — green on `0ceead6`: 3687 passed, 5 skipped, on two independent runs of that head |
 | Electron suite | `vitest` includes `apps/desktop/ipc-contract.test.js` | **PARTIAL** — the IPC contract runs; no packaged app was launched |
+
+**Windows CI took two attempts, and the first was a wrong diagnosis.** A test
+of mine asked a TLS context to enumerate its own trust store. That fails on
+Windows because pip's vendored `truststore` is injected into `ssl`, and the
+first fix (`444d2b1`) assumed what it replaced was `ssl.create_default_context()`
+and built the context directly instead. What truststore replaces is the context
+*class*, so `ssl.SSLContext(...)` returns its class too and the call raised
+exactly as before — an earlier draft of this report recorded that fix as done,
+and it was not. `0ceead6` tests through `load_verify_locations`, which
+truststore delegates to a real OpenSSL context, on a certificate and on a file
+of prose so the assertion cannot pass vacuously. The failure reproduces on Linux
+by injecting truststore before collection, which is how the second fix was
+checked before it was pushed rather than after.
 
 **The seven skipped browser tests are named, and each has a counterpart that
 runs.** They need market data this machine does not have. Each one skips with
@@ -246,9 +259,6 @@ Stated plainly, because a report that only lists successes is not a report.
 
 - **No live Rithmic connection.** §7.
 - **No order of any kind, in any environment.** §7.
-- **Windows CI** had one failure — a test of mine that assumed a stdlib SSL
-  context, where pip's vendored `truststore` replaces it. Fixed in `444d2b1`;
-  the re-run had not finished when this was written.
 - **No packaged Electron app was launched.** The IPC contract test runs; the
   desktop shell was not built or started.
 - **Visual regression** is nine full-page screenshots at 1440×900 in
