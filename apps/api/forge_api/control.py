@@ -58,6 +58,7 @@ from forge.strategy import FamilyRegistry, StrategyLibrary, TemplateStore
 # silent type change, not a formatting one.
 from forge.vault import VaultMirror, Workspace
 from forge.workstation import WorkspaceStore
+from forge.workstation.models import PanelKind
 from pydantic import BaseModel, Field
 
 from forge_api.actions import ActionError, Actions, ApprovalRequired
@@ -2649,6 +2650,19 @@ def build_control_router(
     def workspace_templates() -> ApiEnvelope[dict[str, Any]]:
         """Starting points. Nothing is locked behind one."""
         return ApiEnvelope(data=actions.call("list_workspace_templates"))
+
+    @router.get("/workspaces/panel-kinds", response_model=ApiEnvelope[dict[str, Any]])
+    def workspace_panel_kinds() -> ApiEnvelope[dict[str, Any]]:
+        """Every panel a workspace can hold.
+
+        Served so the picker has no list of its own. It had one, and the two had
+        drifted: the interface offered twenty-three of the thirty-five kinds
+        this build renders, so twelve panels — the approvals queue, the audit
+        trail, the pre-trade gate, the portfolio and the desk's own eight —
+        existed, worked, and could only appear if a template happened to seed
+        one.
+        """
+        return ApiEnvelope(data={"panel_kinds": [kind.value for kind in PanelKind]})
 
     @router.get("/workspaces/active", response_model=ApiEnvelope[dict[str, Any] | None])
     def active_workspace() -> ApiEnvelope[dict[str, Any] | None]:
