@@ -18,9 +18,10 @@ had never been readable into configuration, and ran an accessibility audit that
 found real violations. It also deleted a good deal of code that looked finished
 and was not.
 
-The thing worth reading is §11: the audit found **six** pieces of the product
-that presented as working and were not reachable, and five of them predated this
-branch.
+The thing worth reading is §11: the audit found **eight** things that presented
+as working and were not. Six predate this branch; two were introduced by it, and
+one of those is a real defect in the Rithmic guard that a vacuous assertion had
+been hiding.
 
 ---
 
@@ -215,6 +216,8 @@ working and are not. Six findings. **Five predate this branch.**
 | 4 | `src/modes.ts` and `src/explain.ts` — 279 lines of client code for screens that do not exist. `modes.ts` was this branch's doing. | 1 of 2 new |
 | 5 | `PATCH /conversations/{id}` existed and no control reached it: a thread's title is derived from its first message and could not be corrected. | pre-existing |
 | 6 | "PAPER ONLY" lost the sentence explaining it when the chooser was removed. Two words alone read as a setting somebody could switch off. | **new, this branch** |
+| 7 | Four assertions of the form `assert X or True`, which pass whatever X is. One asserted the *opposite* of the design and `or True` kept it quiet. | 3 pre-existing, 1 new |
+| 8 | `RithmicAdapter._require_session` refused on `session.ready` alone, and a degraded plant leaves `ready` **true**. Its message named degraded plants in a branch that could only be reached when there were none — so a plant missing heartbeats produced a snapshot that reconciliation uses to *replace* local state, arriving complete. | **new, this branch** |
 
 Each is fixed and tested. Finding 6 is the one worth dwelling on: it is a safety
 claim that got quietly weaker, and it was introduced by this branch's own
@@ -225,6 +228,8 @@ Four further sweeps found nothing:
 
 - **Unconditional skips** — none. Every `pytest.skip` is conditional with a
   stated reason; no `xfail`; no `.skip` in vitest or Playwright.
+- **Unfailable assertions** — none left. The four `or True` assertions are
+  finding 7; nothing else in the suite can pass regardless of its subject.
 - **Swallowed exceptions** — every `except: pass`/`continue` either records the
   problem, is a documented shutdown path, or skips one unreadable record out of
   a listing that counts them.
