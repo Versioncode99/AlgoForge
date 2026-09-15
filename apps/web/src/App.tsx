@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   BadgeCheck, ChevronLeft, ChevronRight, Grid2x2, Inbox, LockKeyhole, Menu, RotateCw, Search,
 } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getJson } from './api'
 import { CommandPalette } from './components/CommandPalette'
 import { ContextBar } from './components/ContextBar'
@@ -77,6 +77,20 @@ const FundView = lazy(() => import('./views/Fund').then(m => ({ default: m.FundV
  * keyboard and screen-reader users navigated them somewhere else instead of
  * moving focus to the content. */
 export const MAIN_LANDMARK_ID = 'main-content'
+
+/** The skip link's href, which is a fragment on this page and never a route.
+ *
+ * The distinction has to be made somewhere, because this application routes on
+ * `window.location.hash` and an in-page anchor writes to the same place. It was
+ * made once, by renaming the landmark so it did not *collide* with a route --
+ * and a collision was never required for the bug. `locate` sends every hash it
+ * does not recognise to Home and says it redirected, so an id no route uses is
+ * exactly as bad as one a route does: activating the skip link on Validation
+ * moved focus to the content and then navigated to Home underneath it.
+ *
+ * Which is the original bug, in the one control built for keyboard and
+ * screen-reader users, surviving the fix for itself. */
+const LANDMARK_HASH = `#${MAIN_LANDMARK_ID}`
 
 /** Which component answers `(destination, tab)`.
  *
@@ -253,8 +267,24 @@ export function App() {
     [nav.data],
   )
 
+  /* The route the shell is on, for the listener below, which is registered
+   * once and would otherwise close over the first render's value. */
+  const hashRef = useRef(hash)
+  useEffect(() => { hashRef.current = hash }, [hash])
+
   useEffect(() => {
-    const sync = () => setHash(window.location.hash)
+    const sync = () => {
+      const next = window.location.hash
+      // A fragment on this page is not a destination. Put the address bar back
+      // on the route so a reload returns here rather than to Home, and leave
+      // the router alone: the browser has already moved focus to the landmark,
+      // which is the whole of what the skip link is for.
+      if (next === LANDMARK_HASH) {
+        window.history.replaceState(null, '', hashRef.current || LANDMARK_HASH)
+        return
+      }
+      setHash(next)
+    }
     window.addEventListener('hashchange', sync)
     return () => window.removeEventListener('hashchange', sync)
   }, [])
@@ -351,7 +381,20 @@ export function App() {
   )
 
   return <div className={`app-shell${railCollapsed ? ' is-rail-collapsed' : ''}`} data-rail-open={railOpen} data-route={here.route}>
-    <a className="skip-link" href={`#${MAIN_LANDMARK_ID}`}>Skip to content</a>
+    {/* `href` stays, because that is what makes it a skip link to a screen
+        reader. The default is prevented so the hash never carries a fragment
+        the router would have to recognise, and focus is moved here instead --
+        which is what the browser would have done. */}
+    <a
+      className="skip-link"
+      href={LANDMARK_HASH}
+      onClick={(event) => {
+        const main = document.getElementById(MAIN_LANDMARK_ID)
+        if (!main) return
+        event.preventDefault()
+        main.focus()
+      }}
+    >Skip to content</a>
     <aside className="workstation-rail">
       <div className="rail-brand">
         <Wordmark />

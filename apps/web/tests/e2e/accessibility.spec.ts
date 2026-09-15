@@ -107,6 +107,47 @@ test('the skip link is the first thing a keyboard reaches, and it works', async 
   await expect(page.locator('#main-content')).toBeFocused()
 })
 
+test('the skip link skips to the content without changing the screen', async ({ page }) => {
+  /* The test above runs on Home, where the bug this one exists for is
+   * invisible: activating the skip link navigated to Home, and on Home that
+   * is indistinguishable from doing nothing.
+   *
+   * This application routes on `window.location.hash`, and the skip link's
+   * `href` is a fragment on the same page. `locate` sends every hash it does
+   * not recognise to Home, so the landmark id did not need to *collide* with a
+   * route to break -- being unknown was enough. Renaming it from "workspace"
+   * to "main-content" removed the collision and left the navigation, so the one
+   * control built for keyboard and screen-reader users moved focus to the
+   * content and then replaced that content with Home's.
+   *
+   * Asserted from a screen that is not Home, which is the only place it shows.
+   */
+  for (const route of ['#research?tab=validation', '#strategies?tab=runs']) {
+    await page.goto(`/${route}`)
+    await settled(page)
+    const before = await page.evaluate(() => window.location.hash)
+    expect(before, 'the test did not reach the screen it meant to').toBe(route)
+
+    /* Focused directly rather than tabbed to. That it is the *first* stop is
+     * the assertion above; this one is about what activating it does, and
+     * driving it by keystroke made the test depend on where the harness left
+     * focus after a deep link. `press('Enter')` on a focused link is the real
+     * activation path either way. */
+    const skip = page.locator('a.skip-link')
+    await expect(skip).toHaveCount(1)
+    await skip.focus()
+    await skip.press('Enter')
+
+    await expect(page.locator(`#${'main-content'}`)).toBeFocused()
+    // The address bar too, not just the router: a reload has to come back here.
+    await expect
+      .poll(() => page.evaluate(() => window.location.hash), {
+        message: 'the skip link navigated instead of skipping',
+      })
+      .toBe(before)
+  }
+})
+
 test('focus is always visible, on every focusable control in the shell', async ({ page }) => {
   /* `outline: none` with no replacement is the single most common way a
    * keyboard user loses their place, and it is invisible to a mouse review. */
