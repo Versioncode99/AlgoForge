@@ -55,7 +55,7 @@ Run on this checkout, Linux x86-64, Python 3.13.12, Node 22.
 | Web types | `tsc --noEmit` | **VERIFIED** — clean |
 | Web tests | `vitest run` | **VERIFIED** — 44 files, 526 tests |
 | Production build | `vite build` | **VERIFIED** — 242.85 kB CSS (38.33 kB gzip) |
-| Browser suite | `playwright test` | **VERIFIED locally** — 59 passed, 7 skipped. CI does **not** run this suite: the `web` job runs typecheck, build and `vitest` only, so every browser claim here rests on a local run |
+| Browser suite | `playwright test` | **VERIFIED locally** — 61 passed, 7 skipped. CI does **not** run this suite: the `web` job runs typecheck, build and `vitest` only, so every browser claim here rests on a local run |
 | Accessibility | `playwright test accessibility.spec.ts` | **VERIFIED** — 9 destinations, WCAG 2.1 AA, no allow-list |
 | Desktop widths | 1280 / 1440 / 1920 / 2560 | **VERIFIED** — no horizontal overflow |
 | Narrow widths | 1024 / 768 / 480 | **VERIFIED** — no horizontal overflow |
