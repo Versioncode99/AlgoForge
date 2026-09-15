@@ -138,10 +138,20 @@ const DATASETS = [{
 
 let overview: unknown = OVERVIEW
 
+//: Campaigns the list shows beside the active one. Empty by default so the
+//: existing tests see what they always saw.
+let others: unknown[] = []
+//: Every request the view made, so a test can assert what it sent rather than
+//: only what it rendered.
+let sent: { method: string; url: string }[] = []
+
 beforeEach(() => {
   overview = OVERVIEW
-  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+  others = []
+  sent = []
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+    sent.push({ method: (init?.method ?? 'GET').toUpperCase(), url })
     const data = url.includes('/campaigns/active') ? overview
       : url.includes('/events') ? EVENTS
       : url.includes('/frontier') ? FRONTIER
@@ -149,7 +159,7 @@ beforeEach(() => {
       : url.includes('/validation') ? { queue: [], pending: 3, outcomes: {} }
       : url.includes('/sources') ? { sources: [], queries: [] }
       : url.includes('/campaigns/scope') ? SCOPE
-      : url.endsWith('/campaigns') ? []
+      : url.endsWith('/campaigns') ? others
       : url.endsWith('/datasets') ? DATASETS
       : {}
     return new Response(JSON.stringify({ data, meta: {} }), {
@@ -314,7 +324,7 @@ test('a window too small to partition blocks creation rather than warning after 
     const data = url.includes('/campaigns/scope') ? insufficient
       : url.includes('/campaigns/active') ? overview
       : url.endsWith('/datasets') ? DATASETS
-      : url.endsWith('/campaigns') ? []
+      : url.endsWith('/campaigns') ? others
       : {}
     return new Response(JSON.stringify({ data, meta: {} }), {
       status: 200, headers: { 'Content-Type': 'application/json' },
@@ -325,4 +335,61 @@ test('a window too small to partition blocks creation rather than warning after 
   fireEvent.click(await screen.findByRole('button', { name: /new campaign/i }))
   expect(await screen.findByText(/cannot be split/i)).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /create campaign/i })).toBeDisabled()
+})
+
+/* ── deleting a campaign ──────────────────────────────────────────────────────
+ *
+ * The route has existed since campaigns were written and nothing in the product
+ * could reach it: a campaign could be created, started and resumed, and never
+ * removed. These hold the control that now reaches it, and the sentence beside
+ * it — deleting a campaign removes the programme and keeps what it found, and a
+ * delete button that did not say so would read as "delete my research".
+ */
+const EARLIER = {
+  campaign_id: 'camp_old',
+  name: 'An earlier programme',
+  objective: 'Something that has finished.',
+  status: 'stopped',
+  start_date: '',
+  end_date: '',
+  stopped_reason: 'experiment budget reached',
+  progress: { experiments: 12, hypotheses: 3, mechanisms: 2 },
+}
+
+test('a finished campaign can be deleted, and the control says what survives', async () => {
+  overview = null
+  others = [EARLIER]
+  draw()
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete An earlier programme' }))
+  // The consequence is on the confirming button, where the decision is made,
+  // not in a paragraph above the list.
+  const confirm = await screen.findByRole('button', { name: /findings kept/i })
+  fireEvent.click(confirm)
+
+  await screen.findByText(/An earlier programme/)
+  expect(sent.some((row) => row.method === 'DELETE' && row.url.endsWith('/campaigns/camp_old')))
+    .toBe(true)
+})
+
+test('deleting takes two clicks, and the first one can be taken back', async () => {
+  overview = null
+  others = [EARLIER]
+  draw()
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete An earlier programme' }))
+  fireEvent.click(await screen.findByRole('button', { name: /^Cancel$/ }))
+  expect(screen.queryByRole('button', { name: /findings kept/i })).not.toBeInTheDocument()
+  expect(sent.every((row) => row.method !== 'DELETE')).toBe(true)
+})
+
+test('a campaign is not deleted by the first click', async () => {
+  /* The failure this guards against is a list where "Delete" beside "Resume"
+   * removes a programme on a mis-click. */
+  overview = null
+  others = [EARLIER]
+  draw()
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete An earlier programme' }))
+  expect(sent.every((row) => row.method !== 'DELETE')).toBe(true)
 })

@@ -227,6 +227,9 @@ export function ResearchCampaignView() {
   const [composing, setComposing] = useState(false)
   const [tab, setTab] = useState<'frontier' | 'hypotheses' | 'validation' | 'sources'>('frontier')
   const [stateFilter, setStateFilter] = useState<string>('')
+  //: Which campaign is one click from being deleted. Two steps rather than a
+  //: browser confirm: the second button is where the consequence is stated.
+  const [confirming, setConfirming] = useState<string | null>(null)
 
   const active = useQuery({
     queryKey: ['campaign-active'],
@@ -300,6 +303,18 @@ export function ResearchCampaignView() {
     onSuccess: () => { setError(null); refresh() },
     onError: (e: Error) => setError(e.message),
   })
+  /* Deleting a campaign deletes the *programme*, not what it found: the API
+   * leaves the frontier, the hypotheses and the journal in place and says so in
+   * its answer. Without this control the route existed and nothing in the
+   * product could reach it, so a campaign could be created and started and
+   * never removed. */
+  const remove = useMutation({
+    mutationFn: (id: string) => send<{ deleted: string; research_retained: boolean }>(
+      `/campaigns/${id}`, 'DELETE',
+    ),
+    onSuccess: () => { setError(null); setConfirming(null); refresh() },
+    onError: (e: Error) => { setConfirming(null); setError(e.message) },
+  })
 
   if (active.isLoading) return <p className="muted">Loading the campaign…</p>
 
@@ -343,9 +358,33 @@ export function ResearchCampaignView() {
                           {row.stopped_reason ? ` · ${row.stopped_reason}` : ''}
                         </span>
                       </div>
-                      <button className="btn" onClick={() => start.mutate(row.campaign_id)}>
-                        <Play size={12} /> Resume
-                      </button>
+                      <div className="campaign-row-actions">
+                        <button className="btn" onClick={() => start.mutate(row.campaign_id)}>
+                          <Play size={12} /> Resume
+                        </button>
+                        {confirming === row.campaign_id ? (
+                          <>
+                            <button
+                              className="btn bad"
+                              disabled={remove.isPending}
+                              onClick={() => remove.mutate(row.campaign_id)}
+                            >
+                              Delete — findings kept
+                            </button>
+                            <button className="btn" onClick={() => setConfirming(null)}>
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            className="btn"
+                            aria-label={`Delete ${row.name}`}
+                            onClick={() => setConfirming(row.campaign_id)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ul>

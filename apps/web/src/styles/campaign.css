@@ -329,6 +329,16 @@
   padding: var(--sp-3) var(--sp-4);
   background: var(--bg-1);
 }
+/* The row's controls, kept on one line and allowed to wrap rather than
+   squeezing the objective text beside them. */
+.campaign-row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .campaign-list p { margin: 2px 0; font-size: var(--fs-sm); max-width: 80ch; line-height: 1.45; }
 .campaign-list span { font-size: var(--fs-micro); }
 
