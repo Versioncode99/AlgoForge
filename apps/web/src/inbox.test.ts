@@ -18,28 +18,57 @@ const item = (over: Partial<InboxItem> = {}): InboxItem => ({
 
 describe('where an item opens', () => {
   it('sends a backtest to the strategy it ran on', () => {
-    expect(destination(item())).toBe('#strategies?strategy=s1&pane=summary')
+    expect(destination(item())).toBe('#strategies?tab=library&strategy=s1&pane=summary')
   })
 
   it('sends a surface to its strategy without claiming a pane that does not exist', () => {
-    expect(destination(item({ kind: 'sweep_surface' }))).toBe('#strategies?strategy=s1')
+    expect(destination(item({ kind: 'sweep_surface' }))).toBe('#strategies?tab=library&strategy=s1')
   })
 
-  it('sends a prop matrix to the grid rather than to one strategy', () => {
-    expect(destination(item({ kind: 'prop_matrix', refs: {} }))).toBe('#prop')
+  it('sends a prop matrix to the screen that runs one', () => {
+    /* This asserted `'#prop'`, and `prop` is a panel kind rather than a route:
+     * the Open button on a finished matrix resolved to no destination and the
+     * shell sent the reader to Home. The string was the whole assertion, so
+     * nothing about it could fail. */
+    expect(destination(item({ kind: 'prop_matrix', refs: {} }))).toBe('#propdesk?tab=simulation')
+  })
+
+  it('sends a mission to the missions screen, not to the action registry', () => {
+    // `#actions` landed in Diagnostics, which lists the verbs an assistant may
+    // call -- a different screen from the mission that just finished running.
+    expect(destination(item({ kind: 'mission', refs: {} }))).toBe('#campaigns?tab=automation')
+  })
+
+  it('sends a specialist task to the screen that shows specialists', () => {
+    expect(destination(item({ kind: 'agent', refs: {} }))).toBe('#settings?tab=diagnostics')
   })
 
   it('falls back to the strategy for a kind it has no rule for', () => {
-    expect(destination(item({ kind: 'something_new' }))).toBe('#strategies?strategy=s1')
+    expect(destination(item({ kind: 'something_new' })))
+      .toBe('#strategies?tab=library&strategy=s1')
   })
 
   it('uses an account when that is what the job was about', () => {
     expect(destination(item({ kind: 'something_new', refs: { account_id: 'a1' } })))
-      .toBe('#desk?account=a1')
+      .toBe('#propdesk?tab=accounts&account=a1')
   })
 
   it('is empty when the item names nothing to open', () => {
     expect(destination(item({ kind: 'something_new', refs: {} }))).toBe('')
+  })
+
+  it('never offers a link this product has to translate to understand', () => {
+    /* Every destination names a current route and tab. A legacy spelling would
+     * still arrive somewhere, which is exactly why the broken one went
+     * unnoticed: `#prop` looked like the others and was not a route at all.
+     * `tests/modes/test_manifest.py::test_every_place_the_inbox_can_send_somebody_exists`
+     * resolves each of these against the shipped manifest. */
+    const kinds = ['backtest', 'sweep_surface', 'surface', 'prop_matrix', 'mission', 'agent']
+    for (const kind of kinds) {
+      const link = destination(item({ kind, refs: { strategy_id: 's1' } }))
+      expect(link, `${kind} opens nowhere`).not.toBe('')
+      expect(link, `${kind} names no tab`).toMatch(/^#[a-z]+\?tab=[a-z]+/)
+    }
   })
 })
 
