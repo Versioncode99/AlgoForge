@@ -853,7 +853,7 @@
   position: fixed;
   top: calc(var(--topbar-h) + var(--shell-gap));
   right: var(--shell-gap);
-  bottom: calc(var(--statusbar-h) + var(--shell-gap));
+  bottom: var(--shell-gap);
   width: min(420px, calc(100vw - 2 * var(--shell-gap)));
   z-index: 26;
   display: flex;

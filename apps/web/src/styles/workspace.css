@@ -484,7 +484,7 @@
   background: var(--bg-1);
   border: 1px solid var(--line);
   border-radius: var(--r);
-  max-height: calc(100vh - var(--topbar-h) - var(--statusbar-h) - var(--sp-10));
+  max-height: calc(100vh - var(--topbar-h) - var(--sp-10));
   overflow-y: auto;
 }
 .ws-manager > header {

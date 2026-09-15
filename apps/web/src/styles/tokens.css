@@ -65,10 +65,15 @@
   --rail-w-collapsed: 60px;
   --rail-row-h: 34px;
   --topbar-h: 52px;
-  --statusbar-h: 34px;
+  /* There is no status bar. It carried the latest event and a count of recent
+     ones on every screen; the events are in Diagnostics and the inbox says
+     when work finishes. Its height token went with it, because a token for a
+     row that does not exist is a gap something will keep reserving -- the
+     inbox drawer stopped 34px short of the bottom edge for exactly that
+     reason. */
   /* The gap between the shell's chrome and the rounded surfaces inside it.
-     One value, so the rail, the context bar and the status bar inset by the
-     same amount and the rounding reads as one system. */
+     One value, so the rail and the context bar inset by the same amount and
+     the rounding reads as one system. */
   --shell-gap: 8px;
   /* Row height and panel padding are what "density" actually means. */
   --row-h: 26px;
