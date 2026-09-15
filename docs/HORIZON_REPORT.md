@@ -219,7 +219,7 @@ point at the same commit, and the pull request is from `Horizon`.
 ## 11 · The independent audit
 
 A separate pass over the finished work, looking for things that present as
-working and are not. Twelve findings. The last four are the ones that matter
+working and are not. Fifteen findings. The last seven are the ones that matter
 most, because this audit found none of them.
 
 | # | Finding | Age |
@@ -235,6 +235,9 @@ most, because this audit found none of them.
 | 9 | The shell grid was broken and every screen rendered blank. `workstation.css` still declared a third row for the status bar Horizon removed; `horizon.css` restated the corrected rows in a block that appeared **twice**, and is imported first, so at equal specificity the stale declaration won. With `.workstation-main { grid-row: 3 }` the content landed in the vestigial 34px row and the tab row took the whole viewport. | **new, this branch** |
 | 11 | The inbox's Open button on a finished prop matrix pointed at `#prop`, which is a **panel kind, not a route**. The shell found no such destination and rewrote the link to Home, so the one control on a finished matrix moved the operator away from their work and looked deliberate doing it — which is what `destination()`'s own docstring calls worse than offering no button. `#actions` sent a finished mission to the action registry rather than to the missions screen. | **new, this branch** |
 | 12 | The status bar was removed from the shell and its height token was not. Two rules still reserved 34px for it, so the inbox drawer stopped short of the bottom edge, floating above a strip of chrome nothing draws. | **new, this branch** |
+| 13 | "Skip to content" navigated to Home from every screen that was not Home. The shell routes on `window.location.hash` and the skip link's href is a fragment on the same page; `locate` sends every hash it does not recognise to Home, so the landmark id never needed to *collide* with a route — being unknown was enough. The earlier fix renamed it from `workspace` to `main-content`, which removed the collision and left the navigation. | **new, this branch** |
+| 14 | The book loop's Alpha stage opened `#alpha`, which is not a route. `StageSpec.route` says in its own docstring that a stage which cannot be opened is decoration; the stage holding the candidate signals was. | pre-existing |
+| 15 | `rithmic.normalise.timestamp` returned `datetime.now(UTC)` for a message carrying no time, so an account or position snapshot the provider never stamped came back stamped with this machine's clock — and an hour-old snapshot reads as current to anything asking how old the account state is. Every other field in that module leaves an unreported value `None` and says why. | pre-existing |
 | 8 | `RithmicAdapter._require_session` refused on `session.ready` alone, and a degraded plant leaves `ready` **true**. Its message named degraded plants in a branch that could only be reached when there were none — so a plant missing heartbeats produced a snapshot that reconciliation uses to *replace* local state, arriving complete. | **new, this branch** |
 
 Each is fixed and tested. Finding 6 is the one worth dwelling on: it is a safety
@@ -242,10 +245,17 @@ claim that got quietly weaker, and it was introduced by this branch's own
 simplification. The test diff shows it as an assertion deleted alongside the
 screen it described — which is exactly how a removal takes something with it.
 
-**Findings 9 through 12 were all found by another session working on this
-branch, not by this audit.** Finding 10 is false completion at runtime — the
-exact failure mode this audit was commissioned to hunt — reported as success
-to three separate consumers. Finding 9 is worse in one respect: the
+**Findings 9 through 15 were all found by another session working on this
+branch, not by this audit.** Findings 4, 11, 13 and 14 are one family: a link
+that resolves to Home. `resolve` sends every route it does not recognise
+there, by design, so an internal link naming nothing is indistinguishable
+from one naming Home deliberately — and four separate surfaces minted one.
+Three tests guarded the *collision* case for the skip link and none could
+see it, because a collision was never required. Each is now checked by
+resolving the link against the shipped manifest rather than by reading it.
+
+Finding 10 is false completion at runtime — the exact failure mode this audit
+was commissioned to hunt — reported as success to three separate consumers. Finding 9 is worse in one respect: the
 application did not render. Every check this report lists passed while it did not render, because
 every one of them tests structure rather than geometry: `pytest` and `vitest`
 run in jsdom, which has no layout; the axe pass and the manifest-reachability
