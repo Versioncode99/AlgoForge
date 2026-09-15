@@ -120,6 +120,57 @@ test('no destination is hidden behind a setting', async ({ page, request }) => {
   }
 })
 
+test('every link the interface renders names a route this product has', async ({
+  page,
+  request,
+}) => {
+  /* Four separate surfaces shipped a link that resolved to nothing.
+   *
+   * `locate` sends every route it does not recognise to Home, deliberately, so
+   * a link naming nothing behaves exactly like a link naming Home on purpose
+   * and the difference is invisible by inspection. The inbox offered `#prop`
+   * on a finished matrix, the book loop offered `#alpha`, and the skip link
+   * wrote the landmark fragment into the hash. Each was fixed with a test of
+   * its own; this is the one that does not need to know where the next one
+   * will be.
+   *
+   * The rule is the manifest's: the part before `?` must be a destination or a
+   * legacy spelling. A legacy link is fine -- that map exists so links outlive
+   * navigation -- and a link naming neither is the bug.
+   */
+  const manifest = (await (await request.get(`${API}/navigation`)).json()).data
+  const known = new Set<string>([
+    ...(manifest.destinations as { route: string }[]).map((d) => d.route),
+    ...Object.keys(manifest.legacy_routes as Record<string, string>),
+  ])
+  expect(known.size, 'the navigation manifest is empty').toBeGreaterThan(0)
+
+  const dead: string[] = []
+  for (const destination of manifest.destinations as { route: string; label: string }[]) {
+    await page.goto(`/#${destination.route}`)
+    await expect(page.getByText('PAPER ONLY').last()).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('#main-content > div.state[role="status"]')).toHaveCount(0, {
+      timeout: 30_000,
+    })
+    const links = await page.evaluate(() =>
+      [...document.querySelectorAll('a[href^="#"]')].map((a) => a.getAttribute('href') ?? ''),
+    )
+    for (const href of links) {
+      const route = href.slice(1).split('?')[0].split(':')[0]
+      // The skip link is a fragment on this page rather than a destination,
+      // and is the one anchor allowed not to name a route. It is asserted
+      // separately in accessibility.spec.ts, which checks that activating it
+      // does not navigate.
+      if (!route || route === 'main-content') continue
+      if (!known.has(route)) dead.push(`${destination.label}: ${href}`)
+    }
+  }
+  expect(
+    [...new Set(dead)].sort(),
+    'these links name no destination and no legacy route, so they resolve to Home',
+  ).toEqual([])
+})
+
 test('the fixture-driven sections stay removed', async ({ page }) => {
   // Verdict, Regimes and Risk all rendered one seeded run, so they showed the
   // same numbers whatever was selected. Their absence is the feature.
